@@ -1,6 +1,6 @@
 import glance
 import gleeunit/should
-import package
+import glimpse/package
 
 pub fn zero_dependency_test() {
   let glance_module =
@@ -10,7 +10,7 @@ pub fn zero_dependency_test() {
 
   let glimpse_module =
     glance_module
-    |> package.extract_dependencies("some/module")
+    |> package.load_module("some/module")
 
   should.equal(glimpse_module.name, "some/module")
   should.equal(glimpse_module.dependencies, [])
@@ -27,7 +27,7 @@ pub fn unqualified_import_test() {
 
   let glimpse_module =
     glance_module
-    |> package.extract_dependencies("some/module")
+    |> package.load_module("some/module")
 
   should.equal(glimpse_module.name, "some/module")
   should.equal(glimpse_module.dependencies, ["gleam/io"])
