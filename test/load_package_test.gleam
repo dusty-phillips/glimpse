@@ -2,6 +2,7 @@ import glance
 import gleam/dict
 import gleeunit/should
 import glimpse
+import glimpse/error
 
 pub fn ok_module(contents: String) -> glance.Module {
   glance.module(contents)
@@ -90,7 +91,7 @@ import b",
 pub fn loader_error_test() {
   glimpse.load_package("main_module", fn(_mod) { Error("I am error") })
   |> should.be_error
-  |> should.equal(glimpse.LoadError("I am error"))
+  |> should.equal(error.LoadError("I am error"))
 }
 
 fn expect_modules_equal(

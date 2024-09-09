@@ -2,6 +2,7 @@ import glance
 import gleam/dict
 import gleam/list
 import gleam/result
+import glimpse/error
 
 pub type Module {
   /// A Module is a wrapper of a glance.Module, but maintains some additional
@@ -14,15 +15,11 @@ pub type Package {
   /// A Package has a name and a collection of modules. Each module is named
   /// according to its import. A module can be converted to a filename
   ///(relative to the global source / directory) simply by appending '.gleam'
-  Package(name: String, modules: dict.Dict(String, Module))
-}
-
-pub type LoadError(a) {
-  LoadError(a)
-  ParseError(
-    glance_error: glance.Error,
-    module_name: String,
-    module_content: String,
+  Package(
+    /// The name of the package. Also names the entrypoint module.
+    name: String,
+    /// Mapping of all modules in the project, from their name to their Module instance
+    modules: dict.Dict(String, Module),
   )
 }
 
@@ -35,9 +32,9 @@ pub type LoadError(a) {
 pub fn load_package(
   package_name: String,
   loader: fn(String) -> Result(String, a),
-) -> Result(Package, LoadError(a)) {
+) -> Result(Package, error.GlimpseError(a)) {
   let package = Package(package_name, dict.new())
-  load_module_recurse(package, [package_name], loader)
+  load_package_recurse(package, [package_name], loader)
 }
 
 /// Given an existing Gleam Module and its name, parse its imports to determine
@@ -64,23 +61,23 @@ pub fn filter_new_dependencies(module: Module, package: Package) -> List(String)
   |> list.filter(fn(dep) { !dict.has_key(package.modules, dep) })
 }
 
-fn load_module_recurse(
+fn load_package_recurse(
   package: Package,
   modules: List(String),
   loader: fn(String) -> Result(String, a),
-) -> Result(Package, LoadError(a)) {
+) -> Result(Package, error.GlimpseError(a)) {
   case modules {
     [] -> Ok(package)
     [module_name, ..rest] -> {
       case dict.has_key(package.modules, module_name) {
-        True -> load_module_recurse(package, rest, loader)
+        True -> load_package_recurse(package, rest, loader)
         False -> {
           use module_content <- result.try(
-            loader(module_name) |> result.map_error(LoadError),
+            loader(module_name) |> result.map_error(error.LoadError),
           )
           use glance_module <- result.try(
             glance.module(module_content)
-            |> result.map_error(ParseError(_, module_name, module_content)),
+            |> result.map_error(error.ParseError(_, module_name, module_content)),
           )
           let glimpse_module = load_module(glance_module, module_name)
           let unknown_dependencies =
@@ -90,7 +87,7 @@ fn load_module_recurse(
               ..package,
               modules: dict.insert(package.modules, module_name, glimpse_module),
             )
-          load_module_recurse(
+          load_package_recurse(
             recurse_package,
             list.append(unknown_dependencies, rest),
             loader,
