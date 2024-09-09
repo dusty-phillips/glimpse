@@ -1,7 +1,7 @@
 import glance
 import gleam/dict
 import gleeunit/should
-import glimpse/package
+import glimpse
 
 pub fn ok_module(contents: String) -> glance.Module {
   glance.module(contents)
@@ -9,14 +9,14 @@ pub fn ok_module(contents: String) -> glance.Module {
 }
 
 pub fn no_dependency_package_test() {
-  package.load_package("main_module", fn(_) { Ok("pub fn main() {}") })
+  glimpse.load_package("main_module", fn(_) { Ok("pub fn main() {}") })
   |> should.be_ok
-  |> should.equal(package.Package(
+  |> should.equal(glimpse.Package(
     "main_module",
     dict.from_list([
       #(
         "main_module",
-        package.Module("main_module", ok_module("pub fn main() {}"), []),
+        glimpse.Module("main_module", ok_module("pub fn main() {}"), []),
       ),
     ]),
   ))
@@ -24,7 +24,7 @@ pub fn no_dependency_package_test() {
 
 pub fn single_dependency_package_test() {
   let loaded_package =
-    package.load_package("main_module", fn(mod) {
+    glimpse.load_package("main_module", fn(mod) {
       case mod {
         "main_module" ->
           Ok(
@@ -57,7 +57,7 @@ pub fn single_dependency_package_test() {
 
 pub fn diamond_dependency_package_test() {
   let loaded_package =
-    package.load_package("main_module", fn(mod) {
+    glimpse.load_package("main_module", fn(mod) {
       case mod {
         "main_module" -> Ok("import a\nimport b")
         "a" | "b" -> Ok("import gleam/io")
@@ -87,8 +87,14 @@ import b",
   expect_modules_equal(loaded_package, "gleam/io", [], "")
 }
 
+pub fn loader_error_test() {
+  glimpse.load_package("main_module", fn(_mod) { Error("I am error") })
+  |> should.be_error
+  |> should.equal(glimpse.LoadError("I am error"))
+}
+
 fn expect_modules_equal(
-  package: package.Package,
+  package: glimpse.Package,
   name: String,
   expected_dependencies: List(String),
   expected_module_contents: String,

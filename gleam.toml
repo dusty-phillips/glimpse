@@ -1,11 +1,11 @@
 name = "glimpse"
-version = "0.0.1"
+version = "0.0.2"
 
 description = "Package loader and (theoretically) typechecker for glance"
 licences = ["Apache-2.0"]
-repository = { type = "github", user = "dustyphillips", repo = "glimpse" }
+repository = { type = "github", user = "dusty-phillips", repo = "glimpse" }
 links = [
-  { title = "Website", href = "https://github.com/dustyphillips/glimpse" },
+  { title = "Website", href = "https://github.com/dusty-phillips/glimpse" },
 ]
 #
 # For a full reference of all the available options, you can have a look at

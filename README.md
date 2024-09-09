@@ -13,6 +13,9 @@ This package is not filesystem aware. That means all modules need to be loaded
 externally, but it does provide tooling to determine what dependencies need
 to be loaded.
 
+Docs: https://hexdocs.pm/glimpse/
+Repo: https://github.com/dusty-phillips/glimpse
+
 ## Development
 
 ```sh
