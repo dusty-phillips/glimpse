@@ -14,3 +14,8 @@ pub type GlimpseImportError {
   CircularDependencyError(module_name: String)
   MissingImportError(module_name: String)
 }
+
+pub type TypeCheckError {
+  InvalidReturnType(function_name: String, got: String, expected: String)
+  InvalidName(name: String)
+}
