@@ -18,4 +18,10 @@ pub type GlimpseImportError {
 pub type TypeCheckError {
   InvalidReturnType(function_name: String, got: String, expected: String)
   InvalidName(name: String)
+  InvalidBinOp(
+    operator: String,
+    left_got: String,
+    right_got: String,
+    expected: String,
+  )
 }

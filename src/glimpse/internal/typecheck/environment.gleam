@@ -40,3 +40,17 @@ pub fn lookup_type_out(
   lookup_type(environment, name)
   |> result.map(TypeOut(environment, _))
 }
+
+pub fn to_binop_error(
+  operator: String,
+  left: Type,
+  right: Type,
+  expected: String,
+) -> TypeCheckResult {
+  Error(error.InvalidBinOp(
+    operator,
+    left |> types.to_string,
+    right |> types.to_string,
+    expected,
+  ))
+}

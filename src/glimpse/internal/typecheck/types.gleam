@@ -1,5 +1,6 @@
 import glance
 import gleam/option
+import glimpse/error
 
 pub type Type {
   NilType

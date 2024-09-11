@@ -75,10 +75,93 @@ pub fn expression(
     glance.Variable("Nil") ->
       Ok(environment.TypeOut(environment, types.NilType))
     glance.Variable(name) -> environment.lookup_type_out(environment, name)
+    glance.BinaryOperator(operator, left, right) ->
+      binop(environment, operator, left, right)
+
     _ -> {
       pprint.debug(expression)
       todo
     }
+  }
+}
+
+pub fn binop(
+  environment: Environment,
+  operator: glance.BinaryOperator,
+  left: glance.Expression,
+  right: glance.Expression,
+) -> TypeCheckResult {
+  use environment.TypeOut(environment, left_type) <- result.try(expression(
+    environment,
+    left,
+  ))
+  use environment.TypeOut(environment, right_type) <- result.try(expression(
+    environment,
+    right,
+  ))
+  case operator, left_type, right_type {
+    glance.LtInt, types.IntType, types.IntType
+    | glance.LtEqInt, types.IntType, types.IntType
+    | glance.GtInt, types.IntType, types.IntType
+    | glance.GtEqInt, types.IntType, types.IntType
+    | glance.AddInt, types.IntType, types.IntType
+    | glance.SubInt, types.IntType, types.IntType
+    | glance.MultInt, types.IntType, types.IntType
+    | glance.DivInt, types.IntType, types.IntType
+    | glance.RemainderInt, types.IntType, types.IntType
+    -> Ok(environment.TypeOut(environment, types.IntType))
+
+    glance.LtFloat, types.FloatType, types.FloatType
+    | glance.LtEqFloat, types.FloatType, types.FloatType
+    | glance.GtFloat, types.FloatType, types.FloatType
+    | glance.GtEqFloat, types.FloatType, types.FloatType
+    | glance.AddFloat, types.FloatType, types.FloatType
+    | glance.SubFloat, types.FloatType, types.FloatType
+    | glance.MultFloat, types.FloatType, types.FloatType
+    | glance.DivFloat, types.FloatType, types.FloatType
+    -> Ok(environment.TypeOut(environment, types.FloatType))
+
+    glance.Concatenate, types.StringType, types.StringType ->
+      Ok(environment.TypeOut(environment, types.StringType))
+
+    glance.LtInt, left, right ->
+      environment.to_binop_error("<", left, right, "two Ints")
+    glance.LtFloat, left, right ->
+      environment.to_binop_error("<.", left, right, "two Floats")
+    glance.LtEqInt, left, right ->
+      environment.to_binop_error("<=", left, right, "two Ints")
+    glance.LtEqFloat, left, right ->
+      environment.to_binop_error("<=.", left, right, "two Floats")
+    glance.GtInt, left, right ->
+      environment.to_binop_error(">", left, right, "two Ints")
+    glance.GtFloat, left, right ->
+      environment.to_binop_error(">.", left, right, "two Floats")
+    glance.GtEqInt, left, right ->
+      environment.to_binop_error(">=", left, right, "two Ints")
+    glance.GtEqFloat, left, right ->
+      environment.to_binop_error(">=.", left, right, "two Floats")
+    glance.AddInt, left, right ->
+      environment.to_binop_error("+", left, right, "two Ints")
+    glance.AddFloat, left, right ->
+      environment.to_binop_error("+.", left, right, "two Floats")
+    glance.SubInt, left, right ->
+      environment.to_binop_error("-", left, right, "two Ints")
+    glance.SubFloat, left, right ->
+      environment.to_binop_error("-.", left, right, "two Floats")
+    glance.MultInt, left, right ->
+      environment.to_binop_error("*", left, right, "two Ints")
+    glance.MultFloat, left, right ->
+      environment.to_binop_error("*.", left, right, "two Floats")
+    glance.DivInt, left, right ->
+      environment.to_binop_error("/", left, right, "two Ints")
+    glance.DivFloat, left, right ->
+      environment.to_binop_error("/.", left, right, "two Floats")
+    glance.RemainderInt, left, right ->
+      environment.to_binop_error("%", left, right, "two Ints")
+    glance.Concatenate, left, right ->
+      environment.to_binop_error("<>", left, right, "two Strings")
+
+    _, _, _ -> todo as "Most binops not typechecked yet"
   }
 }
 
