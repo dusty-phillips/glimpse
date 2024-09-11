@@ -66,9 +66,9 @@ pub fn statement(
 
 pub fn expression(
   environment: Environment,
-  expression: glance.Expression,
+  expr: glance.Expression,
 ) -> TypeResult {
-  case expression {
+  case expr {
     // TODO: Not 100% sure this will ever need to update the environment,
     // so we may be able to remove it from the return
     glance.Int(_) -> Ok(types.IntType)
@@ -77,6 +77,32 @@ pub fn expression(
     glance.Variable("Nil") -> Ok(types.NilType)
     glance.Variable("True") | glance.Variable("False") -> Ok(types.BoolType)
     glance.Variable(name) -> environment.lookup_type(environment, name)
+
+    glance.NegateInt(int_expr) -> {
+      case expression(environment, int_expr) {
+        Error(err) -> Error(err)
+        Ok(types.IntType) -> Ok(types.IntType)
+        Ok(got) ->
+          Error(error.InvalidType(
+            got |> types.to_string,
+            "Int",
+            "- can only negate Int",
+          ))
+      }
+    }
+
+    glance.NegateBool(int_expr) -> {
+      case expression(environment, int_expr) {
+        Error(err) -> Error(err)
+        Ok(types.BoolType) -> Ok(types.BoolType)
+        Ok(got) ->
+          Error(error.InvalidType(
+            got |> types.to_string,
+            "Bool",
+            "! can only negate Bool",
+          ))
+      }
+    }
 
     glance.BinaryOperator(operator, left, right) ->
       binop(environment, operator, left, right)
