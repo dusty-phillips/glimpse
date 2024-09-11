@@ -1,5 +1,6 @@
 import glance
 import gleam/option
+import glimpse/error
 
 pub type Type {
   NilType
@@ -8,6 +9,9 @@ pub type Type {
   StringType
   BoolType
 }
+
+pub type TypeResult =
+  Result(Type, error.TypeCheckError)
 
 pub fn to_string(type_: Type) -> String {
   case type_ {
@@ -27,4 +31,18 @@ pub fn to_glance(type_: Type) -> glance.Type {
     StringType -> glance.NamedType("String", option.None, [])
     BoolType -> glance.NamedType("Bool", option.None, [])
   }
+}
+
+pub fn to_binop_error(
+  operator: String,
+  left: Type,
+  right: Type,
+  expected: String,
+) -> TypeResult {
+  Error(error.InvalidBinOp(
+    operator,
+    left |> to_string,
+    right |> to_string,
+    expected,
+  ))
 }

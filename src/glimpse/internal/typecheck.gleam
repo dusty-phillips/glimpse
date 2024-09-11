@@ -6,7 +6,7 @@ import glimpse/error
 import glimpse/internal/typecheck/environment.{
   type Environment, type TypeCheckResult,
 }
-import glimpse/internal/typecheck/types.{type Type}
+import glimpse/internal/typecheck/types.{type TypeResult}
 import pprint
 
 pub fn fold_function_parameter(
@@ -42,7 +42,7 @@ pub fn block(
 ) -> TypeCheckResult {
   list.fold_until(
     statements,
-    Ok(environment.TypeOut(environment, types.NilType)),
+    Ok(environment.TypeState(environment, types.NilType)),
     fn(state, stmnt) {
       case state {
         Error(_) -> list.Stop(state)
@@ -57,7 +57,9 @@ pub fn statement(
   statement: glance.Statement,
 ) -> TypeCheckResult {
   case statement {
-    glance.Expression(expr) -> expression(environment, expr)
+    glance.Expression(expr) ->
+      expression(environment, expr)
+      |> result.map(environment.TypeState(environment, _))
     _ -> todo
   }
 }
@@ -65,18 +67,17 @@ pub fn statement(
 pub fn expression(
   environment: Environment,
   expression: glance.Expression,
-) -> TypeCheckResult {
+) -> TypeResult {
   case expression {
     // TODO: Not 100% sure this will ever need to update the environment,
     // so we may be able to remove it from the return
-    glance.Int(_) -> Ok(environment.TypeOut(environment, types.IntType))
-    glance.Float(_) -> Ok(environment.TypeOut(environment, types.FloatType))
-    glance.String(_) -> Ok(environment.TypeOut(environment, types.StringType))
-    glance.Variable("Nil") ->
-      Ok(environment.TypeOut(environment, types.NilType))
-    glance.Variable("True") | glance.Variable("False") ->
-      Ok(environment.TypeOut(environment, types.BoolType))
-    glance.Variable(name) -> environment.lookup_type_out(environment, name)
+    glance.Int(_) -> Ok(types.IntType)
+    glance.Float(_) -> Ok(types.FloatType)
+    glance.String(_) -> Ok(types.StringType)
+    glance.Variable("Nil") -> Ok(types.NilType)
+    glance.Variable("True") | glance.Variable("False") -> Ok(types.BoolType)
+    glance.Variable(name) -> environment.lookup_type(environment, name)
+
     glance.BinaryOperator(operator, left, right) ->
       binop(environment, operator, left, right)
 
@@ -92,24 +93,19 @@ pub fn binop(
   operator: glance.BinaryOperator,
   left: glance.Expression,
   right: glance.Expression,
-) -> TypeCheckResult {
+) -> TypeResult {
   // TODO: I have a feeling precedence matters here. ;-)
-  use environment.TypeOut(environment, left_type) <- result.try(expression(
-    environment,
-    left,
-  ))
-  use environment.TypeOut(environment, right_type) <- result.try(expression(
-    environment,
-    right,
-  ))
+  use left_type <- result.try(expression(environment, left))
+  use right_type <- result.try(expression(environment, right))
+
   case operator, left_type, right_type {
     glance.And, types.BoolType, types.BoolType
     | glance.Or, types.BoolType, types.BoolType
-    -> Ok(environment.TypeOut(environment, types.BoolType))
+    -> Ok(types.BoolType)
 
     glance.Eq, left_type, right_type | glance.NotEq, left_type, right_type
       if left_type == right_type
-    -> Ok(environment.TypeOut(environment, left_type))
+    -> Ok(left_type)
 
     glance.LtInt, types.IntType, types.IntType
     | glance.LtEqInt, types.IntType, types.IntType
@@ -120,7 +116,7 @@ pub fn binop(
     | glance.MultInt, types.IntType, types.IntType
     | glance.DivInt, types.IntType, types.IntType
     | glance.RemainderInt, types.IntType, types.IntType
-    -> Ok(environment.TypeOut(environment, types.IntType))
+    -> Ok(types.IntType)
 
     glance.LtFloat, types.FloatType, types.FloatType
     | glance.LtEqFloat, types.FloatType, types.FloatType
@@ -130,67 +126,64 @@ pub fn binop(
     | glance.SubFloat, types.FloatType, types.FloatType
     | glance.MultFloat, types.FloatType, types.FloatType
     | glance.DivFloat, types.FloatType, types.FloatType
-    -> Ok(environment.TypeOut(environment, types.FloatType))
+    -> Ok(types.FloatType)
 
     glance.Concatenate, types.StringType, types.StringType ->
-      Ok(environment.TypeOut(environment, types.StringType))
+      Ok(types.StringType)
 
     glance.And, left, right ->
-      environment.to_binop_error("&&", left, right, "two Bools")
+      types.to_binop_error("&&", left, right, "two Bools")
     glance.Or, left, right ->
-      environment.to_binop_error("||", left, right, "two Bools")
+      types.to_binop_error("||", left, right, "two Bools")
 
     glance.Eq, left, right ->
-      environment.to_binop_error("==", left, right, "same type")
+      types.to_binop_error("==", left, right, "same type")
     glance.NotEq, left, right ->
-      environment.to_binop_error("!=", left, right, "same type")
+      types.to_binop_error("!=", left, right, "same type")
 
     glance.LtInt, left, right ->
-      environment.to_binop_error("<", left, right, "two Ints")
+      types.to_binop_error("<", left, right, "two Ints")
     glance.LtFloat, left, right ->
-      environment.to_binop_error("<.", left, right, "two Floats")
+      types.to_binop_error("<.", left, right, "two Floats")
     glance.LtEqInt, left, right ->
-      environment.to_binop_error("<=", left, right, "two Ints")
+      types.to_binop_error("<=", left, right, "two Ints")
     glance.LtEqFloat, left, right ->
-      environment.to_binop_error("<=.", left, right, "two Floats")
+      types.to_binop_error("<=.", left, right, "two Floats")
     glance.GtInt, left, right ->
-      environment.to_binop_error(">", left, right, "two Ints")
+      types.to_binop_error(">", left, right, "two Ints")
     glance.GtFloat, left, right ->
-      environment.to_binop_error(">.", left, right, "two Floats")
+      types.to_binop_error(">.", left, right, "two Floats")
     glance.GtEqInt, left, right ->
-      environment.to_binop_error(">=", left, right, "two Ints")
+      types.to_binop_error(">=", left, right, "two Ints")
     glance.GtEqFloat, left, right ->
-      environment.to_binop_error(">=.", left, right, "two Floats")
+      types.to_binop_error(">=.", left, right, "two Floats")
     glance.AddInt, left, right ->
-      environment.to_binop_error("+", left, right, "two Ints")
+      types.to_binop_error("+", left, right, "two Ints")
     glance.AddFloat, left, right ->
-      environment.to_binop_error("+.", left, right, "two Floats")
+      types.to_binop_error("+.", left, right, "two Floats")
     glance.SubInt, left, right ->
-      environment.to_binop_error("-", left, right, "two Ints")
+      types.to_binop_error("-", left, right, "two Ints")
     glance.SubFloat, left, right ->
-      environment.to_binop_error("-.", left, right, "two Floats")
+      types.to_binop_error("-.", left, right, "two Floats")
     glance.MultInt, left, right ->
-      environment.to_binop_error("*", left, right, "two Ints")
+      types.to_binop_error("*", left, right, "two Ints")
     glance.MultFloat, left, right ->
-      environment.to_binop_error("*.", left, right, "two Floats")
+      types.to_binop_error("*.", left, right, "two Floats")
     glance.DivInt, left, right ->
-      environment.to_binop_error("/", left, right, "two Ints")
+      types.to_binop_error("/", left, right, "two Ints")
     glance.DivFloat, left, right ->
-      environment.to_binop_error("/.", left, right, "two Floats")
+      types.to_binop_error("/.", left, right, "two Floats")
     glance.RemainderInt, left, right ->
-      environment.to_binop_error("%", left, right, "two Ints")
+      types.to_binop_error("%", left, right, "two Ints")
 
     glance.Concatenate, left, right ->
-      environment.to_binop_error("<>", left, right, "two Strings")
+      types.to_binop_error("<>", left, right, "two Strings")
 
     glance.Pipe, _, _ -> todo as "Pipe binop is not typechecked yet"
   }
 }
 
-pub fn type_(
-  environment: Environment,
-  glance_type: glance.Type,
-) -> Result(Type, error.TypeCheckError) {
+pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
   case glance_type {
     glance.NamedType("Int", option.None, []) -> Ok(types.IntType)
     glance.NamedType("Float", option.None, []) -> Ok(types.FloatType)

@@ -7,12 +7,12 @@ pub type Environment {
   Environment(definitions: dict.Dict(String, Type))
 }
 
-pub type TypeOut {
-  TypeOut(environment: Environment, type_: Type)
+pub type TypeState {
+  TypeState(environment: Environment, type_: Type)
 }
 
 pub type TypeCheckResult =
-  Result(TypeOut, error.TypeCheckError)
+  Result(TypeState, error.TypeCheckError)
 
 pub fn add_def(
   environment: Environment,
@@ -38,19 +38,5 @@ pub fn lookup_type_out(
   name: String,
 ) -> TypeCheckResult {
   lookup_type(environment, name)
-  |> result.map(TypeOut(environment, _))
-}
-
-pub fn to_binop_error(
-  operator: String,
-  left: Type,
-  right: Type,
-  expected: String,
-) -> TypeCheckResult {
-  Error(error.InvalidBinOp(
-    operator,
-    left |> types.to_string,
-    right |> types.to_string,
-    expected,
-  ))
+  |> result.map(TypeState(environment, _))
 }
