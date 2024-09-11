@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/list
 import gleeunit/should
 import glimpse/error
+import glimpse/internal/typecheck/environment
 import glimpse/typecheck
 
 // Helpers
@@ -17,8 +18,8 @@ pub fn glance_function(definition: String) -> glance.Function {
   definition.definition
 }
 
-pub fn blank_env() -> typecheck.Environment {
-  typecheck.Environment(dict.new())
+pub fn blank_env() -> environment.Environment {
+  environment.Environment(dict.new())
 }
 
 pub fn ok_typecheck(definition: String) -> glance.Function {
