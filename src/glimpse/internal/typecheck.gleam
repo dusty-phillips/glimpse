@@ -66,7 +66,6 @@ pub fn expression(
   environment: Environment,
   expression: glance.Expression,
 ) -> TypeCheckResult {
-  pprint.debug(expression)
   case expression {
     // TODO: Not 100% sure this will ever need to update the environment,
     // so we may be able to remove it from the return
@@ -94,6 +93,7 @@ pub fn binop(
   left: glance.Expression,
   right: glance.Expression,
 ) -> TypeCheckResult {
+  // TODO: I have a feeling precedence matters here. ;-)
   use environment.TypeOut(environment, left_type) <- result.try(expression(
     environment,
     left,
@@ -103,6 +103,14 @@ pub fn binop(
     right,
   ))
   case operator, left_type, right_type {
+    glance.And, types.BoolType, types.BoolType
+    | glance.Or, types.BoolType, types.BoolType
+    -> Ok(environment.TypeOut(environment, types.BoolType))
+
+    glance.Eq, left_type, right_type | glance.NotEq, left_type, right_type
+      if left_type == right_type
+    -> Ok(environment.TypeOut(environment, left_type))
+
     glance.LtInt, types.IntType, types.IntType
     | glance.LtEqInt, types.IntType, types.IntType
     | glance.GtInt, types.IntType, types.IntType
@@ -126,6 +134,16 @@ pub fn binop(
 
     glance.Concatenate, types.StringType, types.StringType ->
       Ok(environment.TypeOut(environment, types.StringType))
+
+    glance.And, left, right ->
+      environment.to_binop_error("&&", left, right, "two Bools")
+    glance.Or, left, right ->
+      environment.to_binop_error("||", left, right, "two Bools")
+
+    glance.Eq, left, right ->
+      environment.to_binop_error("==", left, right, "same type")
+    glance.NotEq, left, right ->
+      environment.to_binop_error("!=", left, right, "same type")
 
     glance.LtInt, left, right ->
       environment.to_binop_error("<", left, right, "two Ints")
@@ -161,10 +179,11 @@ pub fn binop(
       environment.to_binop_error("/.", left, right, "two Floats")
     glance.RemainderInt, left, right ->
       environment.to_binop_error("%", left, right, "two Ints")
+
     glance.Concatenate, left, right ->
       environment.to_binop_error("<>", left, right, "two Strings")
 
-    _, _, _ -> todo as "Most binops not typechecked yet"
+    glance.Pipe, _, _ -> todo as "Pipe binop is not typechecked yet"
   }
 }
 

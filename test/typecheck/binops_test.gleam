@@ -4,6 +4,95 @@ import gleeunit/should
 import glimpse/error
 import typecheck/helpers
 
+pub fn bool_and_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Bool { True && False }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Bool", option.None, [])))
+}
+
+pub fn bool_and_invalid_left_test() {
+  helpers.error_typecheck("fn foo() -> Bool { 1.1 && False }")
+  |> should.equal(error.InvalidBinOp("&&", "Float", "Bool", "two Bools"))
+}
+
+pub fn bool_and_right_test() {
+  helpers.error_typecheck("fn foo() -> Bool { True && 1.0 }")
+  |> should.equal(error.InvalidBinOp("&&", "Bool", "Float", "two Bools"))
+}
+
+pub fn bool_or_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Bool { True || False }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Bool", option.None, [])))
+}
+
+pub fn bool_or_invalid_left_test() {
+  helpers.error_typecheck("fn foo() -> Bool { 1.1 || False }")
+  |> should.equal(error.InvalidBinOp("||", "Float", "Bool", "two Bools"))
+}
+
+pub fn bool_or_right_test() {
+  helpers.error_typecheck("fn foo() -> Bool { True || 1.0 }")
+  |> should.equal(error.InvalidBinOp("||", "Bool", "Float", "two Bools"))
+}
+
+pub fn bool_eq_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Bool { True == False }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Bool", option.None, [])))
+}
+
+pub fn int_eq_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Int { 1 == 2 }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+}
+
+pub fn int_eq_infer_return_test() {
+  let function_out = helpers.ok_typecheck("fn foo() { 1 == 2 }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+}
+
+pub fn eq_invalid_left_test() {
+  helpers.error_typecheck("fn foo() -> Bool { 1.1 == False }")
+  |> should.equal(error.InvalidBinOp("==", "Float", "Bool", "same type"))
+}
+
+pub fn eq_invalid_right_test() {
+  helpers.error_typecheck("fn foo() -> Bool { True == 1.0 }")
+  |> should.equal(error.InvalidBinOp("==", "Bool", "Float", "same type"))
+}
+
+pub fn int_neq_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Int { 1 != 2 }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+}
+
+pub fn int_neq_infer_return_test() {
+  let function_out = helpers.ok_typecheck("fn foo() { 1 != 2 }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+}
+
+pub fn neq_invalid_left_test() {
+  helpers.error_typecheck("fn foo() -> Bool { 1.1 != False }")
+  |> should.equal(error.InvalidBinOp("!=", "Float", "Bool", "same type"))
+}
+
+pub fn neq_invalid_right_test() {
+  helpers.error_typecheck("fn foo() -> Bool { True != 1.0 }")
+  |> should.equal(error.InvalidBinOp("!=", "Bool", "Float", "same type"))
+}
+
 pub fn int_less_than_test() {
   let function_out = helpers.ok_typecheck("fn foo() -> Int { 1 < 2 }")
 
