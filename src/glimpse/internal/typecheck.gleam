@@ -66,6 +66,7 @@ pub fn expression(
   environment: Environment,
   expression: glance.Expression,
 ) -> TypeCheckResult {
+  pprint.debug(expression)
   case expression {
     // TODO: Not 100% sure this will ever need to update the environment,
     // so we may be able to remove it from the return
@@ -74,6 +75,8 @@ pub fn expression(
     glance.String(_) -> Ok(environment.TypeOut(environment, types.StringType))
     glance.Variable("Nil") ->
       Ok(environment.TypeOut(environment, types.NilType))
+    glance.Variable("True") | glance.Variable("False") ->
+      Ok(environment.TypeOut(environment, types.BoolType))
     glance.Variable(name) -> environment.lookup_type_out(environment, name)
     glance.BinaryOperator(operator, left, right) ->
       binop(environment, operator, left, right)
@@ -174,6 +177,7 @@ pub fn type_(
     glance.NamedType("Float", option.None, []) -> Ok(types.FloatType)
     glance.NamedType("Nil", option.None, []) -> Ok(types.NilType)
     glance.NamedType("String", option.None, []) -> Ok(types.StringType)
+    glance.NamedType("Bool", option.None, []) -> Ok(types.BoolType)
     glance.VariableType(name) -> environment.lookup_type(environment, name)
     _ -> {
       pprint.debug(glance_type)

@@ -67,3 +67,41 @@ pub fn return_string_test() {
   function_out.return
   |> should.equal(option.Some(glance.NamedType("String", option.None, [])))
 }
+
+pub fn infer_string_test() {
+  let function_out = helpers.ok_typecheck("fn foo() { \"hello\" }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("String", option.None, [])))
+}
+
+pub fn not_string_error_test() {
+  helpers.error_typecheck("fn foo() -> String { 5 }")
+  |> should.equal(error.InvalidReturnType("foo", "Int", "String"))
+}
+
+pub fn return_true_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Bool { True }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Bool", option.None, [])))
+}
+
+pub fn return_false_test() {
+  let function_out = helpers.ok_typecheck("fn foo() -> Bool { False }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Bool", option.None, [])))
+}
+
+pub fn infer_bool_test() {
+  let function_out = helpers.ok_typecheck("fn foo() { True }")
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Bool", option.None, [])))
+}
+
+pub fn not_bool_error_test() {
+  helpers.error_typecheck("fn foo() -> Bool { 5 }")
+  |> should.equal(error.InvalidReturnType("foo", "Int", "Bool"))
+}
