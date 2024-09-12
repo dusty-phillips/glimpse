@@ -36,6 +36,19 @@ pub fn assign_let_with_type() {
   |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
 }
 
+pub fn assign_let_with_binop() {
+  let function_out =
+    helpers.ok_function_typecheck(
+      "fn foo() -> Int {
+    let x = 5
+    let y: Int = 5 + a
+    y + 2}",
+    )
+
+  function_out.return
+  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+}
+
 pub fn assign_let_incorrect_type_test() {
   helpers.error_function_typecheck(
     "fn foo() {
@@ -43,4 +56,13 @@ pub fn assign_let_incorrect_type_test() {
   }",
   )
   |> should.equal(error.InvalidType("Int", "String", "during assignment of x"))
+}
+
+pub fn assign_let_value_error_test() {
+  helpers.error_function_typecheck(
+    "fn foo() {
+    let x: String = a
+  }",
+  )
+  |> should.equal(error.InvalidName("a"))
 }
