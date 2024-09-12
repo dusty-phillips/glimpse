@@ -14,6 +14,10 @@ pub type TypeState {
 pub type TypeCheckResult =
   Result(TypeState, error.TypeCheckError)
 
+pub fn new() -> Environment {
+  Environment(definitions: dict.new())
+}
+
 pub fn add_def(
   environment: Environment,
   name: String,

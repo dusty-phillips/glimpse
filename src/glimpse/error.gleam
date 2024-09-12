@@ -25,4 +25,5 @@ pub type TypeCheckError {
     right_got: String,
     expected: String,
   )
+  NoSuchModule(name: String)
 }

@@ -1,20 +1,53 @@
 import glance
+import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/result
 import glimpse
 import glimpse/error
 import glimpse/internal/typecheck as intern
-import glimpse/internal/typecheck/environment.{
-  type Environment, type TypeCheckResult,
-}
+import glimpse/internal/typecheck/environment.{type Environment}
 import glimpse/internal/typecheck/types
 
+/// Infer and typecheck a single module in the given package. Any modules that
+/// this module imports *must* have already been inferred.
+///
+/// Returns a variation of the package where the module's contents have been
+/// updated based on any inferences that were made.
 pub fn module(
   package: glimpse.Package,
   module_name: String,
-) -> Result(Nil, error.TypeCheckError) {
-  todo
+) -> Result(glimpse.Package, error.TypeCheckError) {
+  let glimpse_module_result =
+    dict.get(package.modules, module_name)
+    |> result.replace_error(error.NoSuchModule(module_name))
+
+  use glimpse_module <- result.try(glimpse_module_result)
+
+  let environment = environment.new()
+  // TODO: Put custom types, imports, consts in the env
+
+  // I'm pretty sure functions cannot update the global environment,
+  // so we don't need to reassign it.
+  let functions_result =
+    glimpse_module.module.functions
+    |> list.map(fn(definition) {
+      use updated_function <- result.try(function(
+        environment,
+        definition.definition,
+      ))
+      Ok(glance.Definition(..definition, definition: updated_function))
+    })
+    |> result.all()
+
+  use functions <- result.try(functions_result)
+
+  let glance_module =
+    glance.Module(..glimpse_module.module, functions: functions)
+  let glimpse_module = glimpse.Module(..glimpse_module, module: glance_module)
+  let module_dict = dict.insert(package.modules, module_name, glimpse_module)
+  let package = glimpse.Package(..package, modules: module_dict)
+  Ok(package)
 }
 
 /// Takes a glance function as input and returns the same function, but
