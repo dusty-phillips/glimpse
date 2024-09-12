@@ -60,7 +60,39 @@ pub fn statement(
     glance.Expression(expr) ->
       expression(environment, expr)
       |> result.map(environment.TypeState(environment, _))
-    _ -> todo
+
+    glance.Assignment(
+      glance.Let,
+      glance.PatternVariable(name),
+      annotation,
+      value_expression,
+    ) -> {
+      let value_type_result = expression(environment, value_expression)
+      let annotated_type_option = option.map(annotation, type_(environment, _))
+
+      let inferred_type_result = case value_type_result, annotated_type_option {
+        Error(err), _ -> Error(err)
+        _, option.Some(Error(err)) -> Error(err)
+        Ok(value_type), option.None -> Ok(value_type)
+        Ok(value_type), option.Some(Ok(annotated_type))
+          if value_type == annotated_type
+        -> Ok(value_type)
+        Ok(value_type), option.Some(Ok(annotated_type)) ->
+          Error(error.InvalidType(
+            value_type |> types.to_string,
+            annotated_type |> types.to_string,
+            "during assignment of " <> name,
+          ))
+      }
+
+      use type_ <- result.try(inferred_type_result)
+      let updated_environment = environment.add_def(environment, name, type_)
+      Ok(environment.TypeState(updated_environment, type_))
+    }
+    _ -> {
+      pprint.debug(statement)
+      todo as "most statement types not covered yet"
+    }
   }
 }
 
