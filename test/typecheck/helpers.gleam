@@ -22,13 +22,13 @@ pub fn blank_env() -> environment.Environment {
   environment.Environment(dict.new())
 }
 
-pub fn ok_typecheck(definition: String) -> glance.Function {
+pub fn ok_function_typecheck(definition: String) -> glance.Function {
   let function = glance_function(definition)
   typecheck.function(blank_env(), function)
   |> should.be_ok
 }
 
-pub fn error_typecheck(definition: String) -> error.TypeCheckError {
+pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
   let function = glance_function(definition)
   typecheck.function(blank_env(), function)
   |> should.be_error
