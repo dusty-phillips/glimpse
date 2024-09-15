@@ -17,7 +17,7 @@ import glimpse/internal/typecheck/types
 pub fn module(
   package: glimpse.Package,
   module_name: String,
-) -> Result(glimpse.Package, error.TypeCheckError) {
+) -> Result(#(glimpse.Package, Environment), error.TypeCheckError) {
   let glimpse_module_result =
     dict.get(package.modules, module_name)
     |> result.replace_error(error.NoSuchModule(module_name))
@@ -25,7 +25,18 @@ pub fn module(
   use glimpse_module <- result.try(glimpse_module_result)
 
   let environment = environment.new()
-  // TODO: Put custom types, imports, consts in the env
+
+  let custom_type_result =
+    glimpse_module.module.custom_types
+    |> list.fold_until(Ok(environment), fn(state, glance_custom_type) {
+      case state {
+        Error(error) -> list.Stop(Error(error))
+        Ok(environment) ->
+          list.Continue(custom_type(environment, glance_custom_type.definition))
+      }
+    })
+
+  use environment <- result.try(custom_type_result)
 
   // I'm pretty sure functions cannot update the global environment,
   // so we don't need to reassign it.
@@ -47,7 +58,7 @@ pub fn module(
   let glimpse_module = glimpse.Module(..glimpse_module, module: glance_module)
   let module_dict = dict.insert(package.modules, module_name, glimpse_module)
   let package = glimpse.Package(..package, modules: module_dict)
-  Ok(package)
+  Ok(#(package, environment))
   // TODO: Pretty sure this needs to also return an updated environment
   // that contains the public types and functions of the module
 }

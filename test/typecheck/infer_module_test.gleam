@@ -5,7 +5,7 @@ import glimpse/error
 import typecheck/helpers
 
 pub fn module_with_two_functions_test() {
-  let inferred_module =
+  let #(inferred_module, _env) =
     helpers.ok_module_typecheck(
       "
       pub fn add(a: Int, b:Int) {a + b}

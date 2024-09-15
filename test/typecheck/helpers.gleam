@@ -4,7 +4,7 @@ import gleam/list
 import gleeunit/should
 import glimpse
 import glimpse/error
-import glimpse/internal/typecheck/environment
+import glimpse/internal/typecheck/environment.{type Environment}
 import glimpse/typecheck
 
 pub fn glance_custom_type(definition: String) -> glance.CustomType {
@@ -50,16 +50,19 @@ pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
   |> should.be_error
 }
 
-pub fn ok_module_typecheck(definition: String) -> glimpse.Module {
-  let inferred_package =
+pub fn ok_module_typecheck(definition: String) -> #(glimpse.Module, Environment) {
+  let #(inferred_package, environment) =
     glimpse.load_package("main_module", fn(_) { Ok(definition) })
     |> should.be_ok
     |> typecheck.module("main_module")
     |> should.be_ok
 
-  inferred_package.modules
-  |> dict.get("main_module")
-  |> should.be_ok
+  let main_mod =
+    inferred_package.modules
+    |> dict.get("main_module")
+    |> should.be_ok
+
+  #(main_mod, environment)
 }
 
 pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
