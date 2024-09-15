@@ -8,6 +8,7 @@ pub type Type {
   FloatType
   StringType
   BoolType
+  CustomType(name: String)
 }
 
 pub type TypeResult =
@@ -20,6 +21,7 @@ pub fn to_string(type_: Type) -> String {
     FloatType -> "Float"
     StringType -> "String"
     BoolType -> "Bool"
+    CustomType(name) -> name
   }
 }
 
@@ -30,6 +32,8 @@ pub fn to_glance(type_: Type) -> glance.Type {
     FloatType -> glance.NamedType("Float", option.None, [])
     StringType -> glance.NamedType("String", option.None, [])
     BoolType -> glance.NamedType("Bool", option.None, [])
+    // TODO: CustomType will need a module field
+    CustomType(name) -> glance.NamedType(name, option.None, [])
   }
 }
 

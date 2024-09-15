@@ -7,15 +7,34 @@ import glimpse/error
 import glimpse/internal/typecheck/environment
 import glimpse/typecheck
 
-// Helpers
+pub fn glance_custom_type(definition: String) -> glance.CustomType {
+  let module =
+    glance.module(definition)
+    |> should.be_ok
+
+  module.custom_types |> list.length |> should.equal(1)
+
+  let definition =
+    list.first(module.custom_types)
+    |> should.be_ok
+
+  definition.definition
+}
+
+pub fn ok_custom_type(definition: String) -> environment.Environment {
+  glance_custom_type(definition)
+  |> typecheck.custom_type(environment.new(), _)
+  |> should.be_ok
+}
+
 pub fn glance_function(definition: String) -> glance.Function {
   let module =
     glance.module(definition)
-    |> should.be_ok()
+    |> should.be_ok
 
   module.functions |> list.length |> should.equal(1)
 
-  let definition = list.first(module.functions) |> should.be_ok()
+  let definition = list.first(module.functions) |> should.be_ok
   definition.definition
 }
 

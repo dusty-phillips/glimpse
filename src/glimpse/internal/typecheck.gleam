@@ -7,6 +7,7 @@ import glimpse/internal/typecheck/environment.{
   type Environment, type TypeCheckResult,
 }
 import glimpse/internal/typecheck/types.{type TypeResult}
+import glimpse/internal/typecheck/variants.{type VariantField}
 import pprint
 
 pub fn fold_function_parameter(
@@ -33,6 +34,50 @@ pub fn fold_function_parameter(
         }
       }
       |> list.Continue
+  }
+}
+
+pub fn fold_variant_constructors(
+  state: TypeCheckResult,
+  variant: glance.Variant,
+) -> list.ContinueOrStop(TypeCheckResult) {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(environment.TypeState(environment, types.CustomType(custom_type))) ->
+      {
+        use variant_fields <- result.try(
+          variant.fields
+          |> list.map(variant_field(environment, _))
+          |> result.all,
+        )
+
+        Ok(environment.TypeState(
+          environment.add_variant_constructor(
+            environment,
+            variant.name,
+            variants.Variant(variant.name, custom_type, variant_fields),
+          ),
+          types.CustomType(custom_type),
+        ))
+      }
+      |> list.Continue
+    Ok(_) -> panic as "Variant custom type should only be custom type"
+  }
+}
+
+pub fn variant_field(
+  environment: Environment,
+  field: glance.Field(glance.Type),
+) -> Result(VariantField, error.TypeCheckError) {
+  case field {
+    glance.Field(option.Some(field_name), glance_type) -> {
+      use field_type <- result.try(type_(environment, glance_type))
+      Ok(variants.NamedField(field_name, field_type))
+    }
+    glance.Field(option.None, glance_type) -> {
+      use field_type <- result.try(type_(environment, glance_type))
+      Ok(variants.PositionField(field_type))
+    }
   }
 }
 
@@ -108,7 +153,7 @@ pub fn expression(
     glance.String(_) -> Ok(types.StringType)
     glance.Variable("Nil") -> Ok(types.NilType)
     glance.Variable("True") | glance.Variable("False") -> Ok(types.BoolType)
-    glance.Variable(name) -> environment.lookup_type(environment, name)
+    glance.Variable(name) -> environment.lookup_variable_type(environment, name)
 
     glance.NegateInt(int_expr) -> {
       case expression(environment, int_expr) {
@@ -248,7 +293,16 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
     glance.NamedType("Nil", option.None, []) -> Ok(types.NilType)
     glance.NamedType("String", option.None, []) -> Ok(types.StringType)
     glance.NamedType("Bool", option.None, []) -> Ok(types.BoolType)
-    glance.VariableType(name) -> environment.lookup_type(environment, name)
+
+    // TODO: custom types with parameters need to be supported
+    // TODO: not 100% certain all named types that are not covered
+    // above are actually custom types
+    // TODO: support named types in other modules
+    glance.NamedType(name, option.None, []) ->
+      environment.lookup_custom_type(environment, name)
+
+    glance.VariableType(name) ->
+      environment.lookup_variable_type(environment, name)
     _ -> {
       pprint.debug(glance_type)
       todo

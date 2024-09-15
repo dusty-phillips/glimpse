@@ -25,5 +25,7 @@ pub type TypeCheckError {
     right_got: String,
     expected: String,
   )
+  UnknownCustomType(name: String)
   NoSuchModule(name: String)
+  DuplicateCustomType(name: String)
 }

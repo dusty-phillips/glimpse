@@ -48,6 +48,44 @@ pub fn module(
   let module_dict = dict.insert(package.modules, module_name, glimpse_module)
   let package = glimpse.Package(..package, modules: module_dict)
   Ok(package)
+  // TODO: Pretty sure this needs to also return an updated environment
+  // that contains the public types and functions of the module
+}
+
+/// Update the environment to include the custom type and all its constructors.
+pub fn custom_type(
+  environment: Environment,
+  custom_type: glance.CustomType,
+) -> Result(Environment, error.TypeCheckError) {
+  case environment.custom_types |> dict.get(custom_type.name) {
+    Ok(_) -> Error(error.DuplicateCustomType(custom_type.name))
+    Error(_) -> {
+      // add to env first so variants can parse recursive types
+      let environment =
+        environment |> environment.add_custom_type(custom_type.name)
+
+      list.fold_until(
+        custom_type.variants,
+        Ok(environment.TypeState(
+          environment,
+          types.CustomType(custom_type.name),
+        )),
+        intern.fold_variant_constructors,
+      )
+      |> result.map(environment.extract_env)
+    }
+  }
+  // Problem: where do we put the variant?
+  //
+  // probably a new constructors dict on the environment class
+  // that maps constructor name to CustomType(name)
+  // but it could also be in the definitions.
+  // We can't put both the type and the variant in the definitions, though
+  // because variants could lobber the type.
+  //
+  // Problem: do we need to do anything special with single variant custom
+  // types? If there is only one variant, we are allowed to look up record fields
+  // on the type.
 }
 
 /// Takes a glance function as input and returns the same function, but
