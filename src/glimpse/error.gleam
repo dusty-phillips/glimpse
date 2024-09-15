@@ -1,4 +1,5 @@
 import glance
+import gleam/list
 
 pub type GlimpseError(a) {
   LoadError(a)
@@ -29,3 +30,9 @@ pub type TypeCheckError {
   NoSuchModule(name: String)
   DuplicateCustomType(name: String)
 }
+
+pub type TypeCheckResult(a) =
+  Result(a, TypeCheckError)
+
+pub type TypeCheckFold(a) =
+  list.ContinueOrStop(TypeCheckResult(a))

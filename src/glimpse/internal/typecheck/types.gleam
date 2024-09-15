@@ -12,7 +12,7 @@ pub type Type {
 }
 
 pub type TypeResult =
-  Result(Type, error.TypeCheckError)
+  error.TypeCheckResult(Type)
 
 pub fn to_string(type_: Type) -> String {
   case type_ {

@@ -12,12 +12,27 @@ pub type Environment {
   )
 }
 
-pub type TypeState {
-  TypeState(environment: Environment, type_: Type)
+pub type EnvState(a) {
+  EnvState(environment: Environment, state: a)
 }
 
-pub type TypeCheckResult =
-  Result(TypeState, error.TypeCheckError)
+pub type EnvStateFold(a) =
+  error.TypeCheckFold(EnvState(a))
+
+pub type TypeState =
+  EnvState(Type)
+
+pub type TypeStateFold =
+  error.TypeCheckFold(TypeState)
+
+pub type TypeStateResult =
+  error.TypeCheckResult(TypeState)
+
+pub type EnvironmentResult =
+  error.TypeCheckResult(Environment)
+
+pub type EnvironmentFold =
+  error.TypeCheckFold(Environment)
 
 pub fn new() -> Environment {
   Environment(

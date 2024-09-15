@@ -4,16 +4,17 @@ import gleam/option
 import gleam/result
 import glimpse/error
 import glimpse/internal/typecheck/environment.{
-  type Environment, type TypeCheckResult,
+  type Environment, type EnvironmentFold, type EnvironmentResult, type TypeState,
+  type TypeStateFold, type TypeStateResult,
 }
 import glimpse/internal/typecheck/types.{type TypeResult}
 import glimpse/internal/typecheck/variants.{type VariantField}
 import pprint
 
 pub fn fold_function_parameter(
-  state: Result(Environment, error.TypeCheckError),
+  state: EnvironmentResult,
   param: glance.FunctionParameter,
-) -> list.ContinueOrStop(Result(Environment, error.TypeCheckError)) {
+) -> EnvironmentFold {
   case state {
     Error(_err) -> list.Stop(state)
     Ok(environment) ->
@@ -38,12 +39,12 @@ pub fn fold_function_parameter(
 }
 
 pub fn fold_variant_constructors(
-  state: TypeCheckResult,
+  state: TypeStateResult,
   variant: glance.Variant,
-) -> list.ContinueOrStop(TypeCheckResult) {
+) -> TypeStateFold {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(environment.TypeState(environment, types.CustomType(custom_type))) ->
+    Ok(environment.EnvState(environment, types.CustomType(custom_type))) ->
       {
         use variant_fields <- result.try(
           variant.fields
@@ -51,7 +52,7 @@ pub fn fold_variant_constructors(
           |> result.all,
         )
 
-        Ok(environment.TypeState(
+        Ok(environment.EnvState(
           environment.add_variant_constructor(
             environment,
             variant.name,
@@ -68,7 +69,7 @@ pub fn fold_variant_constructors(
 pub fn variant_field(
   environment: Environment,
   field: glance.Field(glance.Type),
-) -> Result(VariantField, error.TypeCheckError) {
+) -> error.TypeCheckResult(VariantField) {
   case field {
     glance.Field(option.Some(field_name), glance_type) -> {
       use field_type <- result.try(type_(environment, glance_type))
@@ -84,10 +85,10 @@ pub fn variant_field(
 pub fn block(
   environment: Environment,
   statements: List(glance.Statement),
-) -> TypeCheckResult {
+) -> TypeStateResult {
   list.fold_until(
     statements,
-    Ok(environment.TypeState(environment, types.NilType)),
+    Ok(environment.EnvState(environment, types.NilType)),
     fn(state, stmnt) {
       case state {
         Error(_) -> list.Stop(state)
@@ -100,11 +101,11 @@ pub fn block(
 pub fn statement(
   environment: Environment,
   statement: glance.Statement,
-) -> TypeCheckResult {
+) -> TypeStateResult {
   case statement {
     glance.Expression(expr) ->
       expression(environment, expr)
-      |> result.map(environment.TypeState(environment, _))
+      |> result.map(environment.EnvState(environment, _))
 
     glance.Assignment(
       glance.Let,
@@ -132,7 +133,7 @@ pub fn statement(
 
       use type_ <- result.try(inferred_type_result)
       let updated_environment = environment.add_def(environment, name, type_)
-      Ok(environment.TypeState(updated_environment, type_))
+      Ok(environment.EnvState(updated_environment, type_))
     }
     _ -> {
       pprint.debug(statement)
