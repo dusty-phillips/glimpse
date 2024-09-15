@@ -38,10 +38,17 @@ pub fn glance_function(definition: String) -> glance.Function {
   definition.definition
 }
 
-pub fn ok_function_typecheck(definition: String) -> glance.Function {
+pub fn ok_function_env_typecheck(
+  env: Environment,
+  definition: String,
+) -> glance.Function {
   let function = glance_function(definition)
-  typecheck.function(environment.new(), function)
+  typecheck.function(env, function)
   |> should.be_ok
+}
+
+pub fn ok_function_typecheck(definition: String) -> glance.Function {
+  ok_function_env_typecheck(environment.new(), definition)
 }
 
 pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
