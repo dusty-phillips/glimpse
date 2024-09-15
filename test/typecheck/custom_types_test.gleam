@@ -1,10 +1,46 @@
 import gleam/dict
+import gleam/list
 import gleeunit/should
 import glimpse/internal/typecheck/types
 import glimpse/internal/typecheck/variants
 import typecheck/helpers
 
-pub fn simple_custom_type_test() {
+pub fn no_field_custom_type_test() {
+  let env =
+    "type MyType {
+    MyTypeConstructor
+  }"
+    |> helpers.ok_custom_type
+
+  env.custom_types
+  |> dict.size
+  |> should.equal(1)
+
+  env.custom_types
+  |> dict.get("MyType")
+  |> should.be_ok
+  |> should.equal(types.CustomType("MyType"))
+
+  env.constructors
+  |> dict.size
+  |> should.equal(1)
+
+  let constructor =
+    env.constructors
+    |> dict.get("MyTypeConstructor")
+    |> should.be_ok
+
+  constructor.name
+  |> should.equal("MyTypeConstructor")
+
+  constructor.custom_type
+  |> should.equal("MyType")
+
+  constructor.fields
+  |> should.equal([])
+}
+
+pub fn single_param_custom_type_test() {
   let env =
     "type MyType {
     MyTypeConstructor(name: String)
@@ -116,6 +152,41 @@ pub fn multi_variant_custom_type_test() {
   |> should.equal("MyType")
   constructor2.fields
   |> should.equal([variants.NamedField("number", types.IntType)])
+}
+
+pub fn multi_variant_no_fields_custom_type_test() {
+  let env =
+    "type MyType {
+    C1
+    C2
+    C3
+  }"
+    |> helpers.ok_custom_type
+
+  env.custom_types
+  |> dict.size
+  |> should.equal(1)
+
+  env.custom_types
+  |> dict.get("MyType")
+  |> should.be_ok
+  |> should.equal(types.CustomType("MyType"))
+
+  env.constructors
+  |> dict.size
+  |> should.equal(3)
+
+  use constructor_name <- list.each(["C1", "C2", "C3"])
+  let constructor =
+    env.constructors
+    |> dict.get(constructor_name)
+    |> should.be_ok
+  constructor.name
+  |> should.equal(constructor_name)
+  constructor.custom_type
+  |> should.equal("MyType")
+  constructor.fields
+  |> should.equal([])
 }
 
 pub fn recursive_custom_type_test() {

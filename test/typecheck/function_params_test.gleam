@@ -5,7 +5,8 @@ import glimpse/error
 import typecheck/helpers
 
 pub fn int_param_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo(a: Int) -> Int { a }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo(a: Int) -> Int { a }")
 
   function_out.return
   |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
@@ -20,14 +21,16 @@ pub fn int_param_operation_test() {
 }
 
 pub fn float_param_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo(a: Float) -> Float { a }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo(a: Float) -> Float { a }")
 
   function_out.return
   |> should.equal(option.Some(glance.NamedType("Float", option.None, [])))
 }
 
 pub fn string_param_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo(a: String) -> String { a }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo(a: String) -> String { a }")
 
   function_out.return
   |> should.equal(option.Some(glance.NamedType("String", option.None, [])))
