@@ -1,5 +1,8 @@
 import glance
+import gleam/iterator
+import gleam/list
 import gleam/option
+import gleam/string_builder
 import glimpse/error
 
 pub type Type {
@@ -9,6 +12,7 @@ pub type Type {
   StringType
   BoolType
   CustomType(name: String)
+  CallableType(parameters: List(Type), return: Type)
 }
 
 pub type TypeResult =
@@ -22,6 +26,19 @@ pub fn to_string(type_: Type) -> String {
     StringType -> "String"
     BoolType -> "Bool"
     CustomType(name) -> name
+    CallableType(parameters, return) ->
+      string_builder.from_string("fn (")
+      |> string_builder.append_builder(
+        parameters
+        |> iterator.from_list
+        |> iterator.map(to_string)
+        |> iterator.map(string_builder.from_string)
+        |> iterator.to_list
+        |> string_builder.join(", "),
+      )
+      |> string_builder.append(") -> ")
+      |> string_builder.append(to_string(return))
+      |> string_builder.to_string
   }
 }
 
@@ -34,6 +51,8 @@ pub fn to_glance(type_: Type) -> glance.Type {
     BoolType -> glance.NamedType("Bool", option.None, [])
     // TODO: CustomType will need a module field
     CustomType(name) -> glance.NamedType(name, option.None, [])
+    CallableType(parameters, return) ->
+      glance.FunctionType(list.map(parameters, to_glance), to_glance(return))
   }
 }
 

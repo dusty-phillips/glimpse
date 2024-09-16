@@ -11,7 +11,25 @@ import glimpse/internal/typecheck/types.{type TypeResult}
 import glimpse/internal/typecheck/variants.{type VariantField}
 import pprint
 
-pub fn fold_function_parameter(
+/// Used when checking the fnction signature.
+/// Ensures that the types in the signature exist in our environment and maps them
+// to glimpse Types.
+
+pub fn function_parameter(
+  environment: Environment,
+  param: glance.FunctionParameter,
+) -> TypeResult {
+  case param {
+    glance.FunctionParameter(type_: option.None, ..) ->
+      todo as "Not inferring function parameters yet (requires generics or Skolem vars)"
+    glance.FunctionParameter(type_: option.Some(glance_type), ..) ->
+      type_(environment, glance_type)
+  }
+}
+
+/// Used when typechceking the function *body*. Adds all parameters to the environment
+/// to be used as a local scope.
+pub fn fold_function_parameter_into_env(
   state: EnvironmentResult,
   param: glance.FunctionParameter,
 ) -> EnvironmentFold {
@@ -182,12 +200,53 @@ pub fn expression(
       }
     }
 
+    glance.Call(target, arguments) -> call(environment, target, arguments)
+
     glance.BinaryOperator(operator, left, right) ->
       binop(environment, operator, left, right)
 
     _ -> {
       pprint.debug(expression)
-      todo
+      todo as "many expressions not implemented yet"
+    }
+  }
+}
+
+pub fn call(
+  environment: Environment,
+  target: glance.Expression,
+  arguments: List(glance.Field(glance.Expression)),
+) -> TypeResult {
+  let glimpse_arguments_result =
+    arguments
+    |> list.map(call_field(environment, _))
+    |> result.all
+
+  use glimpse_target <- result.try(expression(environment, target))
+  use glimpse_arguments <- result.try(glimpse_arguments_result)
+
+  case glimpse_target {
+    types.CallableType(target_arguments, target_return)
+      if glimpse_arguments == target_arguments
+    -> Ok(target_return)
+    types.CallableType(..) as expected ->
+      Error(error.InvalidCall(
+        types.to_string(expected),
+        types.to_string(glimpse_target),
+      ))
+    _ -> Error(error.NotCallable(types.to_string(glimpse_target)))
+  }
+}
+
+pub fn call_field(
+  environment: Environment,
+  field: glance.Field(glance.Expression),
+) -> TypeResult {
+  case field {
+    glance.Field(option.Some(_label), _) ->
+      todo as "labelled call fields not supported yet"
+    glance.Field(option.None, arg_expr) -> {
+      expression(environment, arg_expr)
     }
   }
 }

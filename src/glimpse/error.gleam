@@ -28,6 +28,8 @@ pub type TypeCheckError {
   )
   UnknownCustomType(name: String)
   NoSuchModule(name: String)
+  NotCallable(got: String)
+  InvalidCall(expected: String, got: String)
   DuplicateCustomType(name: String)
 }
 
