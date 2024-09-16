@@ -30,6 +30,7 @@ pub type TypeCheckError {
   NoSuchModule(name: String)
   NotCallable(got: String)
   InvalidArguments(expected: String, actual_arguments: String)
+  InvalidArgumentLabel(expected: String, got: String)
   DuplicateCustomType(name: String)
 }
 

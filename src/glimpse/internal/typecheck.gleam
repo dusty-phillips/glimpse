@@ -1,29 +1,62 @@
 import glance
+import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/result
 import glimpse/error
 import glimpse/internal/typecheck/environment.{
-  type Environment, type EnvironmentFold, type EnvironmentResult, type TypeState,
+  type Environment, type EnvironmentFold, type EnvironmentResult,
   type TypeStateFold, type TypeStateResult,
+}
+import glimpse/internal/typecheck/functions.{
+  type CallableState, type CallableStateFold, type CallableStateResult,
 }
 import glimpse/internal/typecheck/types.{type TypeResult}
 import glimpse/internal/typecheck/variants.{type VariantField}
 import pprint
 
-/// Used when checking the fnction signature.
+/// Used when checking the function signature.
 /// Ensures that the types in the signature exist in our environment and maps them
-// to glimpse Types.
-
-pub fn function_parameter(
-  environment: Environment,
+/// to glimpse Types.
+pub fn fold_parameter_into_callable(
+  state: CallableStateResult,
   param: glance.FunctionParameter,
-) -> TypeResult {
-  case param {
-    glance.FunctionParameter(type_: option.None, ..) ->
-      todo as "Not inferring function parameters yet (requires generics or Skolem vars)"
-    glance.FunctionParameter(type_: option.Some(glance_type), ..) ->
-      type_(environment, glance_type)
+) -> CallableStateFold {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(functions.CallableState(environment, reversed_by_position, labels)) -> {
+      case param {
+        glance.FunctionParameter(type_: option.None, ..) ->
+          todo as "Not inferring function parameters yet (requires generics or Skolem vars)"
+
+        glance.FunctionParameter(
+          label: option.Some(label),
+          type_: option.Some(glance_type),
+          ..,
+        ) -> {
+          use glimpse_type <- result.try(type_(environment, glance_type))
+          Ok(functions.CallableState(
+            environment,
+            [glimpse_type, ..reversed_by_position],
+            dict.insert(labels, label, reversed_by_position |> list.length),
+          ))
+        }
+
+        glance.FunctionParameter(
+          label: option.None,
+          type_: option.Some(glance_type),
+          ..,
+        ) -> {
+          use glimpse_type <- result.try(type_(environment, glance_type))
+          Ok(functions.CallableState(
+            environment,
+            [glimpse_type, ..reversed_by_position],
+            labels,
+          ))
+        }
+      }
+      |> list.Continue
+    }
   }
 }
 
@@ -41,7 +74,7 @@ pub fn fold_function_parameter_into_env(
           glance.FunctionParameter(name: glance.Discarded(_), ..) ->
             Ok(environment)
           glance.FunctionParameter(type_: option.None, ..) ->
-            todo as "Not inferring untyped parameters yet"
+            todo as "Not inferring function parameters yet"
           glance.FunctionParameter(
             name: glance.Named(name),
             type_: option.Some(glance_type),
@@ -217,23 +250,23 @@ pub fn call(
   target: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
 ) -> TypeResult {
-  let glimpse_arguments_result =
+  let glimpse_argument_fields_result =
     arguments
     |> list.map(call_field(environment, _))
     |> result.all
 
   use glimpse_target <- result.try(expression(environment, target))
-  use glimpse_arguments <- result.try(glimpse_arguments_result)
+  use glimpse_argument_fields <- result.try(glimpse_argument_fields_result)
 
   case glimpse_target {
-    types.CallableType(target_arguments, target_return)
-      if glimpse_arguments == target_arguments
-    -> Ok(target_return)
-    types.CallableType(..) ->
-      Error(error.InvalidArguments(
-        types.to_string(glimpse_target),
-        "(" <> types.list_to_string(glimpse_arguments) <> ")",
-      ))
+    types.CallableType(target_arguments, target_labels, target_return) -> {
+      functions.order_call_arguments(
+        glimpse_argument_fields,
+        target_arguments,
+        target_labels,
+      )
+      |> result.replace(target_return)
+    }
     _ -> Error(error.NotCallable(types.to_string(glimpse_target)))
   }
 }
@@ -241,12 +274,11 @@ pub fn call(
 pub fn call_field(
   environment: Environment,
   field: glance.Field(glance.Expression),
-) -> TypeResult {
+) -> error.TypeCheckResult(glance.Field(types.Type)) {
   case field {
-    glance.Field(option.Some(_label), _) ->
-      todo as "labelled call fields not supported yet"
-    glance.Field(option.None, arg_expr) -> {
-      expression(environment, arg_expr)
+    glance.Field(label_opt, arg_expr) -> {
+      use type_ <- result.try(expression(environment, arg_expr))
+      Ok(glance.Field(label_opt, type_))
     }
   }
 }

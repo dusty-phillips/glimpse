@@ -9,6 +9,7 @@ import glimpse/internal/typecheck as intern
 import glimpse/internal/typecheck/environment.{
   type Environment, type EnvironmentFold, type EnvironmentResult,
 }
+import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/types
 
 /// Infer and typecheck a single module in the given package. Any modules that
@@ -96,7 +97,8 @@ pub fn custom_type(
 }
 
 /// Given a glance function signature, inject that signature into the environment definitions as
-/// a callable type. The body is not typechecked yet.
+/// a callable type. The body is not typechecked at this point.
+/// TODO: Inferring function parameter types
 pub fn function_signature(
   state: EnvironmentResult,
   function: glance.Function,
@@ -105,11 +107,14 @@ pub fn function_signature(
     Error(error) -> list.Stop(Error(error))
     Ok(environment) ->
       {
-        use params <- result.try(
+        use param_state <- result.try(
           function.parameters
-          |> list.map(intern.function_parameter(environment, _))
-          |> result.all,
+          |> list.fold_until(
+            Ok(functions.empty_state(environment)),
+            intern.fold_parameter_into_callable,
+          ),
         )
+
         case function.return {
           option.None -> todo as "not inferring return values yet"
           option.Some(glance_return_type) -> {
@@ -121,7 +126,7 @@ pub fn function_signature(
               environment
               |> environment.add_def(
                 function.name,
-                types.CallableType(params, return),
+                functions.to_callable_type(param_state, return),
               ),
             )
           }

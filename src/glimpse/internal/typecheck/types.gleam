@@ -1,4 +1,5 @@
 import glance
+import gleam/dict.{type Dict}
 import gleam/iterator
 import gleam/list
 import gleam/option
@@ -12,7 +13,13 @@ pub type Type {
   StringType
   BoolType
   CustomType(name: String)
-  CallableType(parameters: List(Type), return: Type)
+  CallableType(
+    /// All parameters (labelled or otherwise)
+    parameters: List(Type),
+    /// Map of label to its position in parameters list
+    position_labels: Dict(String, Int),
+    return: Type,
+  )
 }
 
 pub type TypeResult =
@@ -26,7 +33,7 @@ pub fn to_string(type_: Type) -> String {
     StringType -> "String"
     BoolType -> "Bool"
     CustomType(name) -> name
-    CallableType(parameters, return) ->
+    CallableType(parameters, _labels, return) ->
       string_builder.from_string("fn (")
       |> string_builder.append(list_to_string(parameters))
       |> string_builder.append(") -> ")
@@ -54,7 +61,7 @@ pub fn to_glance(type_: Type) -> glance.Type {
     BoolType -> glance.NamedType("Bool", option.None, [])
     // TODO: CustomType will need a module field
     CustomType(name) -> glance.NamedType(name, option.None, [])
-    CallableType(parameters, return) ->
+    CallableType(parameters, _labels, return) ->
       glance.FunctionType(list.map(parameters, to_glance), to_glance(return))
   }
 }
