@@ -28,18 +28,21 @@ pub fn to_string(type_: Type) -> String {
     CustomType(name) -> name
     CallableType(parameters, return) ->
       string_builder.from_string("fn (")
-      |> string_builder.append_builder(
-        parameters
-        |> iterator.from_list
-        |> iterator.map(to_string)
-        |> iterator.map(string_builder.from_string)
-        |> iterator.to_list
-        |> string_builder.join(", "),
-      )
+      |> string_builder.append(list_to_string(parameters))
       |> string_builder.append(") -> ")
       |> string_builder.append(to_string(return))
       |> string_builder.to_string
   }
+}
+
+pub fn list_to_string(types: List(Type)) -> String {
+  types
+  |> iterator.from_list
+  |> iterator.map(to_string)
+  |> iterator.map(string_builder.from_string)
+  |> iterator.to_list
+  |> string_builder.join(", ")
+  |> string_builder.to_string
 }
 
 pub fn to_glance(type_: Type) -> glance.Type {

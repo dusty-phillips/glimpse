@@ -29,7 +29,7 @@ pub type TypeCheckError {
   UnknownCustomType(name: String)
   NoSuchModule(name: String)
   NotCallable(got: String)
-  InvalidCall(expected: String, got: String)
+  InvalidArguments(expected: String, actual_arguments: String)
   DuplicateCustomType(name: String)
 }
 

@@ -229,10 +229,10 @@ pub fn call(
     types.CallableType(target_arguments, target_return)
       if glimpse_arguments == target_arguments
     -> Ok(target_return)
-    types.CallableType(..) as expected ->
-      Error(error.InvalidCall(
-        types.to_string(expected),
+    types.CallableType(..) ->
+      Error(error.InvalidArguments(
         types.to_string(glimpse_target),
+        "(" <> types.list_to_string(glimpse_arguments) <> ")",
       ))
     _ -> Error(error.NotCallable(types.to_string(glimpse_target)))
   }
