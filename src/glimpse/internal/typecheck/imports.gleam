@@ -2,6 +2,7 @@ import glance
 import gleam/dict
 import gleam/list
 import gleam/option
+import gleam/set
 import gleam/string
 import glimpse/internal/typecheck/environment.{
   type EnvStateFold, type EnvStateResult, type Environment,
@@ -37,7 +38,12 @@ pub fn fold_import_from_env(
                   environment.add_def(
                     environment,
                     namespace,
-                    types.NamespaceType(module_env.definitions),
+                    types.NamespaceType(
+                      module_env.definitions
+                      |> dict.filter(fn(key, _) {
+                        set.contains(module_env.public_definitions, key)
+                      }),
+                    ),
                   ),
                   module_envs,
                 ))

@@ -148,7 +148,7 @@ pub fn custom_type(
 
       list.fold_until(
         custom_type.variants,
-        Ok(environment.EnvState(environment, types.CustomType(custom_type.name))),
+        Ok(environment.EnvState(environment, custom_type)),
         functions.fold_variant_constructors_into_env,
       )
       |> result.map(environment.extract_env)

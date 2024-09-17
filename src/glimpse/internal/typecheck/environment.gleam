@@ -2,6 +2,7 @@ import glance
 import gleam/dict
 import gleam/option
 import gleam/result
+import gleam/set
 import glimpse/error
 import glimpse/internal/typecheck/types.{type Type, type TypeResult}
 import pprint
@@ -9,6 +10,7 @@ import pprint
 pub type Environment {
   Environment(
     definitions: dict.Dict(String, Type),
+    public_definitions: set.Set(String),
     custom_types: dict.Dict(String, Type),
     module_environments: dict.Dict(String, Environment),
   )
@@ -42,6 +44,7 @@ pub type EnvironmentFold =
 pub fn new() -> Environment {
   Environment(
     definitions: dict.new(),
+    public_definitions: set.new(),
     custom_types: dict.new(),
     module_environments: dict.new(),
   )
@@ -55,6 +58,15 @@ pub fn add_def(
   Environment(
     ..environment,
     definitions: dict.insert(environment.definitions, name, type_),
+  )
+}
+
+/// publish a name that is already in the definitions so that it is
+/// visible to importing modules
+pub fn publish(environment: Environment, name: String) -> Environment {
+  Environment(
+    ..environment,
+    public_definitions: set.insert(environment.public_definitions, name),
   )
 }
 

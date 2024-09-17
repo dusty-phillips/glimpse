@@ -6,8 +6,8 @@ import gleam/result
 import gleam/string
 import glimpse/error
 import glimpse/internal/typecheck/environment.{
-  type EnvironmentFold, type EnvironmentResult, type TypeStateFold,
-  type TypeStateResult,
+  type EnvStateFold, type EnvStateResult, type EnvironmentFold,
+  type EnvironmentResult,
 }
 import glimpse/internal/typecheck/types.{type Type}
 
@@ -63,7 +63,7 @@ pub fn function_signature(
           ),
         )
 
-        case function.return {
+        let return_result = case function.return {
           option.None -> todo as "not inferring return values yet"
           option.Some(glance_return_type) -> {
             use return <- result.try(environment.type_(
@@ -78,6 +78,12 @@ pub fn function_signature(
               ),
             )
           }
+        }
+
+        use environment <- result.try(return_result)
+        case function.publicity {
+          glance.Private -> Ok(environment)
+          glance.Public -> Ok(environment.publish(environment, function.name))
         }
       }
       |> list.Continue
@@ -169,16 +175,13 @@ pub fn fold_function_parameter_into_env(
 
 /// Ensure variant constructors are added as function types to the environment's
 /// definition.
-///
-/// HackNote: The TypeState passed in is using the type as the custom_type on the
-/// constructed callable. It is not an output.
 pub fn fold_variant_constructors_into_env(
-  state: TypeStateResult,
+  state: EnvStateResult(glance.CustomType),
   variant: glance.Variant,
-) -> TypeStateFold {
+) -> EnvStateFold(glance.CustomType) {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(environment.EnvState(environment, custom_type)) ->
+    Ok(environment.EnvState(environment, glance_custom_type)) ->
       {
         use callable_state <- result.try(
           variant.fields
@@ -192,10 +195,21 @@ pub fn fold_variant_constructors_into_env(
           environment
           |> environment.add_def(
             variant.name,
-            to_callable_type(callable_state, custom_type),
+            to_callable_type(
+              callable_state,
+              types.CustomType(glance_custom_type.name),
+            ),
           )
 
-        Ok(environment.EnvState(environment, custom_type))
+        case glance_custom_type.publicity {
+          glance.Private ->
+            Ok(environment.EnvState(environment, glance_custom_type))
+          glance.Public ->
+            Ok(environment.EnvState(
+              environment.publish(environment, variant.name),
+              glance_custom_type,
+            ))
+        }
       }
       |> list.Continue
   }
