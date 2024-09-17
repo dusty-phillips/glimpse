@@ -4,12 +4,17 @@ import gleeunit/should
 import glimpse/internal/typecheck/environment.{type Environment}
 import glimpse/internal/typecheck/types.{type Type}
 
-pub fn should_have_dict_size(dict: dict.Dict(a, b), size: Int) {
+pub fn should_have_dict_size(
+  dict: dict.Dict(a, b),
+  size: Int,
+) -> dict.Dict(a, b) {
   dict |> dict.size |> should.equal(size)
+  dict
 }
 
-pub fn should_have_list_length(list: List(a), size: Int) {
+pub fn should_have_list_length(list: List(a), size: Int) -> List(a) {
   list |> list.length |> should.equal(size)
+  list
 }
 
 pub fn should_have_type(env: Environment, name: String) {

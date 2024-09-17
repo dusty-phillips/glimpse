@@ -5,6 +5,7 @@ import gleam/option
 import gleam/result
 import glimpse
 import glimpse/error
+import glimpse/internal/import_dependencies
 import glimpse/internal/typecheck as intern
 import glimpse/internal/typecheck/environment.{
   type Environment, type EnvironmentResult,
@@ -12,21 +13,71 @@ import glimpse/internal/typecheck/environment.{
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/types
 
+type PackageState {
+  PackageState(
+    package: glimpse.Package,
+    module_envs: dict.Dict(String, Environment),
+  )
+}
+
+/// Infer and typecheck a glimpse package. Returns a new version of the package,
+/// where some glance types may have been replaced with inferred types.
+///
+/// Checks the main module and every module that is importable from that module.
+///
+/// Returns a GlimpseError if there are missing imports, circular dependencies,
+/// or anything in the AST fails to typecheck.
+pub fn package(
+  package: glimpse.Package,
+) -> Result(glimpse.Package, error.GlimpseError(a)) {
+  let import_graph =
+    dict.map_values(package.modules, fn(_, value) { value.dependencies })
+
+  use ordered_dependencies <- result.try(import_dependencies.sort_dependencies(
+    import_graph,
+    package.name,
+  ))
+  ordered_dependencies
+  |> list.fold_until(
+    Ok(PackageState(package, dict.new())),
+    fn(package_result, next_module) {
+      case package_result {
+        Error(error) -> list.Stop(Error(error))
+        Ok(PackageState(package, module_envs)) ->
+          {
+            use glimpse_module <- result.try(
+              dict.get(package.modules, next_module)
+              |> result.replace_error(
+                error.ImportError(error.MissingImportError(next_module)),
+              ),
+            )
+            use #(new_module, module_env) <- result.try(
+              module(glimpse_module) |> result.map_error(error.TypeCheckError),
+            )
+
+            let module_dict =
+              dict.insert(package.modules, next_module, new_module)
+            let new_package = glimpse.Package(..package, modules: module_dict)
+            Ok(PackageState(
+              new_package,
+              dict.insert(module_envs, next_module, module_env),
+            ))
+          }
+          |> list.Continue
+      }
+    },
+  )
+  |> result.map(fn(state) { state.package })
+}
+
 /// Infer and typecheck a single module in the given package. Any modules that
 /// this module imports *must* have already been inferred.
 ///
 /// Returns a variation of the package where the module's contents have been
 /// updated based on any inferences that were made.
 pub fn module(
-  package: glimpse.Package,
-  module_name: String,
-) -> error.TypeCheckResult(#(glimpse.Package, Environment)) {
-  let glimpse_module_result =
-    dict.get(package.modules, module_name)
-    |> result.replace_error(error.NoSuchModule(module_name))
-
-  use glimpse_module <- result.try(glimpse_module_result)
-
+  glimpse_module: glimpse.Module,
+) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
   let environment = environment.new()
 
   let custom_type_result =
@@ -63,14 +114,11 @@ pub fn module(
 
   use functions <- result.try(functions_result)
 
-  let glance_module =
+  let new_glance_module =
     glance.Module(..glimpse_module.module, functions: functions)
-  let glimpse_module = glimpse.Module(..glimpse_module, module: glance_module)
-  let module_dict = dict.insert(package.modules, module_name, glimpse_module)
-  let package = glimpse.Package(..package, modules: module_dict)
-  Ok(#(package, environment))
-  // TODO: Pretty sure this needs to also return an updated environment
-  // that contains the public types and functions of the module
+  let new_glimpse_module =
+    glimpse.Module(..glimpse_module, module: new_glance_module)
+  Ok(#(new_glimpse_module, environment))
 }
 
 /// Update the environment to include the custom type and all its constructors.

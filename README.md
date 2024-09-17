@@ -62,9 +62,10 @@ fn load_glimpse_package(
 ## Typechecking
 
 Typechecking is mostly not implemented yet and not available in the public
-release on hex. The entrypoint is in glimpse/typecheck. Right now you can only
-typecheck one module at a time, but the goal is to support typechecking entire
-glimpse packages.
+release on hex. The entrypoints are in glimpse/typecheck. If you've loaded
+a glimpse module as above, you probably want `typecheck.package(glimpse_package)`. There are a couple other public functions in there
+for checking individual modules and parts of modules, but it is probable
+you want that one.
 
 ## Future Ideas
 

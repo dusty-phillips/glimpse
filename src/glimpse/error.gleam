@@ -9,6 +9,7 @@ pub type GlimpseError(a) {
     module_content: String,
   )
   ImportError(GlimpseImportError)
+  TypeCheckError(TypeCheckError)
 }
 
 pub type GlimpseImportError {
@@ -27,7 +28,6 @@ pub type TypeCheckError {
     expected: String,
   )
   UnknownCustomType(name: String)
-  NoSuchModule(name: String)
   NotCallable(got: String)
   InvalidArguments(expected: String, actual_arguments: String)
   InvalidArgumentLabel(expected: String, got: String)

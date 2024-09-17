@@ -59,23 +59,27 @@ pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
 }
 
 pub fn ok_module_typecheck(definition: String) -> #(glimpse.Module, Environment) {
-  let #(inferred_package, environment) =
-    glimpse.load_package("main_module", fn(_) { Ok(definition) })
-    |> should.be_ok
-    |> typecheck.module("main_module")
-    |> should.be_ok
-
-  let main_mod =
-    inferred_package.modules
-    |> dict.get("main_module")
-    |> should.be_ok
-
-  #(main_mod, environment)
+  glance.module(definition)
+  |> should.be_ok
+  |> glimpse.Module("main_module", _, [])
+  |> typecheck.module()
+  |> should.be_ok
 }
 
 pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
-  glimpse.load_package("main_module", fn(_) { Ok(definition) })
+  glance.module(definition)
   |> should.be_ok
-  |> typecheck.module("main_module")
+  |> glimpse.Module("main_module", _, [])
+  |> typecheck.module()
   |> should.be_error
+}
+
+pub fn ok_package_check(
+  main_module: String,
+  loader: fn(String) -> Result(String, Nil),
+) -> glimpse.Package {
+  glimpse.load_package(main_module, loader)
+  |> should.be_ok
+  |> typecheck.package
+  |> should.be_ok
 }
