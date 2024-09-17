@@ -1,7 +1,10 @@
+import glance
 import gleam/dict
+import gleam/option
 import gleam/result
 import glimpse/error
 import glimpse/internal/typecheck/types.{type Type, type TypeResult}
+import pprint
 
 pub type Environment {
   Environment(
@@ -73,4 +76,27 @@ pub fn lookup_custom_type(environment: Environment, name: String) -> TypeResult 
 
 pub fn extract_env(state: TypeState) -> Environment {
   state.environment
+}
+
+pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
+  case glance_type {
+    glance.NamedType("Int", option.None, []) -> Ok(types.IntType)
+    glance.NamedType("Float", option.None, []) -> Ok(types.FloatType)
+    glance.NamedType("Nil", option.None, []) -> Ok(types.NilType)
+    glance.NamedType("String", option.None, []) -> Ok(types.StringType)
+    glance.NamedType("Bool", option.None, []) -> Ok(types.BoolType)
+
+    // TODO: custom types with parameters need to be supported
+    // TODO: not 100% certain all named types that are not covered
+    // above are actually custom types
+    // TODO: support named types in other modules
+    glance.NamedType(name, option.None, []) ->
+      lookup_custom_type(environment, name)
+
+    glance.VariableType(name) -> lookup_variable_type(environment, name)
+    _ -> {
+      pprint.debug(glance_type)
+      todo
+    }
+  }
 }

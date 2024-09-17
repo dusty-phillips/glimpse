@@ -33,7 +33,10 @@ pub fn fold_parameter_into_callable(
           type_: option.Some(glance_type),
           ..,
         ) -> {
-          use glimpse_type <- result.try(type_(environment, glance_type))
+          use glimpse_type <- result.try(environment.type_(
+            environment,
+            glance_type,
+          ))
           Ok(functions.CallableState(
             environment,
             [glimpse_type, ..reversed_by_position],
@@ -46,7 +49,10 @@ pub fn fold_parameter_into_callable(
           type_: option.Some(glance_type),
           ..,
         ) -> {
-          use glimpse_type <- result.try(type_(environment, glance_type))
+          use glimpse_type <- result.try(environment.type_(
+            environment,
+            glance_type,
+          ))
           Ok(functions.CallableState(
             environment,
             [glimpse_type, ..reversed_by_position],
@@ -79,7 +85,10 @@ pub fn fold_function_parameter_into_env(
             type_: option.Some(glance_type),
             ..,
           ) -> {
-            use check_type <- result.try(type_(environment, glance_type))
+            use check_type <- result.try(environment.type_(
+              environment,
+              glance_type,
+            ))
             Ok(environment.add_def(environment, name, check_type))
           }
         }
@@ -132,7 +141,10 @@ pub fn fold_variant_field_into_callable(
       {
         case field {
           glance.Field(label: option.Some(label), item: glance_type) -> {
-            use glimpse_type <- result.try(type_(environment, glance_type))
+            use glimpse_type <- result.try(environment.type_(
+              environment,
+              glance_type,
+            ))
             Ok(functions.CallableState(
               environment,
               [glimpse_type, ..reversed_by_position],
@@ -141,7 +153,10 @@ pub fn fold_variant_field_into_callable(
           }
 
           glance.Field(label: option.None, item: glance_type) -> {
-            use glimpse_type <- result.try(type_(environment, glance_type))
+            use glimpse_type <- result.try(environment.type_(
+              environment,
+              glance_type,
+            ))
             Ok(functions.CallableState(
               environment,
               [glimpse_type, ..reversed_by_position],
@@ -186,7 +201,8 @@ pub fn statement(
       value_expression,
     ) -> {
       let value_type_result = expression(environment, value_expression)
-      let annotated_type_option = option.map(annotation, type_(environment, _))
+      let annotated_type_option =
+        option.map(annotation, environment.type_(environment, _))
 
       let inferred_type_result = case value_type_result, annotated_type_option {
         Error(err), _ -> Error(err)
@@ -396,29 +412,5 @@ pub fn binop(
       types.to_binop_error("<>", left, right, "two Strings")
 
     glance.Pipe, _, _ -> todo as "Pipe binop is not typechecked yet"
-  }
-}
-
-pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
-  case glance_type {
-    glance.NamedType("Int", option.None, []) -> Ok(types.IntType)
-    glance.NamedType("Float", option.None, []) -> Ok(types.FloatType)
-    glance.NamedType("Nil", option.None, []) -> Ok(types.NilType)
-    glance.NamedType("String", option.None, []) -> Ok(types.StringType)
-    glance.NamedType("Bool", option.None, []) -> Ok(types.BoolType)
-
-    // TODO: custom types with parameters need to be supported
-    // TODO: not 100% certain all named types that are not covered
-    // above are actually custom types
-    // TODO: support named types in other modules
-    glance.NamedType(name, option.None, []) ->
-      environment.lookup_custom_type(environment, name)
-
-    glance.VariableType(name) ->
-      environment.lookup_variable_type(environment, name)
-    _ -> {
-      pprint.debug(glance_type)
-      todo
-    }
   }
 }

@@ -118,7 +118,7 @@ pub fn function_signature(
         case function.return {
           option.None -> todo as "not inferring return values yet"
           option.Some(glance_return_type) -> {
-            use return <- result.try(intern.type_(
+            use return <- result.try(environment.type_(
               environment,
               glance_return_type,
             ))
@@ -163,7 +163,7 @@ pub fn function(
           )
         }
         option.Some(expected_type) -> {
-          case intern.type_(environment, expected_type) {
+          case environment.type_(environment, expected_type) {
             Error(err) -> Error(err)
             Ok(expected) if expected != block_out.state ->
               Error(error.InvalidReturnType(
