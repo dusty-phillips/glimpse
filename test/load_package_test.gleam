@@ -3,6 +3,7 @@ import gleam/dict
 import gleeunit/should
 import glimpse
 import glimpse/error
+import typecheck/assertions
 
 pub fn ok_module(contents: String) -> glance.Module {
   glance.module(contents)
@@ -41,9 +42,7 @@ pub fn single_dependency_package_test() {
   loaded_package.name
   |> should.equal("main_module")
 
-  loaded_package.modules
-  |> dict.size
-  |> should.equal(2)
+  assertions.should_have_dict_size(loaded_package.modules, 2)
 
   expect_modules_equal(
     loaded_package,
@@ -71,9 +70,7 @@ pub fn diamond_dependency_package_test() {
   loaded_package.name
   |> should.equal("main_module")
 
-  loaded_package.modules
-  |> dict.size
-  |> should.equal(4)
+  assertions.should_have_dict_size(loaded_package.modules, 4)
 
   expect_modules_equal(
     loaded_package,

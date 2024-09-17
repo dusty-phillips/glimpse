@@ -1,6 +1,6 @@
-import gleam/list
 import gleeunit/should
 import glimpse/error
+import typecheck/assertions
 import typecheck/helpers
 
 pub fn simple_nil_function_call_test() {
@@ -10,9 +10,7 @@ pub fn simple_nil_function_call_test() {
     fn bar() -> Nil { foo() } ",
     )
 
-  module.module.functions
-  |> list.length
-  |> should.equal(2)
+  assertions.should_have_list_length(module.module.functions, 2)
 }
 
 pub fn fully_typed_function_call_test() {
@@ -24,9 +22,7 @@ pub fn fully_typed_function_call_test() {
     } ",
     )
 
-  module.module.functions
-  |> list.length
-  |> should.equal(2)
+  assertions.should_have_list_length(module.module.functions, 2)
 }
 
 pub fn fully_labelled_function_call_test() {
@@ -38,9 +34,7 @@ pub fn fully_labelled_function_call_test() {
     } ",
     )
 
-  module.module.functions
-  |> list.length
-  |> should.equal(2)
+  assertions.should_have_list_length(module.module.functions, 2)
 }
 
 pub fn partially_labelled_function_call_test() {
@@ -52,9 +46,7 @@ pub fn partially_labelled_function_call_test() {
     } ",
     )
 
-  module.module.functions
-  |> list.length
-  |> should.equal(2)
+  assertions.should_have_list_length(module.module.functions, 2)
 }
 
 pub fn error_if_incorrect_args_test() {
@@ -108,4 +100,87 @@ pub fn error_if_label_unlabelled_args_test() {
     } ",
   )
   |> should.equal(error.InvalidArgumentLabel("()", "first"))
+}
+
+pub fn simple_nil_variant_call_test() {
+  helpers.ok_module_typecheck(
+    "pub type Foo {
+        Foo
+    }
+    fn bar() -> Foo { Foo() } ",
+  )
+}
+
+pub fn multi_nil_variant_call_test() {
+  helpers.ok_module_typecheck(
+    "pub type Foo {
+        Foo
+        Bar
+    }
+    fn bar() -> Foo { Foo() } 
+    fn bar() -> Foo { Bar() } ",
+  )
+}
+
+pub fn single_param_variant_call_test() {
+  helpers.ok_module_typecheck(
+    "pub type Foo {
+        Foo(String)
+    }
+    fn bar() -> Foo { Foo(\"hello\") } 
+  ",
+  )
+}
+
+pub fn labelled_param_variant_call_test() {
+  helpers.ok_module_typecheck(
+    "pub type Foo {
+        Foo(name: String)
+    }
+    fn bar() -> Foo { Foo(name: \"hello\") } 
+  ",
+  )
+}
+
+pub fn labelled_param_variant_optional_call_test() {
+  helpers.ok_module_typecheck(
+    "pub type Foo {
+        Foo(name: String)
+    }
+    fn bar() -> Foo { Foo(\"hello\") } 
+  ",
+  )
+}
+
+pub fn unexpected_label_in_variant_call_test() {
+  helpers.error_module_typecheck(
+    "pub type Foo {
+        Foo(name: String)
+    }
+    fn bar() -> Foo { Foo(wrong_label: \"hello\") } 
+  ",
+  )
+  |> should.equal(error.InvalidArgumentLabel("(name)", "wrong_label"))
+}
+
+pub fn incorrect_arity_in_variant_call_test() {
+  helpers.error_module_typecheck(
+    "pub type Foo {
+        Foo(name: String)
+    }
+    fn bar() -> Foo { Foo(\"hello\", 2) } 
+  ",
+  )
+  |> should.equal(error.InvalidArguments("(String)", "(String, Int)"))
+}
+
+pub fn incorrect_type_in_variant_call_test() {
+  helpers.error_module_typecheck(
+    "pub type Foo {
+        Foo(name: String)
+    }
+    fn bar() -> Foo { Foo(2) } 
+  ",
+  )
+  |> should.equal(error.InvalidArguments("(String)", "(Int)"))
 }

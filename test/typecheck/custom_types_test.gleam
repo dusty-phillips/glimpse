@@ -1,8 +1,6 @@
-import gleam/dict
 import gleam/list
-import gleeunit/should
 import glimpse/internal/typecheck/types
-import glimpse/internal/typecheck/variants
+import typecheck/assertions
 import typecheck/helpers
 
 pub fn no_field_custom_type_test() {
@@ -12,32 +10,19 @@ pub fn no_field_custom_type_test() {
   }"
     |> helpers.ok_custom_type
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.custom_types, 1)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.definitions, 1)
 
-  let constructor =
-    env.constructors
-    |> dict.get("MyTypeConstructor")
-    |> should.be_ok
-
-  constructor.name
-  |> should.equal("MyTypeConstructor")
-
-  constructor.custom_type
-  |> should.equal("MyType")
-
-  constructor.fields
-  |> should.equal([])
+  assertions.should_be_callable(
+    env,
+    "MyTypeConstructor",
+    [],
+    [],
+    types.CustomType("MyType"),
+  )
 }
 
 pub fn single_param_custom_type_test() {
@@ -47,32 +32,19 @@ pub fn single_param_custom_type_test() {
   }"
     |> helpers.ok_custom_type
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.custom_types, 1)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.definitions, 1)
 
-  let constructor =
-    env.constructors
-    |> dict.get("MyTypeConstructor")
-    |> should.be_ok
-
-  constructor.name
-  |> should.equal("MyTypeConstructor")
-
-  constructor.custom_type
-  |> should.equal("MyType")
-
-  constructor.fields
-  |> should.equal([variants.NamedField("name", types.StringType)])
+  assertions.should_be_callable(
+    env,
+    "MyTypeConstructor",
+    [types.StringType],
+    [#("name", 0)],
+    types.CustomType("MyType"),
+  )
 }
 
 pub fn positional_variant_custom_type_test() {
@@ -82,32 +54,19 @@ pub fn positional_variant_custom_type_test() {
   }"
     |> helpers.ok_custom_type
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.custom_types, 1)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.definitions, 1)
 
-  let constructor =
-    env.constructors
-    |> dict.get("MyTypeConstructor")
-    |> should.be_ok
-
-  constructor.name
-  |> should.equal("MyTypeConstructor")
-
-  constructor.custom_type
-  |> should.equal("MyType")
-
-  constructor.fields
-  |> should.equal([variants.PositionField(types.StringType)])
+  assertions.should_be_callable(
+    env,
+    "MyTypeConstructor",
+    [types.StringType],
+    [],
+    types.CustomType("MyType"),
+  )
 }
 
 pub fn multi_variant_custom_type_test() {
@@ -118,40 +77,27 @@ pub fn multi_variant_custom_type_test() {
   }"
     |> helpers.ok_custom_type
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.custom_types, 1)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(2)
+  assertions.should_have_dict_size(env.definitions, 2)
 
-  let constructor1 =
-    env.constructors
-    |> dict.get("MyTypeConstructor")
-    |> should.be_ok
-  constructor1.name
-  |> should.equal("MyTypeConstructor")
-  constructor1.custom_type
-  |> should.equal("MyType")
-  constructor1.fields
-  |> should.equal([variants.NamedField("name", types.StringType)])
+  assertions.should_be_callable(
+    env,
+    "MyTypeConstructor",
+    [types.StringType],
+    [#("name", 0)],
+    types.CustomType("MyType"),
+  )
 
-  let constructor2 =
-    env.constructors
-    |> dict.get("NumberConstructor")
-    |> should.be_ok
-  constructor2.name
-  |> should.equal("NumberConstructor")
-  constructor2.custom_type
-  |> should.equal("MyType")
-  constructor2.fields
-  |> should.equal([variants.NamedField("number", types.IntType)])
+  assertions.should_be_callable(
+    env,
+    "NumberConstructor",
+    [types.IntType],
+    [#("number", 0)],
+    types.CustomType("MyType"),
+  )
 }
 
 pub fn multi_variant_no_fields_custom_type_test() {
@@ -163,30 +109,20 @@ pub fn multi_variant_no_fields_custom_type_test() {
   }"
     |> helpers.ok_custom_type
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.custom_types, 1)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(3)
+  assertions.should_have_dict_size(env.definitions, 3)
 
   use constructor_name <- list.each(["C1", "C2", "C3"])
-  let constructor =
-    env.constructors
-    |> dict.get(constructor_name)
-    |> should.be_ok
-  constructor.name
-  |> should.equal(constructor_name)
-  constructor.custom_type
-  |> should.equal("MyType")
-  constructor.fields
-  |> should.equal([])
+  assertions.should_be_callable(
+    env,
+    constructor_name,
+    [],
+    [],
+    types.CustomType("MyType"),
+  )
 }
 
 pub fn recursive_custom_type_test() {
@@ -197,40 +133,27 @@ pub fn recursive_custom_type_test() {
   }"
     |> helpers.ok_custom_type
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(1)
+  assertions.should_have_dict_size(env.custom_types, 1)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(2)
+  assertions.should_have_dict_size(env.definitions, 2)
 
-  let constructor1 =
-    env.constructors
-    |> dict.get("MyTypeConstructor")
-    |> should.be_ok
-  constructor1.name
-  |> should.equal("MyTypeConstructor")
-  constructor1.custom_type
-  |> should.equal("MyType")
-  constructor1.fields
-  |> should.equal([variants.NamedField("name", types.StringType)])
+  assertions.should_be_callable(
+    env,
+    "MyTypeConstructor",
+    [types.StringType],
+    [#("name", 0)],
+    types.CustomType("MyType"),
+  )
 
-  let constructor2 =
-    env.constructors
-    |> dict.get("RecursiveConstructor")
-    |> should.be_ok
-  constructor2.name
-  |> should.equal("RecursiveConstructor")
-  constructor2.custom_type
-  |> should.equal("MyType")
-  constructor2.fields
-  |> should.equal([variants.NamedField("next", types.CustomType("MyType"))])
+  assertions.should_be_callable(
+    env,
+    "RecursiveConstructor",
+    [types.CustomType("MyType")],
+    [#("next", 0)],
+    types.CustomType("MyType"),
+  )
 }
 
 pub fn custom_type_from_module_test() {
@@ -244,43 +167,27 @@ pub fn custom_type_from_module_test() {
     }"
     |> helpers.ok_module_typecheck
 
-  env.custom_types
-  |> dict.size
-  |> should.equal(2)
+  assertions.should_have_dict_size(env.custom_types, 2)
 
-  env.custom_types
-  |> dict.get("MyType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyType"))
+  assertions.should_have_type(env, "MyType")
 
-  env.custom_types
-  |> dict.get("MyOtherType")
-  |> should.be_ok
-  |> should.equal(types.CustomType("MyOtherType"))
+  assertions.should_have_type(env, "MyOtherType")
 
-  env.constructors
-  |> dict.size
-  |> should.equal(2)
+  assertions.should_have_dict_size(env.definitions, 2)
 
-  let constructor1 =
-    env.constructors
-    |> dict.get("MyTypeConstructor")
-    |> should.be_ok
-  constructor1.name
-  |> should.equal("MyTypeConstructor")
-  constructor1.custom_type
-  |> should.equal("MyType")
-  constructor1.fields
-  |> should.equal([variants.NamedField("name", types.StringType)])
+  assertions.should_be_callable(
+    env,
+    "MyTypeConstructor",
+    [types.StringType],
+    [#("name", 0)],
+    types.CustomType("MyType"),
+  )
 
-  let constructor2 =
-    env.constructors
-    |> dict.get("MyOtherType")
-    |> should.be_ok
-  constructor2.name
-  |> should.equal("MyOtherType")
-  constructor2.custom_type
-  |> should.equal("MyOtherType")
-  constructor2.fields
-  |> should.equal([variants.NamedField("name", types.StringType)])
+  assertions.should_be_callable(
+    env,
+    "MyOtherType",
+    [types.StringType],
+    [#("name", 0)],
+    types.CustomType("MyOtherType"),
+  )
 }

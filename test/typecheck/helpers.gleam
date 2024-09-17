@@ -6,13 +6,14 @@ import glimpse
 import glimpse/error
 import glimpse/internal/typecheck/environment.{type Environment}
 import glimpse/typecheck
+import typecheck/assertions
 
 pub fn glance_custom_type(definition: String) -> glance.CustomType {
   let module =
     glance.module(definition)
     |> should.be_ok
 
-  module.custom_types |> list.length |> should.equal(1)
+  assertions.should_have_list_length(module.custom_types, 1)
 
   let definition =
     list.first(module.custom_types)
@@ -32,7 +33,7 @@ pub fn glance_function(definition: String) -> glance.Function {
     glance.module(definition)
     |> should.be_ok
 
-  module.functions |> list.length |> should.equal(1)
+  assertions.should_have_list_length(module.functions, 1)
 
   let definition = list.first(module.functions) |> should.be_ok
   definition.definition

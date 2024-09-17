@@ -12,7 +12,6 @@ import glimpse/internal/typecheck/functions.{
   type CallableState, type CallableStateFold, type CallableStateResult,
 }
 import glimpse/internal/typecheck/types.{type TypeResult}
-import glimpse/internal/typecheck/variants.{type VariantField}
 import pprint
 
 /// Used when checking the function signature.
@@ -89,47 +88,69 @@ pub fn fold_function_parameter_into_env(
   }
 }
 
-pub fn fold_variant_constructors(
+/// Ensure variant constructors are added as function types to the environment's
+/// definition.
+///
+/// HackNote: The TypeState passed in is using the type as the custom_type on the
+/// constructed callable. It is not an output.
+pub fn fold_variant_constructors_into_env(
   state: TypeStateResult,
   variant: glance.Variant,
 ) -> TypeStateFold {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(environment.EnvState(environment, types.CustomType(custom_type))) ->
+    Ok(environment.EnvState(environment, custom_type)) ->
       {
-        use variant_fields <- result.try(
+        use callable_state <- result.try(
           variant.fields
-          |> list.map(variant_field(environment, _))
-          |> result.all,
+          |> list.fold_until(
+            Ok(functions.empty_state(environment)),
+            fold_variant_field_into_callable,
+          ),
         )
 
-        Ok(environment.EnvState(
-          environment.add_variant_constructor(
-            environment,
+        let environment =
+          environment
+          |> environment.add_def(
             variant.name,
-            variants.Variant(variant.name, custom_type, variant_fields),
-          ),
-          types.CustomType(custom_type),
-        ))
+            functions.to_callable_type(callable_state, custom_type),
+          )
+
+        Ok(environment.EnvState(environment, custom_type))
       }
       |> list.Continue
-    Ok(_) -> panic as "Variant custom type should only be custom type"
   }
 }
 
-pub fn variant_field(
-  environment: Environment,
+pub fn fold_variant_field_into_callable(
+  state: CallableStateResult,
   field: glance.Field(glance.Type),
-) -> error.TypeCheckResult(VariantField) {
-  case field {
-    glance.Field(option.Some(field_name), glance_type) -> {
-      use field_type <- result.try(type_(environment, glance_type))
-      Ok(variants.NamedField(field_name, field_type))
-    }
-    glance.Field(option.None, glance_type) -> {
-      use field_type <- result.try(type_(environment, glance_type))
-      Ok(variants.PositionField(field_type))
-    }
+) -> CallableStateFold {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(functions.CallableState(environment, reversed_by_position, labels)) ->
+      {
+        case field {
+          glance.Field(label: option.Some(label), item: glance_type) -> {
+            use glimpse_type <- result.try(type_(environment, glance_type))
+            Ok(functions.CallableState(
+              environment,
+              [glimpse_type, ..reversed_by_position],
+              dict.insert(labels, label, reversed_by_position |> list.length),
+            ))
+          }
+
+          glance.Field(label: option.None, item: glance_type) -> {
+            use glimpse_type <- result.try(type_(environment, glance_type))
+            Ok(functions.CallableState(
+              environment,
+              [glimpse_type, ..reversed_by_position],
+              labels,
+            ))
+          }
+        }
+      }
+      |> list.Continue
   }
 }
 
