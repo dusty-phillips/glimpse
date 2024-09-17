@@ -5,7 +5,10 @@ import gleam/option
 import gleam/result
 import gleam/string
 import glimpse/error
-import glimpse/internal/typecheck/environment
+import glimpse/internal/typecheck/environment.{
+  type EnvironmentFold, type EnvironmentResult, type TypeStateFold,
+  type TypeStateResult,
+}
 import glimpse/internal/typecheck/types.{type Type}
 
 pub type CallableState {
@@ -39,6 +42,201 @@ type OrderedFoldState {
     reversed_ordered: List(Type),
     positional_remaining: List(Type),
   )
+}
+
+/// Given a glance function signature, inject that signature into the environment definitions as
+/// a callable type. The body is not typechecked at this point.
+/// TODO: Inferring function parameter types
+pub fn function_signature(
+  state: EnvironmentResult,
+  function: glance.Function,
+) -> EnvironmentFold {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(environment) ->
+      {
+        use param_state <- result.try(
+          function.parameters
+          |> list.fold_until(
+            Ok(empty_state(environment)),
+            fold_parameter_into_callable,
+          ),
+        )
+
+        case function.return {
+          option.None -> todo as "not inferring return values yet"
+          option.Some(glance_return_type) -> {
+            use return <- result.try(environment.type_(
+              environment,
+              glance_return_type,
+            ))
+            Ok(
+              environment
+              |> environment.add_def(
+                function.name,
+                to_callable_type(param_state, return),
+              ),
+            )
+          }
+        }
+      }
+      |> list.Continue
+  }
+}
+
+/// Used when checking the function signature.
+/// Ensures that the types in the signature exist in our environment and maps them
+/// to glimpse Types.
+pub fn fold_parameter_into_callable(
+  state: CallableStateResult,
+  param: glance.FunctionParameter,
+) -> CallableStateFold {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(CallableState(environment, reversed_by_position, labels)) -> {
+      case param {
+        glance.FunctionParameter(type_: option.None, ..) ->
+          todo as "Not inferring function parameters yet (requires generics or Skolem vars)"
+
+        glance.FunctionParameter(
+          label: option.Some(label),
+          type_: option.Some(glance_type),
+          ..,
+        ) -> {
+          use glimpse_type <- result.try(environment.type_(
+            environment,
+            glance_type,
+          ))
+          Ok(CallableState(
+            environment,
+            [glimpse_type, ..reversed_by_position],
+            dict.insert(labels, label, reversed_by_position |> list.length),
+          ))
+        }
+
+        glance.FunctionParameter(
+          label: option.None,
+          type_: option.Some(glance_type),
+          ..,
+        ) -> {
+          use glimpse_type <- result.try(environment.type_(
+            environment,
+            glance_type,
+          ))
+          Ok(CallableState(
+            environment,
+            [glimpse_type, ..reversed_by_position],
+            labels,
+          ))
+        }
+      }
+      |> list.Continue
+    }
+  }
+}
+
+/// Used when typechceking the function *body*. Adds all parameters to the environment
+/// to be used as a local scope.
+pub fn fold_function_parameter_into_env(
+  state: EnvironmentResult,
+  param: glance.FunctionParameter,
+) -> EnvironmentFold {
+  case state {
+    Error(_err) -> list.Stop(state)
+    Ok(environment) ->
+      {
+        case param {
+          glance.FunctionParameter(name: glance.Discarded(_), ..) ->
+            Ok(environment)
+          glance.FunctionParameter(type_: option.None, ..) ->
+            todo as "Not inferring function parameters yet"
+          glance.FunctionParameter(
+            name: glance.Named(name),
+            type_: option.Some(glance_type),
+            ..,
+          ) -> {
+            use check_type <- result.try(environment.type_(
+              environment,
+              glance_type,
+            ))
+            Ok(environment.add_def(environment, name, check_type))
+          }
+        }
+      }
+      |> list.Continue
+  }
+}
+
+/// Ensure variant constructors are added as function types to the environment's
+/// definition.
+///
+/// HackNote: The TypeState passed in is using the type as the custom_type on the
+/// constructed callable. It is not an output.
+pub fn fold_variant_constructors_into_env(
+  state: TypeStateResult,
+  variant: glance.Variant,
+) -> TypeStateFold {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(environment.EnvState(environment, custom_type)) ->
+      {
+        use callable_state <- result.try(
+          variant.fields
+          |> list.fold_until(
+            Ok(empty_state(environment)),
+            fold_variant_field_into_callable,
+          ),
+        )
+
+        let environment =
+          environment
+          |> environment.add_def(
+            variant.name,
+            to_callable_type(callable_state, custom_type),
+          )
+
+        Ok(environment.EnvState(environment, custom_type))
+      }
+      |> list.Continue
+  }
+}
+
+fn fold_variant_field_into_callable(
+  state: CallableStateResult,
+  field: glance.Field(glance.Type),
+) -> CallableStateFold {
+  case state {
+    Error(error) -> list.Stop(Error(error))
+    Ok(CallableState(environment, reversed_by_position, labels)) ->
+      {
+        case field {
+          glance.Field(label: option.Some(label), item: glance_type) -> {
+            use glimpse_type <- result.try(environment.type_(
+              environment,
+              glance_type,
+            ))
+            Ok(CallableState(
+              environment,
+              [glimpse_type, ..reversed_by_position],
+              dict.insert(labels, label, reversed_by_position |> list.length),
+            ))
+          }
+
+          glance.Field(label: option.None, item: glance_type) -> {
+            use glimpse_type <- result.try(environment.type_(
+              environment,
+              glance_type,
+            ))
+            Ok(CallableState(
+              environment,
+              [glimpse_type, ..reversed_by_position],
+              labels,
+            ))
+          }
+        }
+      }
+      |> list.Continue
+  }
 }
 
 /// Confirm that a function called with `called_with` can safely call

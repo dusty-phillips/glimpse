@@ -7,7 +7,7 @@ import glimpse
 import glimpse/error
 import glimpse/internal/typecheck as intern
 import glimpse/internal/typecheck/environment.{
-  type Environment, type EnvironmentFold, type EnvironmentResult,
+  type Environment, type EnvironmentResult,
 }
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/types
@@ -44,7 +44,7 @@ pub fn module(
   let function_signature_result =
     glimpse_module.module.functions
     |> list.map(fn(definition) { definition.definition })
-    |> list.fold_until(Ok(environment), function_signature)
+    |> list.fold_until(Ok(environment), functions.function_signature)
 
   use environment <- result.try(function_signature_result)
 
@@ -88,52 +88,12 @@ pub fn custom_type(
       list.fold_until(
         custom_type.variants,
         Ok(environment.EnvState(environment, types.CustomType(custom_type.name))),
-        intern.fold_variant_constructors_into_env,
+        functions.fold_variant_constructors_into_env,
       )
       |> result.map(environment.extract_env)
     }
   }
   // TODO: Also add variants
-}
-
-/// Given a glance function signature, inject that signature into the environment definitions as
-/// a callable type. The body is not typechecked at this point.
-/// TODO: Inferring function parameter types
-pub fn function_signature(
-  state: EnvironmentResult,
-  function: glance.Function,
-) -> EnvironmentFold {
-  case state {
-    Error(error) -> list.Stop(Error(error))
-    Ok(environment) ->
-      {
-        use param_state <- result.try(
-          function.parameters
-          |> list.fold_until(
-            Ok(functions.empty_state(environment)),
-            intern.fold_parameter_into_callable,
-          ),
-        )
-
-        case function.return {
-          option.None -> todo as "not inferring return values yet"
-          option.Some(glance_return_type) -> {
-            use return <- result.try(environment.type_(
-              environment,
-              glance_return_type,
-            ))
-            Ok(
-              environment
-              |> environment.add_def(
-                function.name,
-                functions.to_callable_type(param_state, return),
-              ),
-            )
-          }
-        }
-      }
-      |> list.Continue
-  }
 }
 
 /// Takes a glance function as input and returns the same function, but
@@ -147,7 +107,7 @@ pub fn function(
   use environment <- result.try(list.fold_until(
     function.parameters,
     Ok(environment),
-    intern.fold_function_parameter_into_env,
+    functions.fold_function_parameter_into_env,
   ))
 
   case intern.block(environment, function.body) {
