@@ -1,4 +1,5 @@
 import glance
+import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/result
@@ -108,6 +109,21 @@ pub fn expression(
             "Bool",
             "! can only negate Bool",
           ))
+      }
+    }
+
+    glance.FieldAccess(container, label) -> {
+      use container_expression_type <- result.try(expression(
+        environment,
+        container,
+      ))
+      case container_expression_type {
+        types.NamespaceType(nested_env) ->
+          nested_env
+          |> dict.get(label)
+          |> result.replace_error(error.InvalidName(label))
+        type_ ->
+          Error(error.InvalidFieldAccess(type_ |> types.to_string, label))
       }
     }
 

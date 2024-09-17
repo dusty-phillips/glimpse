@@ -116,7 +116,7 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
     glance.VariableType(name) -> lookup_variable_type(environment, name)
     _ -> {
       pprint.debug(glance_type)
-      todo
+      todo as "many glance types not processed yet"
     }
   }
 }

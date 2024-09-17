@@ -32,6 +32,7 @@ pub type TypeCheckError {
   InvalidArguments(expected: String, actual_arguments: String)
   InvalidArgumentLabel(expected: String, got: String)
   DuplicateCustomType(name: String)
+  InvalidFieldAccess(container: String, label: String)
 }
 
 pub type TypeCheckResult(a) =
