@@ -20,6 +20,8 @@ pub type Type {
     position_labels: Dict(String, Int),
     return: Type,
   )
+  /// Used for field access on imports; no direct glance analog
+  NamespaceType(Dict(String, Type))
 }
 
 pub type TypeResult =
@@ -39,6 +41,7 @@ pub fn to_string(type_: Type) -> String {
       |> string_builder.append(") -> ")
       |> string_builder.append(to_string(return))
       |> string_builder.to_string
+    NamespaceType(_) -> "<Namespace>"
   }
 }
 
@@ -59,10 +62,10 @@ pub fn to_glance(type_: Type) -> glance.Type {
     FloatType -> glance.NamedType("Float", option.None, [])
     StringType -> glance.NamedType("String", option.None, [])
     BoolType -> glance.NamedType("Bool", option.None, [])
-    // TODO: CustomType will need a module field
     CustomType(name) -> glance.NamedType(name, option.None, [])
     CallableType(parameters, _labels, return) ->
       glance.FunctionType(list.map(parameters, to_glance), to_glance(return))
+    NamespaceType(_) -> panic as "Cannot convert namespace to glance"
   }
 }
 

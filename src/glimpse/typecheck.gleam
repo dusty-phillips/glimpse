@@ -11,6 +11,7 @@ import glimpse/internal/typecheck/environment.{
   type Environment, type EnvironmentResult,
 }
 import glimpse/internal/typecheck/functions
+import glimpse/internal/typecheck/imports
 import glimpse/internal/typecheck/types
 
 type PackageState {
@@ -52,7 +53,8 @@ pub fn package(
               ),
             )
             use #(new_module, module_env) <- result.try(
-              module(glimpse_module) |> result.map_error(error.TypeCheckError),
+              module(glimpse_module, module_envs)
+              |> result.map_error(error.TypeCheckError),
             )
 
             let module_dict =
@@ -77,8 +79,19 @@ pub fn package(
 /// updated based on any inferences that were made.
 pub fn module(
   glimpse_module: glimpse.Module,
+  module_envs: dict.Dict(String, Environment),
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
   let environment = environment.new()
+
+  let imports_result =
+    glimpse_module.module.imports
+    |> list.map(fn(definition) { definition.definition })
+    |> list.fold_until(
+      Ok(environment.EnvState(environment, module_envs)),
+      imports.fold_import_from_env,
+    )
+
+  use environment.EnvState(environment, _) <- result.try(imports_result)
 
   let custom_type_result =
     glimpse_module.module.custom_types

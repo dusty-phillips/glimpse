@@ -10,12 +10,16 @@ pub type Environment {
   Environment(
     definitions: dict.Dict(String, Type),
     custom_types: dict.Dict(String, Type),
+    module_environments: dict.Dict(String, Environment),
   )
 }
 
 pub type EnvState(a) {
   EnvState(environment: Environment, state: a)
 }
+
+pub type EnvStateResult(a) =
+  error.TypeCheckResult(EnvState(a))
 
 pub type EnvStateFold(a) =
   error.TypeCheckFold(EnvState(a))
@@ -36,7 +40,11 @@ pub type EnvironmentFold =
   error.TypeCheckFold(Environment)
 
 pub fn new() -> Environment {
-  Environment(definitions: dict.new(), custom_types: dict.new())
+  Environment(
+    definitions: dict.new(),
+    custom_types: dict.new(),
+    module_environments: dict.new(),
+  )
 }
 
 pub fn add_def(
@@ -74,7 +82,7 @@ pub fn lookup_custom_type(environment: Environment, name: String) -> TypeResult 
   |> result.replace_error(error.UnknownCustomType(name))
 }
 
-pub fn extract_env(state: TypeState) -> Environment {
+pub fn extract_env(state: EnvState(a)) -> Environment {
   state.environment
 }
 

@@ -33,3 +33,18 @@ pub fn typecheck_single_module_package_test() {
     ),
   ))
 }
+
+pub fn typecheck_dependent_module_package_test() {
+  helpers.ok_package_check("main_module", fn(pkg) {
+    case pkg {
+      "main_module" ->
+        Ok(
+          "import other/package
+
+        pub fn main() -> Nil {}",
+        )
+      "other/package" -> Ok("pub fn other() -> Nil {}")
+      _ -> panic as "only two modules in this test"
+    }
+  })
+}

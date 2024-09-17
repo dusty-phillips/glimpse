@@ -117,7 +117,7 @@ pub fn expression(
       binop(environment, operator, left, right)
 
     _ -> {
-      pprint.debug(expression)
+      pprint.debug(expr)
       todo as "many expressions not implemented yet"
     }
   }

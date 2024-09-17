@@ -62,7 +62,7 @@ pub fn ok_module_typecheck(definition: String) -> #(glimpse.Module, Environment)
   glance.module(definition)
   |> should.be_ok
   |> glimpse.Module("main_module", _, [])
-  |> typecheck.module()
+  |> typecheck.module(dict.new())
   |> should.be_ok
 }
 
@@ -70,7 +70,7 @@ pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
   glance.module(definition)
   |> should.be_ok
   |> glimpse.Module("main_module", _, [])
-  |> typecheck.module()
+  |> typecheck.module(dict.new())
   |> should.be_error
 }
 
