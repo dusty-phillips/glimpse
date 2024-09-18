@@ -37,6 +37,8 @@ pub type Environment {
     definitions: dict.Dict(String, Type),
     public_definitions: set.Set(String),
     custom_types: dict.Dict(String, Type),
+    // absolute path to whatever the relative name is in this env
+    import_names: dict.Dict(String, String),
     // other environments that could be imported from this one
     // (actually imported envs will be in definitions)
     module_environments: dict.Dict(String, Environment),
@@ -74,6 +76,7 @@ pub fn new_env(current_module: String) -> Environment {
     definitions: dict.new(),
     public_definitions: set.new(),
     custom_types: dict.new(),
+    import_names: dict.new(),
     module_environments: dict.new(),
   )
 }
@@ -111,6 +114,21 @@ pub fn add_custom_type_to_env(
       environment.custom_types,
       name,
       CustomType(environment.current_module, name),
+    ),
+  )
+}
+
+pub fn add_import_mapping_to_env(
+  environment: Environment,
+  absolute_name: String,
+  relative_name: String,
+) -> Environment {
+  Environment(
+    ..environment,
+    import_names: dict.insert(
+      environment.import_names,
+      absolute_name,
+      relative_name,
     ),
   )
 }

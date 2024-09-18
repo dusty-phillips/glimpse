@@ -33,19 +33,19 @@ pub fn fold_import_from_env(
                 let assert Ok(namespace) =
                   string.split(module, "/") |> list.last
 
-                Ok(types.EnvState(
-                  types.add_def_to_env(
-                    environment,
-                    namespace,
-                    types.NamespaceType(
-                      module_env.definitions
-                      |> dict.filter(fn(key, _) {
-                        set.contains(module_env.public_definitions, key)
-                      }),
-                    ),
+                types.add_def_to_env(
+                  environment,
+                  namespace,
+                  types.NamespaceType(
+                    module_env.definitions
+                    |> dict.filter(fn(key, _) {
+                      set.contains(module_env.public_definitions, key)
+                    }),
                   ),
-                  module_envs,
-                ))
+                )
+                |> types.add_import_mapping_to_env(module, namespace)
+                |> types.EnvState(module_envs)
+                |> Ok
               }
             }
           }

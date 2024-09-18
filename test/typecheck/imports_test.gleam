@@ -30,6 +30,11 @@ pub fn import_adds_function_to_env_test() {
       ]),
     ),
   )
+
+  main_env.import_names
+  |> assertions.should_have_dict_size(1)
+  |> dict.get("foo")
+  |> should.be_ok
 }
 
 pub fn import_no_add_private_function_to_env_test() {
@@ -49,6 +54,11 @@ pub fn import_no_add_private_function_to_env_test() {
   |> dict.get("foo")
   |> should.be_ok
   |> should.equal(types.NamespaceType(dict.new()))
+
+  main_env.import_names
+  |> assertions.should_have_dict_size(1)
+  |> dict.get("foo")
+  |> should.be_ok
 }
 
 pub fn import_adds_variant_to_env_test() {
@@ -81,6 +91,11 @@ pub fn import_adds_variant_to_env_test() {
       ]),
     ),
   )
+
+  main_env.import_names
+  |> assertions.should_have_dict_size(1)
+  |> dict.get("foo")
+  |> should.be_ok
 }
 
 pub fn import_no_add_private_variant_to_env_test() {
@@ -100,6 +115,11 @@ pub fn import_no_add_private_variant_to_env_test() {
   |> dict.get("foo")
   |> should.be_ok
   |> should.equal(types.NamespaceType(dict.from_list([])))
+
+  main_env.import_names
+  |> assertions.should_have_dict_size(1)
+  |> dict.get("foo")
+  |> should.be_ok
 }
 
 pub fn import_call_function_field_access_test() {
@@ -130,6 +150,11 @@ pub fn import_call_function_field_access_test() {
       ]),
     ),
   )
+
+  main_env.import_names
+  |> assertions.should_have_dict_size(1)
+  |> dict.get("foo")
+  |> should.be_ok
 }
 
 pub fn variant_call_function_field_access_test() {
@@ -168,4 +193,9 @@ pub fn variant_call_function_field_access_test() {
       ]),
     ),
   )
+
+  main_env.import_names
+  |> assertions.should_have_dict_size(1)
+  |> dict.get("foo")
+  |> should.be_ok
 }
