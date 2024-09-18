@@ -21,7 +21,7 @@ pub fn no_field_custom_type_test() {
     "MyTypeConstructor",
     [],
     [],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 }
 
@@ -43,7 +43,7 @@ pub fn single_param_custom_type_test() {
     "MyTypeConstructor",
     [types.StringType],
     [#("name", 0)],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 }
 
@@ -65,7 +65,7 @@ pub fn positional_variant_custom_type_test() {
     "MyTypeConstructor",
     [types.StringType],
     [],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 }
 
@@ -88,7 +88,7 @@ pub fn multi_variant_custom_type_test() {
     "MyTypeConstructor",
     [types.StringType],
     [#("name", 0)],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 
   assertions.should_be_callable(
@@ -96,7 +96,7 @@ pub fn multi_variant_custom_type_test() {
     "NumberConstructor",
     [types.IntType],
     [#("number", 0)],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 }
 
@@ -121,7 +121,7 @@ pub fn multi_variant_no_fields_custom_type_test() {
     constructor_name,
     [],
     [],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 }
 
@@ -144,15 +144,15 @@ pub fn recursive_custom_type_test() {
     "MyTypeConstructor",
     [types.StringType],
     [#("name", 0)],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 
   assertions.should_be_callable(
     env,
     "RecursiveConstructor",
-    [types.CustomType("MyType")],
+    [types.CustomType("main_module", "MyType")],
     [#("next", 0)],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 }
 
@@ -180,7 +180,7 @@ pub fn custom_type_from_module_test() {
     "MyTypeConstructor",
     [types.StringType],
     [#("name", 0)],
-    types.CustomType("MyType"),
+    types.CustomType("main_module", "MyType"),
   )
 
   assertions.should_be_callable(
@@ -188,6 +188,6 @@ pub fn custom_type_from_module_test() {
     "MyOtherType",
     [types.StringType],
     [#("name", 0)],
-    types.CustomType("MyOtherType"),
+    types.CustomType("main_module", "MyOtherType"),
   )
 }

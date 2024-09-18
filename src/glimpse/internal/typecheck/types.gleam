@@ -15,7 +15,7 @@ pub type Type {
   FloatType
   StringType
   BoolType
-  CustomType(name: String)
+  CustomType(module: String, name: String)
   CallableType(
     /// All parameters (labelled or otherwise)
     parameters: List(Type),
@@ -98,13 +98,20 @@ pub fn publish_def_in_env(environment: Environment, name: String) -> Environment
   )
 }
 
+/// Adds the custom_type to the environment, assuming that the current module
+//
+
 pub fn add_custom_type_to_env(
   environment: Environment,
   name: String,
 ) -> Environment {
   Environment(
     ..environment,
-    custom_types: dict.insert(environment.custom_types, name, CustomType(name)),
+    custom_types: dict.insert(
+      environment.custom_types,
+      name,
+      CustomType(environment.current_module, name),
+    ),
   )
 }
 
@@ -155,7 +162,7 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
     FloatType -> "Float"
     StringType -> "String"
     BoolType -> "Bool"
-    CustomType(name) -> name
+    CustomType(_module, name) -> name
     CallableType(parameters, _labels, return) ->
       string_builder.from_string("fn (")
       |> string_builder.append(list_to_string(parameters, environment))
@@ -183,7 +190,7 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
     FloatType -> glance.NamedType("Float", option.None, [])
     StringType -> glance.NamedType("String", option.None, [])
     BoolType -> glance.NamedType("Bool", option.None, [])
-    CustomType(name) -> glance.NamedType(name, option.None, [])
+    CustomType(_module, name) -> glance.NamedType(name, option.None, [])
     CallableType(parameters, _labels, return) ->
       glance.FunctionType(
         list.map(parameters, to_glance(environment, _)),

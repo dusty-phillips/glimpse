@@ -20,7 +20,7 @@ pub fn should_have_type(env: Environment, name: String) {
   env.custom_types
   |> dict.get(name)
   |> should.be_ok
-  |> should.equal(types.CustomType(name))
+  |> should.equal(types.CustomType(env.current_module, name))
 }
 
 pub fn should_be_callable(

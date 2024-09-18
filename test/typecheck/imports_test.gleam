@@ -70,7 +70,14 @@ pub fn import_adds_variant_to_env_test() {
   |> should.equal(
     types.NamespaceType(
       dict.from_list([
-        #("Foo", types.CallableType([], dict.new(), types.CustomType("Foo"))),
+        #(
+          "Foo",
+          types.CallableType(
+            [],
+            dict.new(),
+            types.CustomType("main_module", "Foo"),
+          ),
+        ),
       ]),
     ),
   )
@@ -150,7 +157,14 @@ pub fn variant_call_function_field_access_test() {
   |> should.equal(
     types.NamespaceType(
       dict.from_list([
-        #("Foo", types.CallableType([], dict.new(), types.CustomType("Foo"))),
+        #(
+          "Foo",
+          types.CallableType(
+            [],
+            dict.new(),
+            types.CustomType("main_module", "Foo"),
+          ),
+        ),
       ]),
     ),
   )

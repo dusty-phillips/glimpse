@@ -188,7 +188,10 @@ pub fn fold_variant_constructors_into_env(
             variant.name,
             to_callable_type(
               callable_state,
-              types.CustomType(glance_custom_type.name),
+              types.CustomType(
+                environment.current_module,
+                glance_custom_type.name,
+              ),
             ),
           )
 
