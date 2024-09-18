@@ -47,7 +47,7 @@ pub fn incorrect_param_return_fails_test() {
 pub fn custom_type_param_test() {
   let function_out =
     helpers.ok_function_env_typecheck(
-      environment.new() |> environment.add_custom_type("MyType"),
+      environment.new("main_module") |> environment.add_custom_type("MyType"),
       "fn foo(my_type: MyType) -> MyType { my_type }",
     )
 

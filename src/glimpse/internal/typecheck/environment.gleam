@@ -9,6 +9,8 @@ import pprint
 
 pub type Environment {
   Environment(
+    // Full absolute path. Used to identify and construct custom types
+    current_module: String,
     definitions: dict.Dict(String, Type),
     public_definitions: set.Set(String),
     custom_types: dict.Dict(String, Type),
@@ -41,8 +43,9 @@ pub type EnvironmentResult =
 pub type EnvironmentFold =
   error.TypeCheckFold(Environment)
 
-pub fn new() -> Environment {
+pub fn new(current_module: String) -> Environment {
   Environment(
+    current_module:,
     definitions: dict.new(),
     public_definitions: set.new(),
     custom_types: dict.new(),

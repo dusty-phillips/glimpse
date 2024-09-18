@@ -81,7 +81,7 @@ pub fn module(
   glimpse_module: glimpse.Module,
   module_envs: dict.Dict(String, Environment),
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
-  let environment = environment.new()
+  let environment = environment.new(glimpse_module.name)
 
   let imports_result =
     glimpse_module.module.imports
