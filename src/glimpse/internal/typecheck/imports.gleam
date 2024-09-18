@@ -38,9 +38,13 @@ pub fn fold_import_from_env(
                   namespace,
                   types.NamespaceType(
                     module_env.definitions
-                    |> dict.filter(fn(key, _) {
-                      set.contains(module_env.public_definitions, key)
-                    }),
+                      |> dict.filter(fn(key, _) {
+                        set.contains(module_env.public_definitions, key)
+                      }),
+                    module_env.custom_types
+                      |> dict.filter(fn(key, _) {
+                        set.contains(module_env.public_custom_types, key)
+                      }),
                   ),
                 )
                 |> types.add_import_mapping_to_env(module, namespace)

@@ -24,7 +24,10 @@ pub type Type {
     return: Type,
   )
   /// Used for field access on imports; no direct glance analog
-  NamespaceType(Dict(String, Type))
+  NamespaceType(
+    definitions: Dict(String, Type),
+    custom_types: Dict(String, Type),
+  )
 }
 
 pub type TypeResult =
@@ -37,6 +40,7 @@ pub type Environment {
     definitions: dict.Dict(String, Type),
     public_definitions: set.Set(String),
     custom_types: dict.Dict(String, Type),
+    public_custom_types: set.Set(String),
     // absolute path to whatever the relative name is in this env
     import_names: dict.Dict(String, String),
     // other environments that could be imported from this one
@@ -76,6 +80,7 @@ pub fn new_env(current_module: String) -> Environment {
     definitions: dict.new(),
     public_definitions: set.new(),
     custom_types: dict.new(),
+    public_custom_types: set.new(),
     import_names: dict.new(),
     module_environments: dict.new(),
   )
@@ -98,6 +103,18 @@ pub fn publish_def_in_env(environment: Environment, name: String) -> Environment
   Environment(
     ..environment,
     public_definitions: set.insert(environment.public_definitions, name),
+  )
+}
+
+/// publish a custom_type that is already in the custom_types so that it is
+/// visible to importing modules
+pub fn publish_custom_type_in_env(
+  environment: Environment,
+  name: String,
+) -> Environment {
+  Environment(
+    ..environment,
+    public_custom_types: set.insert(environment.public_custom_types, name),
   )
 }
 
@@ -161,9 +178,17 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
     // TODO: custom types with parameters need to be supported
     // TODO: not 100% certain all named types that are not covered
     // above are actually custom types
-    // TODO: support named types in other modules
     glance.NamedType(name, option.None, []) ->
       lookup_custom_type(environment, name)
+    glance.NamedType(name, option.Some(module), []) -> {
+      let namespace = environment.definitions |> dict.get(module)
+      case namespace {
+        Ok(NamespaceType(_, custom_types)) ->
+          dict.get(custom_types, name)
+          |> result.replace_error(error.InvalidFieldAccess(module, name))
+        _ -> Error(error.InvalidFieldAccess(module, name))
+      }
+    }
 
     glance.VariableType(name) -> lookup_variable_type(environment, name)
     _ -> {
@@ -180,14 +205,14 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
     FloatType -> "Float"
     StringType -> "String"
     BoolType -> "Bool"
-    CustomType(_module, name) -> name
+    CustomType(module, name) -> module <> "." <> name
     CallableType(parameters, _labels, return) ->
       string_builder.from_string("fn (")
       |> string_builder.append(list_to_string(parameters, environment))
       |> string_builder.append(") -> ")
       |> string_builder.append(to_string(environment, return))
       |> string_builder.to_string
-    NamespaceType(_) -> "<Namespace>"
+    NamespaceType(..) -> "<Namespace>"
   }
 }
 
@@ -208,13 +233,20 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
     FloatType -> glance.NamedType("Float", option.None, [])
     StringType -> glance.NamedType("String", option.None, [])
     BoolType -> glance.NamedType("Bool", option.None, [])
-    CustomType(_module, name) -> glance.NamedType(name, option.None, [])
+    CustomType(module, name) -> {
+      case dict.get(environment.import_names, module) {
+        Ok(relative) if module == environment.current_module ->
+          glance.NamedType(name, option.None, [])
+        Ok(relative) -> glance.NamedType(name, option.Some(relative), [])
+        Error(_) -> panic as "Custom type should always have a valid module"
+      }
+    }
     CallableType(parameters, _labels, return) ->
       glance.FunctionType(
         list.map(parameters, to_glance(environment, _)),
         to_glance(environment, return),
       )
-    NamespaceType(_) -> panic as "Cannot convert namespace to glance"
+    NamespaceType(..) -> panic as "Cannot convert namespace to glance"
   }
 }
 

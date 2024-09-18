@@ -117,8 +117,8 @@ pub fn expression(
         container,
       ))
       case container_expression_type {
-        types.NamespaceType(nested_env) ->
-          nested_env
+        types.NamespaceType(nested_defs, _nested_types) ->
+          nested_defs
           |> dict.get(label)
           |> result.replace_error(error.InvalidName(label))
         type_ ->

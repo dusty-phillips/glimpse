@@ -143,7 +143,14 @@ pub fn custom_type(
     Error(_) -> {
       // add to env first so variants can parse recursive types
       let environment =
-        environment |> types.add_custom_type_to_env(custom_type.name)
+        environment
+        |> types.add_custom_type_to_env(custom_type.name)
+
+      let environment = case custom_type.publicity {
+        glance.Public ->
+          types.publish_custom_type_in_env(environment, custom_type.name)
+        glance.Private -> environment
+      }
 
       list.fold_until(
         custom_type.variants,

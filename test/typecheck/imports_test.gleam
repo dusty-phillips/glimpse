@@ -23,13 +23,10 @@ pub fn import_adds_function_to_env_test() {
   |> assertions.should_have_dict_size(1)
   |> dict.get("foo")
   |> should.be_ok
-  |> should.equal(
-    types.NamespaceType(
-      dict.from_list([
-        #("bar", types.CallableType([], dict.new(), types.NilType)),
-      ]),
-    ),
-  )
+  |> should.equal(types.NamespaceType(
+    dict.from_list([#("bar", types.CallableType([], dict.new(), types.NilType))]),
+    dict.new(),
+  ))
 
   main_env.import_names
   |> assertions.should_have_dict_size(1)
@@ -53,7 +50,7 @@ pub fn import_no_add_private_function_to_env_test() {
   |> assertions.should_have_dict_size(1)
   |> dict.get("foo")
   |> should.be_ok
-  |> should.equal(types.NamespaceType(dict.new()))
+  |> should.equal(types.NamespaceType(dict.new(), dict.new()))
 
   main_env.import_names
   |> assertions.should_have_dict_size(1)
@@ -77,20 +74,19 @@ pub fn import_adds_variant_to_env_test() {
   |> assertions.should_have_dict_size(1)
   |> dict.get("foo")
   |> should.be_ok
-  |> should.equal(
-    types.NamespaceType(
-      dict.from_list([
-        #(
-          "Foo",
-          types.CallableType(
-            [],
-            dict.new(),
-            types.CustomType("main_module", "Foo"),
-          ),
+  |> should.equal(types.NamespaceType(
+    dict.from_list([
+      #(
+        "Foo",
+        types.CallableType(
+          [],
+          dict.new(),
+          types.CustomType("main_module", "Foo"),
         ),
-      ]),
-    ),
-  )
+      ),
+    ]),
+    dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
+  ))
 
   main_env.import_names
   |> assertions.should_have_dict_size(1)
@@ -114,7 +110,7 @@ pub fn import_no_add_private_variant_to_env_test() {
   |> assertions.should_have_dict_size(1)
   |> dict.get("foo")
   |> should.be_ok
-  |> should.equal(types.NamespaceType(dict.from_list([])))
+  |> should.equal(types.NamespaceType(dict.from_list([]), dict.new()))
 
   main_env.import_names
   |> assertions.should_have_dict_size(1)
@@ -143,13 +139,10 @@ pub fn import_call_function_field_access_test() {
   |> assertions.should_have_dict_size(2)
   |> dict.get("foo")
   |> should.be_ok
-  |> should.equal(
-    types.NamespaceType(
-      dict.from_list([
-        #("bar", types.CallableType([], dict.new(), types.NilType)),
-      ]),
-    ),
-  )
+  |> should.equal(types.NamespaceType(
+    dict.from_list([#("bar", types.CallableType([], dict.new(), types.NilType))]),
+    dict.new(),
+  ))
 
   main_env.import_names
   |> assertions.should_have_dict_size(1)
@@ -165,9 +158,8 @@ pub fn variant_call_function_field_access_test() {
   let #(_, main_env) =
     glance.module(
       "import foo
-    pub fn main() -> Nil {
+    pub fn main() -> foo.Foo {
     foo.Foo()
-    Nil
     }",
     )
     |> should.be_ok
@@ -179,20 +171,19 @@ pub fn variant_call_function_field_access_test() {
   |> assertions.should_have_dict_size(2)
   |> dict.get("foo")
   |> should.be_ok
-  |> should.equal(
-    types.NamespaceType(
-      dict.from_list([
-        #(
-          "Foo",
-          types.CallableType(
-            [],
-            dict.new(),
-            types.CustomType("main_module", "Foo"),
-          ),
+  |> should.equal(types.NamespaceType(
+    dict.from_list([
+      #(
+        "Foo",
+        types.CallableType(
+          [],
+          dict.new(),
+          types.CustomType("main_module", "Foo"),
         ),
-      ]),
-    ),
-  )
+      ),
+    ]),
+    dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
+  ))
 
   main_env.import_names
   |> assertions.should_have_dict_size(1)
