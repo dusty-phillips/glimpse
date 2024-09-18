@@ -2,7 +2,6 @@ import glance
 import gleam/option
 import gleeunit/should
 import glimpse/error
-import glimpse/internal/typecheck/environment
 import glimpse/internal/typecheck/types
 import typecheck/assertions
 import typecheck/helpers
@@ -47,7 +46,7 @@ pub fn incorrect_param_return_fails_test() {
 pub fn custom_type_param_test() {
   let function_out =
     helpers.ok_function_env_typecheck(
-      environment.new("main_module") |> environment.add_custom_type("MyType"),
+      types.new_env("main_module") |> types.add_custom_type_to_env("MyType"),
       "fn foo(my_type: MyType) -> MyType { my_type }",
     )
 

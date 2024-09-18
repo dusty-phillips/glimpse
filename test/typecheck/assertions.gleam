@@ -1,8 +1,7 @@
 import gleam/dict
 import gleam/list
 import gleeunit/should
-import glimpse/internal/typecheck/environment.{type Environment}
-import glimpse/internal/typecheck/types.{type Type}
+import glimpse/internal/typecheck/types.{type Environment, type Type}
 
 pub fn should_have_dict_size(
   dict: dict.Dict(a, b),

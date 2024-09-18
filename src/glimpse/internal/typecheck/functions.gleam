@@ -5,15 +5,14 @@ import gleam/option
 import gleam/result
 import gleam/string
 import glimpse/error
-import glimpse/internal/typecheck/environment.{
-  type EnvStateFold, type EnvStateResult, type EnvironmentFold,
-  type EnvironmentResult,
+import glimpse/internal/typecheck/types.{
+  type EnvState, type EnvStateFold, type EnvStateResult, type Environment,
+  type EnvironmentFold, type EnvironmentResult, type Type,
 }
-import glimpse/internal/typecheck/types.{type Type}
 
 pub type CallableState {
   CallableState(
-    environment: environment.Environment,
+    environment: Environment,
     reversed_by_position: List(Type),
     labels: dict.Dict(String, Int),
   )
@@ -25,7 +24,7 @@ pub type CallableStateResult =
 pub type CallableStateFold =
   error.TypeCheckFold(CallableState)
 
-pub fn empty_state(environment: environment.Environment) -> CallableState {
+pub fn empty_state(environment: Environment) -> CallableState {
   CallableState(environment, [], dict.new())
 }
 
@@ -66,13 +65,13 @@ pub fn function_signature(
         let return_result = case function.return {
           option.None -> todo as "not inferring return values yet"
           option.Some(glance_return_type) -> {
-            use return <- result.try(environment.type_(
+            use return <- result.try(types.type_(
               environment,
               glance_return_type,
             ))
             Ok(
               environment
-              |> environment.add_def(
+              |> types.add_def_to_env(
                 function.name,
                 to_callable_type(param_state, return),
               ),
@@ -83,7 +82,8 @@ pub fn function_signature(
         use environment <- result.try(return_result)
         case function.publicity {
           glance.Private -> Ok(environment)
-          glance.Public -> Ok(environment.publish(environment, function.name))
+          glance.Public ->
+            Ok(types.publish_def_in_env(environment, function.name))
         }
       }
       |> list.Continue
@@ -109,10 +109,7 @@ pub fn fold_parameter_into_callable(
           type_: option.Some(glance_type),
           ..,
         ) -> {
-          use glimpse_type <- result.try(environment.type_(
-            environment,
-            glance_type,
-          ))
+          use glimpse_type <- result.try(types.type_(environment, glance_type))
           Ok(CallableState(
             environment,
             [glimpse_type, ..reversed_by_position],
@@ -125,10 +122,7 @@ pub fn fold_parameter_into_callable(
           type_: option.Some(glance_type),
           ..,
         ) -> {
-          use glimpse_type <- result.try(environment.type_(
-            environment,
-            glance_type,
-          ))
+          use glimpse_type <- result.try(types.type_(environment, glance_type))
           Ok(CallableState(
             environment,
             [glimpse_type, ..reversed_by_position],
@@ -161,11 +155,8 @@ pub fn fold_function_parameter_into_env(
             type_: option.Some(glance_type),
             ..,
           ) -> {
-            use check_type <- result.try(environment.type_(
-              environment,
-              glance_type,
-            ))
-            Ok(environment.add_def(environment, name, check_type))
+            use check_type <- result.try(types.type_(environment, glance_type))
+            Ok(types.add_def_to_env(environment, name, check_type))
           }
         }
       }
@@ -181,7 +172,7 @@ pub fn fold_variant_constructors_into_env(
 ) -> EnvStateFold(glance.CustomType) {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(environment.EnvState(environment, glance_custom_type)) ->
+    Ok(types.EnvState(environment, glance_custom_type)) ->
       {
         use callable_state <- result.try(
           variant.fields
@@ -193,7 +184,7 @@ pub fn fold_variant_constructors_into_env(
 
         let environment =
           environment
-          |> environment.add_def(
+          |> types.add_def_to_env(
             variant.name,
             to_callable_type(
               callable_state,
@@ -202,11 +193,10 @@ pub fn fold_variant_constructors_into_env(
           )
 
         case glance_custom_type.publicity {
-          glance.Private ->
-            Ok(environment.EnvState(environment, glance_custom_type))
+          glance.Private -> Ok(types.EnvState(environment, glance_custom_type))
           glance.Public ->
-            Ok(environment.EnvState(
-              environment.publish(environment, variant.name),
+            Ok(types.EnvState(
+              types.publish_def_in_env(environment, variant.name),
               glance_custom_type,
             ))
         }
@@ -225,10 +215,7 @@ fn fold_variant_field_into_callable(
       {
         case field {
           glance.Field(label: option.Some(label), item: glance_type) -> {
-            use glimpse_type <- result.try(environment.type_(
-              environment,
-              glance_type,
-            ))
+            use glimpse_type <- result.try(types.type_(environment, glance_type))
             Ok(CallableState(
               environment,
               [glimpse_type, ..reversed_by_position],
@@ -237,10 +224,7 @@ fn fold_variant_field_into_callable(
           }
 
           glance.Field(label: option.None, item: glance_type) -> {
-            use glimpse_type <- result.try(environment.type_(
-              environment,
-              glance_type,
-            ))
+            use glimpse_type <- result.try(types.type_(environment, glance_type))
             Ok(CallableState(
               environment,
               [glimpse_type, ..reversed_by_position],

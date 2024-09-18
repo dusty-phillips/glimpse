@@ -7,12 +7,11 @@ import glimpse
 import glimpse/error
 import glimpse/internal/import_dependencies
 import glimpse/internal/typecheck as intern
-import glimpse/internal/typecheck/environment.{
-  type Environment, type EnvironmentResult,
-}
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/imports
-import glimpse/internal/typecheck/types
+import glimpse/internal/typecheck/types.{
+  type Environment, type EnvironmentResult,
+}
 
 type PackageState {
   PackageState(
@@ -81,17 +80,17 @@ pub fn module(
   glimpse_module: glimpse.Module,
   module_envs: dict.Dict(String, Environment),
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
-  let environment = environment.new(glimpse_module.name)
+  let environment = types.new_env(glimpse_module.name)
 
   let imports_result =
     glimpse_module.module.imports
     |> list.map(fn(definition) { definition.definition })
     |> list.fold_until(
-      Ok(environment.EnvState(environment, module_envs)),
+      Ok(types.EnvState(environment, module_envs)),
       imports.fold_import_from_env,
     )
 
-  use environment.EnvState(environment, _) <- result.try(imports_result)
+  use types.EnvState(environment, _) <- result.try(imports_result)
 
   let custom_type_result =
     glimpse_module.module.custom_types
@@ -144,14 +143,14 @@ pub fn custom_type(
     Error(_) -> {
       // add to env first so variants can parse recursive types
       let environment =
-        environment |> environment.add_custom_type(custom_type.name)
+        environment |> types.add_custom_type_to_env(custom_type.name)
 
       list.fold_until(
         custom_type.variants,
-        Ok(environment.EnvState(environment, custom_type)),
+        Ok(types.EnvState(environment, custom_type)),
         functions.fold_variant_constructors_into_env,
       )
-      |> result.map(environment.extract_env)
+      |> result.map(types.extract_env)
     }
   }
   // TODO: Also add variants
@@ -184,7 +183,7 @@ pub fn function(
           )
         }
         option.Some(expected_type) -> {
-          case environment.type_(environment, expected_type) {
+          case types.type_(environment, expected_type) {
             Error(err) -> Error(err)
             Ok(expected) if expected != block_out.state ->
               Error(error.InvalidReturnType(

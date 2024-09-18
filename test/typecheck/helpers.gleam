@@ -4,7 +4,7 @@ import gleam/list
 import gleeunit/should
 import glimpse
 import glimpse/error
-import glimpse/internal/typecheck/environment.{type Environment}
+import glimpse/internal/typecheck/types.{type Environment}
 import glimpse/typecheck
 import typecheck/assertions
 
@@ -22,9 +22,9 @@ pub fn glance_custom_type(definition: String) -> glance.CustomType {
   definition.definition
 }
 
-pub fn ok_custom_type(definition: String) -> environment.Environment {
+pub fn ok_custom_type(definition: String) -> Environment {
   glance_custom_type(definition)
-  |> typecheck.custom_type(environment.new("main_module"), _)
+  |> typecheck.custom_type(types.new_env("main_module"), _)
   |> should.be_ok
 }
 
@@ -49,12 +49,12 @@ pub fn ok_function_env_typecheck(
 }
 
 pub fn ok_function_typecheck(definition: String) -> glance.Function {
-  ok_function_env_typecheck(environment.new("main_module"), definition)
+  ok_function_env_typecheck(types.new_env("main_module"), definition)
 }
 
 pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
   let function = glance_function(definition)
-  typecheck.function(environment.new("main_module"), function)
+  typecheck.function(types.new_env("main_module"), function)
   |> should.be_error
 }
 

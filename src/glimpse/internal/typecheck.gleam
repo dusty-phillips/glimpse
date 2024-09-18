@@ -4,11 +4,10 @@ import gleam/list
 import gleam/option
 import gleam/result
 import glimpse/error
-import glimpse/internal/typecheck/environment.{
-  type Environment, type TypeStateResult,
-}
 import glimpse/internal/typecheck/functions
-import glimpse/internal/typecheck/types.{type TypeResult}
+import glimpse/internal/typecheck/types.{
+  type Environment, type TypeResult, type TypeStateResult,
+}
 import pprint
 
 pub fn block(
@@ -17,7 +16,7 @@ pub fn block(
 ) -> TypeStateResult {
   list.fold_until(
     statements,
-    Ok(environment.EnvState(environment, types.NilType)),
+    Ok(types.EnvState(environment, types.NilType)),
     fn(state, stmnt) {
       case state {
         Error(_) -> list.Stop(state)
@@ -34,7 +33,7 @@ pub fn statement(
   case statement {
     glance.Expression(expr) ->
       expression(environment, expr)
-      |> result.map(environment.EnvState(environment, _))
+      |> result.map(types.EnvState(environment, _))
 
     glance.Assignment(
       glance.Let,
@@ -44,7 +43,7 @@ pub fn statement(
     ) -> {
       let value_type_result = expression(environment, value_expression)
       let annotated_type_option =
-        option.map(annotation, environment.type_(environment, _))
+        option.map(annotation, types.type_(environment, _))
 
       let inferred_type_result = case value_type_result, annotated_type_option {
         Error(err), _ -> Error(err)
@@ -62,8 +61,8 @@ pub fn statement(
       }
 
       use type_ <- result.try(inferred_type_result)
-      let updated_environment = environment.add_def(environment, name, type_)
-      Ok(environment.EnvState(updated_environment, type_))
+      let updated_environment = types.add_def_to_env(environment, name, type_)
+      Ok(types.EnvState(updated_environment, type_))
     }
     _ -> {
       pprint.debug(statement)
@@ -84,7 +83,7 @@ pub fn expression(
     glance.String(_) -> Ok(types.StringType)
     glance.Variable("Nil") -> Ok(types.NilType)
     glance.Variable("True") | glance.Variable("False") -> Ok(types.BoolType)
-    glance.Variable(name) -> environment.lookup_variable_type(environment, name)
+    glance.Variable(name) -> types.lookup_variable_type(environment, name)
 
     glance.NegateInt(int_expr) -> {
       case expression(environment, int_expr) {

@@ -4,10 +4,9 @@ import gleam/list
 import gleam/option
 import gleam/set
 import gleam/string
-import glimpse/internal/typecheck/environment.{
+import glimpse/internal/typecheck/types.{
   type EnvStateFold, type EnvStateResult, type Environment,
 }
-import glimpse/internal/typecheck/types
 
 /// Given a dict of a modules that have been previously typechecked,
 /// and an import statement, add the environments of the module imported
@@ -18,7 +17,7 @@ pub fn fold_import_from_env(
 ) -> EnvStateFold(dict.Dict(String, Environment)) {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(environment.EnvState(environment, module_envs)) ->
+    Ok(types.EnvState(environment, module_envs)) ->
       {
         case import_ {
           glance.Import(
@@ -34,8 +33,8 @@ pub fn fold_import_from_env(
                 let assert Ok(namespace) =
                   string.split(module, "/") |> list.last
 
-                Ok(environment.EnvState(
-                  environment.add_def(
+                Ok(types.EnvState(
+                  types.add_def_to_env(
                     environment,
                     namespace,
                     types.NamespaceType(
