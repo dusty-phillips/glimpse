@@ -54,8 +54,8 @@ pub fn statement(
         -> Ok(value_type)
         Ok(value_type), option.Some(Ok(annotated_type)) ->
           Error(error.InvalidType(
-            value_type |> types.to_string,
-            annotated_type |> types.to_string,
+            types.to_string(environment, value_type),
+            types.to_string(environment, annotated_type),
             "during assignment of " <> name,
           ))
       }
@@ -91,7 +91,7 @@ pub fn expression(
         Ok(types.IntType) -> Ok(types.IntType)
         Ok(got) ->
           Error(error.InvalidType(
-            got |> types.to_string,
+            types.to_string(environment, got),
             "Int",
             "- can only negate Int",
           ))
@@ -104,7 +104,7 @@ pub fn expression(
         Ok(types.BoolType) -> Ok(types.BoolType)
         Ok(got) ->
           Error(error.InvalidType(
-            got |> types.to_string,
+            types.to_string(environment, got),
             "Bool",
             "! can only negate Bool",
           ))
@@ -122,7 +122,10 @@ pub fn expression(
           |> dict.get(label)
           |> result.replace_error(error.InvalidName(label))
         type_ ->
-          Error(error.InvalidFieldAccess(type_ |> types.to_string, label))
+          Error(error.InvalidFieldAccess(
+            types.to_string(environment, type_),
+            label,
+          ))
       }
     }
 
@@ -154,13 +157,14 @@ pub fn call(
   case glimpse_target {
     types.CallableType(target_arguments, target_labels, target_return) -> {
       functions.order_call_arguments(
+        environment,
         glimpse_argument_fields,
         target_arguments,
         target_labels,
       )
       |> result.replace(target_return)
     }
-    _ -> Error(error.NotCallable(types.to_string(glimpse_target)))
+    _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
 }
 
@@ -220,52 +224,52 @@ pub fn binop(
       Ok(types.StringType)
 
     glance.And, left, right ->
-      types.to_binop_error("&&", left, right, "two Bools")
+      types.to_binop_error(environment, "&&", left, right, "two Bools")
     glance.Or, left, right ->
-      types.to_binop_error("||", left, right, "two Bools")
+      types.to_binop_error(environment, "||", left, right, "two Bools")
 
     glance.Eq, left, right ->
-      types.to_binop_error("==", left, right, "same type")
+      types.to_binop_error(environment, "==", left, right, "same type")
     glance.NotEq, left, right ->
-      types.to_binop_error("!=", left, right, "same type")
+      types.to_binop_error(environment, "!=", left, right, "same type")
 
     glance.LtInt, left, right ->
-      types.to_binop_error("<", left, right, "two Ints")
+      types.to_binop_error(environment, "<", left, right, "two Ints")
     glance.LtFloat, left, right ->
-      types.to_binop_error("<.", left, right, "two Floats")
+      types.to_binop_error(environment, "<.", left, right, "two Floats")
     glance.LtEqInt, left, right ->
-      types.to_binop_error("<=", left, right, "two Ints")
+      types.to_binop_error(environment, "<=", left, right, "two Ints")
     glance.LtEqFloat, left, right ->
-      types.to_binop_error("<=.", left, right, "two Floats")
+      types.to_binop_error(environment, "<=.", left, right, "two Floats")
     glance.GtInt, left, right ->
-      types.to_binop_error(">", left, right, "two Ints")
+      types.to_binop_error(environment, ">", left, right, "two Ints")
     glance.GtFloat, left, right ->
-      types.to_binop_error(">.", left, right, "two Floats")
+      types.to_binop_error(environment, ">.", left, right, "two Floats")
     glance.GtEqInt, left, right ->
-      types.to_binop_error(">=", left, right, "two Ints")
+      types.to_binop_error(environment, ">=", left, right, "two Ints")
     glance.GtEqFloat, left, right ->
-      types.to_binop_error(">=.", left, right, "two Floats")
+      types.to_binop_error(environment, ">=.", left, right, "two Floats")
     glance.AddInt, left, right ->
-      types.to_binop_error("+", left, right, "two Ints")
+      types.to_binop_error(environment, "+", left, right, "two Ints")
     glance.AddFloat, left, right ->
-      types.to_binop_error("+.", left, right, "two Floats")
+      types.to_binop_error(environment, "+.", left, right, "two Floats")
     glance.SubInt, left, right ->
-      types.to_binop_error("-", left, right, "two Ints")
+      types.to_binop_error(environment, "-", left, right, "two Ints")
     glance.SubFloat, left, right ->
-      types.to_binop_error("-.", left, right, "two Floats")
+      types.to_binop_error(environment, "-.", left, right, "two Floats")
     glance.MultInt, left, right ->
-      types.to_binop_error("*", left, right, "two Ints")
+      types.to_binop_error(environment, "*", left, right, "two Ints")
     glance.MultFloat, left, right ->
-      types.to_binop_error("*.", left, right, "two Floats")
+      types.to_binop_error(environment, "*.", left, right, "two Floats")
     glance.DivInt, left, right ->
-      types.to_binop_error("/", left, right, "two Ints")
+      types.to_binop_error(environment, "/", left, right, "two Ints")
     glance.DivFloat, left, right ->
-      types.to_binop_error("/.", left, right, "two Floats")
+      types.to_binop_error(environment, "/.", left, right, "two Floats")
     glance.RemainderInt, left, right ->
-      types.to_binop_error("%", left, right, "two Ints")
+      types.to_binop_error(environment, "%", left, right, "two Ints")
 
     glance.Concatenate, left, right ->
-      types.to_binop_error("<>", left, right, "two Strings")
+      types.to_binop_error(environment, "<>", left, right, "two Strings")
 
     glance.Pipe, _, _ -> todo as "Pipe binop is not typechecked yet"
   }

@@ -247,6 +247,7 @@ fn fold_variant_field_into_callable(
 /// * called_with includes labelled arguments that are not in target_argument_types
 /// * the types after mapping labels to positions do not match
 pub fn order_call_arguments(
+  environment: Environment,
   called_with: List(glance.Field(Type)),
   target_argument_types: List(Type),
   position_labels: dict.Dict(String, Int),
@@ -271,7 +272,11 @@ pub fn order_call_arguments(
           Ok(OrderedFoldState(reversed_ordered, [head, ..rest])), Error(_) ->
             Ok(OrderedFoldState([head, ..reversed_ordered], rest))
           Ok(OrderedFoldState(reversed_ordered, [])), Error(_) ->
-            Error(argument_error(target_argument_types, reversed_ordered))
+            Error(argument_error(
+              environment,
+              target_argument_types,
+              reversed_ordered,
+            ))
         }
       },
     )
@@ -282,7 +287,11 @@ pub fn order_call_arguments(
   case positioned_argument_types == target_argument_types {
     True -> Ok(positioned_argument_types)
     False ->
-      Error(argument_error(target_argument_types, positioned_argument_types))
+      Error(argument_error(
+        environment,
+        target_argument_types,
+        positioned_argument_types,
+      ))
   }
 }
 
@@ -334,11 +343,12 @@ fn labels_to_position_dict(
 }
 
 fn argument_error(
+  environment: Environment,
   expected: List(Type),
   actual: List(Type),
 ) -> error.TypeCheckError {
   error.InvalidArguments(
-    "(" <> types.list_to_string(expected) <> ")",
-    "(" <> types.list_to_string(actual) <> ")",
+    "(" <> types.list_to_string(expected, environment) <> ")",
+    "(" <> types.list_to_string(actual, environment) <> ")",
   )
 }

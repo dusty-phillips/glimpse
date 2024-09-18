@@ -148,7 +148,7 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
   }
 }
 
-pub fn to_string(type_: Type) -> String {
+pub fn to_string(environment: Environment, type_: Type) -> String {
   case type_ {
     NilType -> "Nil"
     IntType -> "Int"
@@ -158,25 +158,25 @@ pub fn to_string(type_: Type) -> String {
     CustomType(name) -> name
     CallableType(parameters, _labels, return) ->
       string_builder.from_string("fn (")
-      |> string_builder.append(list_to_string(parameters))
+      |> string_builder.append(list_to_string(parameters, environment))
       |> string_builder.append(") -> ")
-      |> string_builder.append(to_string(return))
+      |> string_builder.append(to_string(environment, return))
       |> string_builder.to_string
     NamespaceType(_) -> "<Namespace>"
   }
 }
 
-pub fn list_to_string(types: List(Type)) -> String {
+pub fn list_to_string(types: List(Type), environment: Environment) -> String {
   types
   |> iterator.from_list
-  |> iterator.map(to_string)
+  |> iterator.map(to_string(environment, _))
   |> iterator.map(string_builder.from_string)
   |> iterator.to_list
   |> string_builder.join(", ")
   |> string_builder.to_string
 }
 
-pub fn to_glance(type_: Type) -> glance.Type {
+pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
   case type_ {
     NilType -> glance.NamedType("Nil", option.None, [])
     IntType -> glance.NamedType("Int", option.None, [])
@@ -185,12 +185,16 @@ pub fn to_glance(type_: Type) -> glance.Type {
     BoolType -> glance.NamedType("Bool", option.None, [])
     CustomType(name) -> glance.NamedType(name, option.None, [])
     CallableType(parameters, _labels, return) ->
-      glance.FunctionType(list.map(parameters, to_glance), to_glance(return))
+      glance.FunctionType(
+        list.map(parameters, to_glance(environment, _)),
+        to_glance(environment, return),
+      )
     NamespaceType(_) -> panic as "Cannot convert namespace to glance"
   }
 }
 
 pub fn to_binop_error(
+  environment: Environment,
   operator: String,
   left: Type,
   right: Type,
@@ -198,8 +202,8 @@ pub fn to_binop_error(
 ) -> TypeResult {
   Error(error.InvalidBinOp(
     operator,
-    left |> to_string,
-    right |> to_string,
+    to_string(environment, left),
+    to_string(environment, right),
     expected,
   ))
 }

@@ -178,7 +178,7 @@ pub fn function(
           Ok(
             glance.Function(
               ..function,
-              return: option.Some(types.to_glance(block_out.state)),
+              return: option.Some(types.to_glance(environment, block_out.state)),
             ),
           )
         }
@@ -188,8 +188,8 @@ pub fn function(
             Ok(expected) if expected != block_out.state ->
               Error(error.InvalidReturnType(
                 function.name,
-                block_out.state |> types.to_string,
-                expected |> types.to_string,
+                types.to_string(environment, block_out.state),
+                types.to_string(environment, expected),
               ))
             Ok(_) -> Ok(function)
           }
