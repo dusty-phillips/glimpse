@@ -8,7 +8,6 @@ import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/types.{
   type Environment, type TypeResult, type TypeStateResult,
 }
-import pprint
 
 pub fn block(
   environment: Environment,
@@ -36,8 +35,9 @@ pub fn statement(
       |> result.map(types.EnvState(environment, _))
 
     glance.Assignment(
+      _,
       glance.Let,
-      glance.PatternVariable(name),
+      glance.PatternVariable(_, name),
       annotation,
       value_expression,
     ) -> {
@@ -65,7 +65,7 @@ pub fn statement(
       Ok(types.EnvState(updated_environment, type_))
     }
     _ -> {
-      pprint.debug(statement)
+      echo statement
       todo as "most statement types not covered yet"
     }
   }
@@ -78,14 +78,14 @@ pub fn expression(
   case expr {
     // TODO: Not 100% sure this will ever need to update the environment,
     // so we may be able to remove it from the return
-    glance.Int(_) -> Ok(types.IntType)
-    glance.Float(_) -> Ok(types.FloatType)
-    glance.String(_) -> Ok(types.StringType)
-    glance.Variable("Nil") -> Ok(types.NilType)
-    glance.Variable("True") | glance.Variable("False") -> Ok(types.BoolType)
-    glance.Variable(name) -> types.lookup_variable_type(environment, name)
+    glance.Int(_, _) -> Ok(types.IntType)
+    glance.Float(_, _) -> Ok(types.FloatType)
+    glance.String(_, _) -> Ok(types.StringType)
+    glance.Variable(_, "Nil") -> Ok(types.NilType)
+    glance.Variable(_, "True") | glance.Variable(_, "False") -> Ok(types.BoolType)
+    glance.Variable(_, name) -> types.lookup_variable_type(environment, name)
 
-    glance.NegateInt(int_expr) -> {
+    glance.NegateInt(_, int_expr) -> {
       case expression(environment, int_expr) {
         Error(err) -> Error(err)
         Ok(types.IntType) -> Ok(types.IntType)
@@ -98,7 +98,7 @@ pub fn expression(
       }
     }
 
-    glance.NegateBool(int_expr) -> {
+    glance.NegateBool(_, int_expr) -> {
       case expression(environment, int_expr) {
         Error(err) -> Error(err)
         Ok(types.BoolType) -> Ok(types.BoolType)
@@ -111,7 +111,7 @@ pub fn expression(
       }
     }
 
-    glance.FieldAccess(container, label) -> {
+    glance.FieldAccess(_, container, label) -> {
       use container_expression_type <- result.try(expression(
         environment,
         container,
@@ -129,13 +129,13 @@ pub fn expression(
       }
     }
 
-    glance.Call(target, arguments) -> call(environment, target, arguments)
+    glance.Call(_, target, arguments) -> call(environment, target, arguments)
 
-    glance.BinaryOperator(operator, left, right) ->
+    glance.BinaryOperator(_, operator, left, right) ->
       binop(environment, operator, left, right)
 
     _ -> {
-      pprint.debug(expr)
+      echo expr
       todo as "many expressions not implemented yet"
     }
   }
@@ -173,10 +173,15 @@ pub fn call_field(
   field: glance.Field(glance.Expression),
 ) -> error.TypeCheckResult(glance.Field(types.Type)) {
   case field {
-    glance.Field(label_opt, arg_expr) -> {
-      use type_ <- result.try(expression(environment, arg_expr))
-      Ok(glance.Field(label_opt, type_))
-    }
+    glance.LabelledField(label, arg_expr) ->
+      expression(environment, arg_expr)
+      |> result.map(glance.LabelledField(label, _))
+    glance.UnlabelledField(arg_expr) ->
+      expression(environment, arg_expr)
+      |> result.map(glance.UnlabelledField)
+    glance.ShorthandField(label) ->
+      types.lookup_variable_type(environment, label)
+      |> result.map(glance.LabelledField(label, _))
   }
 }
 

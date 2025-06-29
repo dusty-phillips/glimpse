@@ -4,12 +4,13 @@ import gleeunit/should
 import glimpse/error
 import typecheck/helpers
 
+
 pub fn assign_let_returned_test() {
   let function_out =
     helpers.ok_function_typecheck("fn foo() -> Int { let x = 5 }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])))
 }
 
 pub fn assign_let_used_test() {
@@ -21,7 +22,7 @@ pub fn assign_let_used_test() {
     )
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])))
 }
 
 pub fn assign_let_with_type() {
@@ -33,7 +34,7 @@ pub fn assign_let_with_type() {
     )
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])))
 }
 
 pub fn assign_let_with_binop() {
@@ -46,7 +47,7 @@ pub fn assign_let_with_binop() {
     )
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])))
 }
 
 pub fn assign_let_incorrect_type_test() {

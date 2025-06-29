@@ -210,14 +210,14 @@ pub fn fold_variant_constructors_into_env(
 
 fn fold_variant_field_into_callable(
   state: CallableStateResult,
-  field: glance.Field(glance.Type),
+  field: glance.VariantField,
 ) -> CallableStateFold {
   case state {
     Error(error) -> list.Stop(Error(error))
     Ok(CallableState(environment, reversed_by_position, labels)) ->
       {
         case field {
-          glance.Field(label: option.Some(label), item: glance_type) -> {
+          glance.LabelledVariantField(item: glance_type, label: label) -> {
             use glimpse_type <- result.try(types.type_(environment, glance_type))
             Ok(CallableState(
               environment,
@@ -226,7 +226,7 @@ fn fold_variant_field_into_callable(
             ))
           }
 
-          glance.Field(label: option.None, item: glance_type) -> {
+          glance.UnlabelledVariantField(item: glance_type) -> {
             use glimpse_type <- result.try(types.type_(environment, glance_type))
             Ok(CallableState(
               environment,
@@ -305,14 +305,19 @@ fn split_fields_by_type(
     list.fold(fields, #([], dict.new()), fn(state, field) {
       let #(reversed_positional, labelled) = state
       case field {
-        glance.Field(option.None, type_) -> #(
+        glance.UnlabelledField(type_) -> #(
           [type_, ..reversed_positional],
           labelled,
         )
-        glance.Field(option.Some(label), type_) -> #(
+        glance.LabelledField(label, type_) -> #(
           reversed_positional,
           dict.insert(labelled, label, type_),
         )
+        glance.ShorthandField(_label) -> {
+          // For shorthand syntax like `name:`, we need to look up the variable `name` in scope
+          // This is syntactic sugar for `name: name`
+          todo as "ShorthandField resolution requires environment context - not yet implemented"
+        }
       }
     })
 

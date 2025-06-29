@@ -21,6 +21,7 @@ pub fn fold_import_from_env(
       {
         case import_ {
           glance.Import(
+            _,
             module,
             alias: option.None,
             unqualified_types: [],

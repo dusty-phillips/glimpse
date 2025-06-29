@@ -184,3 +184,55 @@ pub fn incorrect_type_in_variant_call_test() {
   )
   |> should.equal(error.InvalidArguments("(String)", "(Int)"))
 }
+
+pub fn shorthand_field_function_call_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn greet(name person: String) -> String { \"Hello, \" <> person }
+    fn bar() -> String { 
+      let name = \"World\"
+      greet(name:)
+    } ",
+    )
+
+  assertions.should_have_list_length(module.module.functions, 2)
+}
+
+pub fn shorthand_field_variant_call_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "pub type Person {
+          Person(name: String, age: Int)
+      }
+      fn create_person() -> Person { 
+        let name = \"Alice\"
+        let age = 30
+        Person(name:, age:)
+      } ",
+    )
+
+  assertions.should_have_list_length(module.module.functions, 1)
+}
+
+pub fn shorthand_field_mixed_with_regular_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn greet(first f: String, last l: String) -> String { \"Hello, \" <> f <> \" \" <> l }
+    fn bar() -> String { 
+      let first = \"John\"
+      greet(first:, \"Doe\")
+    } ",
+    )
+
+  assertions.should_have_list_length(module.module.functions, 2)
+}
+
+pub fn shorthand_field_error_if_variable_not_in_scope_test() {
+  helpers.error_module_typecheck(
+    "fn greet(name person: String) -> String { \"Hello, \" <> person }
+    fn bar() -> String { 
+      greet(name:)
+    } ",
+  )
+  |> should.equal(error.InvalidName("name"))
+}

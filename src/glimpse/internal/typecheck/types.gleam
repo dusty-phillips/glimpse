@@ -1,13 +1,14 @@
 import glance
 import gleam/dict.{type Dict}
-import gleam/iterator
 import gleam/list
 import gleam/option
 import gleam/result
 import gleam/set
-import gleam/string_builder
+import gleam/string
 import glimpse/error
-import pprint
+
+/// Placeholder span for synthetic AST nodes created during type inference
+const unknown_span = glance.Span(-1, -1)
 
 pub type Type {
   NilType
@@ -169,18 +170,18 @@ pub fn extract_env(state: EnvState(a)) -> Environment {
 
 pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
   case glance_type {
-    glance.NamedType("Int", option.None, []) -> Ok(IntType)
-    glance.NamedType("Float", option.None, []) -> Ok(FloatType)
-    glance.NamedType("Nil", option.None, []) -> Ok(NilType)
-    glance.NamedType("String", option.None, []) -> Ok(StringType)
-    glance.NamedType("Bool", option.None, []) -> Ok(BoolType)
+    glance.NamedType(_, "Int", option.None, []) -> Ok(IntType)
+    glance.NamedType(_, "Float", option.None, []) -> Ok(FloatType)
+    glance.NamedType(_, "Nil", option.None, []) -> Ok(NilType)
+    glance.NamedType(_, "String", option.None, []) -> Ok(StringType)
+    glance.NamedType(_, "Bool", option.None, []) -> Ok(BoolType)
 
     // TODO: custom types with parameters need to be supported
     // TODO: not 100% certain all named types that are not covered
     // above are actually custom types
-    glance.NamedType(name, option.None, []) ->
+    glance.NamedType(_, name, option.None, []) ->
       lookup_custom_type(environment, name)
-    glance.NamedType(name, option.Some(module), []) -> {
+    glance.NamedType(_, name, option.Some(module), []) -> {
       let namespace = environment.definitions |> dict.get(module)
       case namespace {
         Ok(NamespaceType(_, custom_types)) ->
@@ -190,9 +191,8 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
       }
     }
 
-    glance.VariableType(name) -> lookup_variable_type(environment, name)
+    glance.VariableType(_, name) -> lookup_variable_type(environment, name)
     _ -> {
-      pprint.debug(glance_type)
       todo as "many glance types not processed yet"
     }
   }
@@ -207,42 +207,35 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
     BoolType -> "Bool"
     CustomType(module, name) -> module <> "." <> name
     CallableType(parameters, _labels, return) ->
-      string_builder.from_string("fn (")
-      |> string_builder.append(list_to_string(parameters, environment))
-      |> string_builder.append(") -> ")
-      |> string_builder.append(to_string(environment, return))
-      |> string_builder.to_string
+      "fn (" <> list_to_string(parameters, environment) <> ") -> " <> to_string(environment, return)
     NamespaceType(..) -> "<Namespace>"
   }
 }
 
 pub fn list_to_string(types: List(Type), environment: Environment) -> String {
   types
-  |> iterator.from_list
-  |> iterator.map(to_string(environment, _))
-  |> iterator.map(string_builder.from_string)
-  |> iterator.to_list
-  |> string_builder.join(", ")
-  |> string_builder.to_string
+  |> list.map(to_string(environment, _))
+  |> string.join(", ")
 }
 
 pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
   case type_ {
-    NilType -> glance.NamedType("Nil", option.None, [])
-    IntType -> glance.NamedType("Int", option.None, [])
-    FloatType -> glance.NamedType("Float", option.None, [])
-    StringType -> glance.NamedType("String", option.None, [])
-    BoolType -> glance.NamedType("Bool", option.None, [])
+    NilType -> glance.NamedType(unknown_span, "Nil", option.None, [])
+    IntType -> glance.NamedType(unknown_span, "Int", option.None, [])
+    FloatType -> glance.NamedType(unknown_span, "Float", option.None, [])
+    StringType -> glance.NamedType(unknown_span, "String", option.None, [])
+    BoolType -> glance.NamedType(unknown_span, "Bool", option.None, [])
     CustomType(module, name) -> {
       case dict.get(environment.import_names, module) {
-        Ok(relative) if module == environment.current_module ->
-          glance.NamedType(name, option.None, [])
-        Ok(relative) -> glance.NamedType(name, option.Some(relative), [])
+        Ok(_relative) if module == environment.current_module ->
+          glance.NamedType(unknown_span, name, option.None, [])
+        Ok(relative) -> glance.NamedType(unknown_span, name, option.Some(relative), [])
         Error(_) -> panic as "Custom type should always have a valid module"
       }
     }
     CallableType(parameters, _labels, return) ->
       glance.FunctionType(
+        unknown_span,
         list.map(parameters, to_glance(environment, _)),
         to_glance(environment, return),
       )

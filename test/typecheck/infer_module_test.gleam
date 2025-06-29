@@ -4,6 +4,8 @@ import gleeunit/should
 import glimpse/error
 import typecheck/helpers
 
+const unknown_span = glance.Span(-1, -1)
+
 // TODO: Fix inference and stop skipping this
 pub fn module_with_two_functions_skip() {
   let #(inferred_module, _env) =
@@ -16,9 +18,9 @@ pub fn module_with_two_functions_skip() {
   let assert [fun1, fun2] = inferred_module.module.functions
 
   fun1.definition.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(unknown_span, "Int", option.None, [])))
   fun2.definition.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(unknown_span, "Int", option.None, [])))
 }
 
 pub fn proxy_function_error_test() {

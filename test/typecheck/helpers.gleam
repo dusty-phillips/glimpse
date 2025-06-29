@@ -8,6 +8,7 @@ import glimpse/internal/typecheck/types.{type Environment}
 import glimpse/typecheck
 import typecheck/assertions
 
+
 pub fn glance_custom_type(definition: String) -> glance.CustomType {
   let module =
     glance.module(definition)

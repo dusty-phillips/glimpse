@@ -6,12 +6,13 @@ import glimpse/internal/typecheck/types
 import typecheck/assertions
 import typecheck/helpers
 
+
 pub fn int_param_test() {
   let function_out =
     helpers.ok_function_typecheck("fn foo(a: Int) -> Int { a }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(18, 21), "Int", option.None, [])))
 }
 
 pub fn int_param_operation_test() {
@@ -19,7 +20,7 @@ pub fn int_param_operation_test() {
     helpers.ok_function_typecheck("fn add(a: Int, b: Int) -> Int { a + b }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Int", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(26, 29), "Int", option.None, [])))
 }
 
 pub fn float_param_test() {
@@ -27,7 +28,7 @@ pub fn float_param_test() {
     helpers.ok_function_typecheck("fn foo(a: Float) -> Float { a }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("Float", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(20, 25), "Float", option.None, [])))
 }
 
 pub fn string_param_test() {
@@ -35,7 +36,7 @@ pub fn string_param_test() {
     helpers.ok_function_typecheck("fn foo(a: String) -> String { a }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("String", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(21, 27), "String", option.None, [])))
 }
 
 pub fn incorrect_param_return_fails_test() {
@@ -51,7 +52,7 @@ pub fn custom_type_param_test() {
     )
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType("MyType", option.None, [])))
+  |> should.equal(option.Some(glance.NamedType(glance.Span(27, 33), "MyType", option.None, [])))
 }
 
 pub fn empty_signature_definition_test() {

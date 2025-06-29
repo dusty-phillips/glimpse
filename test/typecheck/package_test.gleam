@@ -6,6 +6,7 @@ import gleeunit/should
 import typecheck/assertions
 import typecheck/helpers
 
+
 pub fn typecheck_single_module_package_test() {
   let package =
     helpers.ok_package_check("main_module", fn(_) {
@@ -24,12 +25,12 @@ pub fn typecheck_single_module_package_test() {
   |> should.equal(glance.Definition(
     [],
     glance.Function(
+      glance.Span(0, 23),
       "main",
       glance.Public,
       [],
-      option.Some(glance.NamedType("Nil", option.None, [])),
+      option.Some(glance.NamedType(glance.Span(17, 20), "Nil", option.None, [])),
       [],
-      glance.Span(0, 23),
     ),
   ))
 }
