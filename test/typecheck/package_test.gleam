@@ -6,7 +6,6 @@ import gleeunit/should
 import typecheck/assertions
 import typecheck/helpers
 
-
 pub fn typecheck_single_module_package_test() {
   let package =
     helpers.ok_package_check("main_module", fn(_) {

@@ -17,6 +17,10 @@ Glimpse is a Gleam library that provides package loading and typechecking capabi
 
 The library is filesystem-agnostic, requiring external module loading through a loader function.
 
+## Code Style
+
+- Never ever add useless comments to the code. Docstrings are good, but comments that just say what the code obviously said should always be avoided.
+
 ## Core Architecture
 
 ### Main Types

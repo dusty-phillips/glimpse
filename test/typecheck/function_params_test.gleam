@@ -1,4 +1,5 @@
 import glance
+import gleam/dict
 import gleam/option
 import gleeunit/should
 import glimpse/error
@@ -6,13 +7,14 @@ import glimpse/internal/typecheck/types
 import typecheck/assertions
 import typecheck/helpers
 
-
 pub fn int_param_test() {
   let function_out =
     helpers.ok_function_typecheck("fn foo(a: Int) -> Int { a }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(18, 21), "Int", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(18, 21), "Int", option.None, [])),
+  )
 }
 
 pub fn int_param_operation_test() {
@@ -20,7 +22,9 @@ pub fn int_param_operation_test() {
     helpers.ok_function_typecheck("fn add(a: Int, b: Int) -> Int { a + b }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(26, 29), "Int", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(26, 29), "Int", option.None, [])),
+  )
 }
 
 pub fn float_param_test() {
@@ -28,7 +32,9 @@ pub fn float_param_test() {
     helpers.ok_function_typecheck("fn foo(a: Float) -> Float { a }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(20, 25), "Float", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(20, 25), "Float", option.None, [])),
+  )
 }
 
 pub fn string_param_test() {
@@ -36,7 +42,11 @@ pub fn string_param_test() {
     helpers.ok_function_typecheck("fn foo(a: String) -> String { a }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(21, 27), "String", option.None, [])))
+  |> should.equal(
+    option.Some(
+      glance.NamedType(glance.Span(21, 27), "String", option.None, []),
+    ),
+  )
 }
 
 pub fn incorrect_param_return_fails_test() {
@@ -52,7 +62,11 @@ pub fn custom_type_param_test() {
     )
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(27, 33), "MyType", option.None, [])))
+  |> should.equal(
+    option.Some(
+      glance.NamedType(glance.Span(27, 33), "MyType", option.None, []),
+    ),
+  )
 }
 
 pub fn empty_signature_definition_test() {
@@ -128,4 +142,32 @@ pub fn mixed_positional_and_labelled_definition_test() {
     [#("lab", 1)],
     types.NilType,
   )
+}
+
+pub fn generic_function_parameter_test() {
+  let #(_, env) = helpers.ok_module_typecheck("fn consume(x: a) -> Nil { Nil }")
+
+  assertions.should_have_dict_size(env.definitions, 1)
+  assert dict.get(env.definitions, "consume")
+    == Ok(types.GenericCallableType(
+      [types.GenericTypeVariable("a")],
+      dict.new(),
+      types.NilType,
+      glance.Function(
+        glance.Span(0, 31),
+        "consume",
+        glance.Private,
+        [
+          glance.FunctionParameter(
+            option.None,
+            glance.Named("x"),
+            option.Some(glance.VariableType(glance.Span(14, 15), "a")),
+          ),
+        ],
+        option.Some(
+          glance.NamedType(glance.Span(20, 23), "Nil", option.None, []),
+        ),
+        [glance.Expression(glance.Variable(glance.Span(26, 29), "Nil"))],
+      ),
+    ))
 }

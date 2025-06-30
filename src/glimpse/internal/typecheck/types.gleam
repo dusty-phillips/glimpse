@@ -10,6 +10,13 @@ import glimpse/error
 /// Placeholder span for synthetic AST nodes created during type inference
 const unknown_span = glance.Span(-1, -1)
 
+fn is_type_variable(name: String) -> Bool {
+  case string.first(name) {
+    Ok(first_char) -> string.lowercase(first_char) == first_char
+    Error(_) -> False
+  }
+}
+
 pub type Type {
   NilType
   IntType
@@ -24,11 +31,21 @@ pub type Type {
     position_labels: Dict(String, Int),
     return: Type,
   )
+  GenericCallableType(
+    /// All parameters (labelled or otherwise)
+    parameters: List(Type),
+    /// Map of label to its position in parameters list
+    position_labels: Dict(String, Int),
+    return: Type,
+    /// Original glance function for re-typechecking
+    original_function: glance.Function,
+  )
   /// Used for field access on imports; no direct glance analog
   NamespaceType(
     definitions: Dict(String, Type),
     custom_types: Dict(String, Type),
   )
+  GenericTypeVariable(name: String)
 }
 
 pub type TypeResult =
@@ -191,7 +208,12 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
       }
     }
 
-    glance.VariableType(_, name) -> lookup_variable_type(environment, name)
+    glance.VariableType(_, name) -> {
+      case is_type_variable(name) {
+        True -> Ok(GenericTypeVariable(name))
+        False -> lookup_variable_type(environment, name)
+      }
+    }
     _ -> {
       todo as "many glance types not processed yet"
     }
@@ -207,8 +229,17 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
     BoolType -> "Bool"
     CustomType(module, name) -> module <> "." <> name
     CallableType(parameters, _labels, return) ->
-      "fn (" <> list_to_string(parameters, environment) <> ") -> " <> to_string(environment, return)
+      "fn ("
+      <> list_to_string(parameters, environment)
+      <> ") -> "
+      <> to_string(environment, return)
+    GenericCallableType(parameters, _labels, return, _) ->
+      "fn ("
+      <> list_to_string(parameters, environment)
+      <> ") -> "
+      <> to_string(environment, return)
     NamespaceType(..) -> "<Namespace>"
+    GenericTypeVariable(name) -> name
   }
 }
 
@@ -229,7 +260,8 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
       case dict.get(environment.import_names, module) {
         Ok(_relative) if module == environment.current_module ->
           glance.NamedType(unknown_span, name, option.None, [])
-        Ok(relative) -> glance.NamedType(unknown_span, name, option.Some(relative), [])
+        Ok(relative) ->
+          glance.NamedType(unknown_span, name, option.Some(relative), [])
         Error(_) -> panic as "Custom type should always have a valid module"
       }
     }
@@ -239,7 +271,14 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
         list.map(parameters, to_glance(environment, _)),
         to_glance(environment, return),
       )
+    GenericCallableType(parameters, _labels, return, _) ->
+      glance.FunctionType(
+        unknown_span,
+        list.map(parameters, to_glance(environment, _)),
+        to_glance(environment, return),
+      )
     NamespaceType(..) -> panic as "Cannot convert namespace to glance"
+    GenericTypeVariable(name) -> glance.VariableType(unknown_span, name)
   }
 }
 

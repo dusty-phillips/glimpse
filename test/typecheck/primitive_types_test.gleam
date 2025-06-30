@@ -10,14 +10,18 @@ pub fn return_nil_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() -> Nil { Nil }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 15), "Nil", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(12, 15), "Nil", option.None, [])),
+  )
 }
 
 pub fn infer_nil_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(unknown_span, "Nil", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(unknown_span, "Nil", option.None, [])),
+  )
 }
 
 pub fn not_nil_error_test() {
@@ -29,14 +33,18 @@ pub fn return_int_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 5 }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])),
+  )
 }
 
 pub fn infer_int_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { 5 }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(unknown_span, "Int", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(unknown_span, "Int", option.None, [])),
+  )
 }
 
 pub fn not_int_error_test() {
@@ -48,14 +56,18 @@ pub fn return_float_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() -> Float { 5.0 }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 17), "Float", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(12, 17), "Float", option.None, [])),
+  )
 }
 
 pub fn infer_float_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { 5.0 }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(unknown_span, "Float", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(unknown_span, "Float", option.None, [])),
+  )
 }
 
 pub fn not_float_error_test() {
@@ -64,17 +76,24 @@ pub fn not_float_error_test() {
 }
 
 pub fn return_string_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> String { \"hello\" }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo() -> String { \"hello\" }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 18), "String", option.None, [])))
+  |> should.equal(
+    option.Some(
+      glance.NamedType(glance.Span(12, 18), "String", option.None, []),
+    ),
+  )
 }
 
 pub fn infer_string_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { \"hello\" }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(unknown_span, "String", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(unknown_span, "String", option.None, [])),
+  )
 }
 
 pub fn not_string_error_test() {
@@ -86,21 +105,27 @@ pub fn return_true_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() -> Bool { True }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 16), "Bool", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(12, 16), "Bool", option.None, [])),
+  )
 }
 
 pub fn return_false_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() -> Bool { False }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(glance.Span(12, 16), "Bool", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(glance.Span(12, 16), "Bool", option.None, [])),
+  )
 }
 
 pub fn infer_bool_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { True }")
 
   function_out.return
-  |> should.equal(option.Some(glance.NamedType(unknown_span, "Bool", option.None, [])))
+  |> should.equal(
+    option.Some(glance.NamedType(unknown_span, "Bool", option.None, [])),
+  )
 }
 
 pub fn not_bool_error_test() {

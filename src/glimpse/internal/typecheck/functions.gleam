@@ -6,8 +6,8 @@ import gleam/result
 import gleam/string
 import glimpse/error
 import glimpse/internal/typecheck/types.{
-  type EnvState, type EnvStateFold, type EnvStateResult, type Environment,
-  type EnvironmentFold, type EnvironmentResult, type Type,
+  type EnvStateFold, type EnvStateResult, type Environment, type EnvironmentFold,
+  type EnvironmentResult, type Type,
 }
 
 pub type CallableState {
@@ -28,12 +28,41 @@ pub fn empty_state(environment: Environment) -> CallableState {
   CallableState(environment, [], dict.new())
 }
 
+fn has_generic_types(types: List(Type)) -> Bool {
+  list.any(types, is_generic_type)
+}
+
+fn is_generic_type(type_: Type) -> Bool {
+  case type_ {
+    types.GenericTypeVariable(_) -> True
+    _ -> False
+  }
+}
+
 pub fn to_callable_type(state: CallableState, return_type: Type) -> Type {
   types.CallableType(
     state.reversed_by_position |> list.reverse,
     state.labels,
     return_type,
   )
+}
+
+pub fn to_callable_type_with_original(
+  state: CallableState,
+  return_type: Type,
+  original_function: glance.Function,
+) -> Type {
+  let parameters = state.reversed_by_position |> list.reverse
+  case has_generic_types(parameters) || is_generic_type(return_type) {
+    True ->
+      types.GenericCallableType(
+        parameters,
+        state.labels,
+        return_type,
+        original_function,
+      )
+    False -> types.CallableType(parameters, state.labels, return_type)
+  }
 }
 
 type OrderedFoldState {
@@ -73,7 +102,7 @@ pub fn function_signature(
               environment
               |> types.add_def_to_env(
                 function.name,
-                to_callable_type(param_state, return),
+                to_callable_type_with_original(param_state, return, function),
               ),
             )
           }

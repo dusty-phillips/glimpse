@@ -3,10 +3,11 @@ import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/result
+import gleam/string
 import glimpse/error
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/types.{
-  type Environment, type TypeResult, type TypeStateResult,
+  type Environment, type Type, type TypeResult, type TypeStateResult,
 }
 
 pub fn block(
@@ -82,7 +83,8 @@ pub fn expression(
     glance.Float(_, _) -> Ok(types.FloatType)
     glance.String(_, _) -> Ok(types.StringType)
     glance.Variable(_, "Nil") -> Ok(types.NilType)
-    glance.Variable(_, "True") | glance.Variable(_, "False") -> Ok(types.BoolType)
+    glance.Variable(_, "True") | glance.Variable(_, "False") ->
+      Ok(types.BoolType)
     glance.Variable(_, name) -> types.lookup_variable_type(environment, name)
 
     glance.NegateInt(_, int_expr) -> {
@@ -163,6 +165,28 @@ pub fn call(
         target_labels,
       )
       |> result.replace(target_return)
+    }
+    types.GenericCallableType(
+      _target_arguments,
+      target_labels,
+      _target_return,
+      original_function,
+    ) -> {
+      let concrete_arg_types =
+        list.map(glimpse_argument_fields, fn(field) {
+          case field {
+            glance.LabelledField(_, type_) -> type_
+            glance.UnlabelledField(type_) -> type_
+            glance.ShorthandField(_) ->
+              panic as "ShorthandField should have been converted by call_field"
+          }
+        })
+
+      typecheck_function_with_concrete_types(
+        environment,
+        original_function,
+        concrete_arg_types,
+      )
     }
     _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
@@ -277,5 +301,54 @@ pub fn binop(
       types.to_binop_error(environment, "<>", left, right, "two Strings")
 
     glance.Pipe, _, _ -> todo as "Pipe binop is not typechecked yet"
+  }
+}
+
+fn typecheck_function_with_concrete_types(
+  environment: Environment,
+  original_function: glance.Function,
+  concrete_arg_types: List(Type),
+) -> error.TypeCheckResult(Type) {
+  let param_count = list.length(original_function.parameters)
+  let arg_count = list.length(concrete_arg_types)
+
+  case param_count == arg_count {
+    False -> {
+      let param_types =
+        list.map(original_function.parameters, fn(param) {
+          case param {
+            glance.FunctionParameter(type_: option.Some(glance_type), ..) ->
+              case types.type_(environment, glance_type) {
+                Ok(type_) -> types.to_string(environment, type_)
+                Error(_) -> "unknown"
+              }
+            _ -> "unknown"
+          }
+        })
+      let arg_type_strings =
+        list.map(concrete_arg_types, types.to_string(environment, _))
+
+      Error(error.InvalidArguments(
+        "(" <> string.join(param_types, ", ") <> ")",
+        "(" <> string.join(arg_type_strings, ", ") <> ")",
+      ))
+    }
+    True -> {
+      use param_env <- result.try(
+        list.zip(original_function.parameters, concrete_arg_types)
+        |> list.fold(Ok(environment), fn(env_result, param_type) {
+          use env <- result.try(env_result)
+          let #(param, concrete_type) = param_type
+          case param {
+            glance.FunctionParameter(name: glance.Named(name), ..) ->
+              Ok(types.add_def_to_env(env, name, concrete_type))
+            _ -> Ok(env)
+          }
+        }),
+      )
+
+      use body_result <- result.try(block(param_env, original_function.body))
+      Ok(body_result.state)
+    }
   }
 }
