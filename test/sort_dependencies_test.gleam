@@ -1,25 +1,22 @@
 import gleam/dict
-import gleeunit/should
 import glimpse/error
 import glimpse/internal/import_dependencies
 
 pub fn sort_empty_dependencies_test() {
   let graph = dict.from_list([#("main_module", [])])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_ok
-  |> should.equal(["main_module"])
+  let assert Ok(result) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert result == ["main_module"]
 }
 
 pub fn sort_simple_dependency_test() {
   let graph =
     dict.from_list([#("main_module", ["other_module"]), #("other_module", [])])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_ok
-  |> should.equal(["other_module", "main_module"])
+  let assert Ok(result) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert result == ["other_module", "main_module"]
 }
 
 pub fn sort_diamond_dependency_test() {
@@ -31,10 +28,9 @@ pub fn sort_diamond_dependency_test() {
       #("c", []),
     ])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_ok
-  |> should.equal(["c", "a", "b", "main_module"])
+  let assert Ok(result) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert result == ["c", "a", "b", "main_module"]
 }
 
 pub fn sort_arbitrary_complicated_dependency_test() {
@@ -51,10 +47,9 @@ pub fn sort_arbitrary_complicated_dependency_test() {
       #("h", []),
     ])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_ok
-  |> should.equal(["g", "e", "h", "f", "d", "b", "c", "a", "main_module"])
+  let assert Ok(result) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert result == ["g", "e", "h", "f", "d", "b", "c", "a", "main_module"]
 }
 
 pub fn sort_complete_binary_tree_dependency_test() {
@@ -78,13 +73,13 @@ pub fn sort_complete_binary_tree_dependency_test() {
       #("o", []),
     ])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_ok
-  |> should.equal([
-    "h", "i", "d", "j", "k", "e", "b", "l", "m", "f", "n", "o", "g", "c", "a",
-    "main_module",
-  ])
+  let assert Ok(result) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert result
+    == [
+      "h", "i", "d", "j", "k", "e", "b", "l", "m", "f", "n", "o", "g", "c", "a",
+      "main_module",
+    ]
 }
 
 pub fn sort_circular_import_test() {
@@ -96,10 +91,9 @@ pub fn sort_circular_import_test() {
       #("c", ["a"]),
     ])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_error
-  |> should.equal(error.ImportError(error.CircularDependencyError("a")))
+  let assert Error(error) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert error == error.ImportError(error.CircularDependencyError("a"))
 }
 
 pub fn sort_missing_import_test() {
@@ -111,8 +105,7 @@ pub fn sort_missing_import_test() {
       #("c", ["a"]),
     ])
 
-  graph
-  |> import_dependencies.sort_dependencies("main_module")
-  |> should.be_error
-  |> should.equal(error.ImportError(error.CircularDependencyError("a")))
+  let assert Error(error) =
+    import_dependencies.sort_dependencies(graph, "main_module")
+  assert error == error.ImportError(error.CircularDependencyError("a"))
 }

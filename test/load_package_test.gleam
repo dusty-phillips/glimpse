@@ -1,31 +1,31 @@
 import glance
 import gleam/dict
-import gleeunit/should
 import glimpse
 import glimpse/error
-import typecheck/assertions
 
 pub fn ok_module(contents: String) -> glance.Module {
-  glance.module(contents)
-  |> should.be_ok
+  let assert Ok(module) = glance.module(contents)
+  module
 }
 
 pub fn no_dependency_package_test() {
-  glimpse.load_package("main_module", fn(_) { Ok("pub fn main() {}") })
-  |> should.be_ok
-  |> should.equal(glimpse.Package(
-    "main_module",
-    dict.from_list([
-      #(
-        "main_module",
-        glimpse.Module("main_module", ok_module("pub fn main() {}"), []),
-      ),
-    ]),
-  ))
+  let assert Ok(result) =
+    glimpse.load_package("main_module", fn(_) { Ok("pub fn main() {}") })
+
+  assert result
+    == glimpse.Package(
+      "main_module",
+      dict.from_list([
+        #(
+          "main_module",
+          glimpse.Module("main_module", ok_module("pub fn main() {}"), []),
+        ),
+      ]),
+    )
 }
 
 pub fn single_dependency_package_test() {
-  let loaded_package =
+  let assert Ok(loaded_package) =
     glimpse.load_package("main_module", fn(mod) {
       case mod {
         "main_module" ->
@@ -37,12 +37,10 @@ pub fn single_dependency_package_test() {
         _ -> Error("unexpected module")
       }
     })
-    |> should.be_ok
 
-  loaded_package.name
-  |> should.equal("main_module")
+  assert loaded_package.name == "main_module"
 
-  assertions.should_have_dict_size(loaded_package.modules, 2)
+  assert dict.size(loaded_package.modules) == 2
 
   expect_modules_equal(
     loaded_package,
@@ -56,7 +54,7 @@ pub fn single_dependency_package_test() {
 }
 
 pub fn diamond_dependency_package_test() {
-  let loaded_package =
+  let assert Ok(loaded_package) =
     glimpse.load_package("main_module", fn(mod) {
       case mod {
         "main_module" -> Ok("import a\nimport b")
@@ -65,12 +63,10 @@ pub fn diamond_dependency_package_test() {
         _ -> Error("unexpected module")
       }
     })
-    |> should.be_ok
 
-  loaded_package.name
-  |> should.equal("main_module")
+  assert loaded_package.name == "main_module"
 
-  assertions.should_have_dict_size(loaded_package.modules, 4)
+  assert dict.size(loaded_package.modules) == 4
 
   expect_modules_equal(
     loaded_package,
@@ -86,9 +82,9 @@ import b",
 }
 
 pub fn loader_error_test() {
-  glimpse.load_package("main_module", fn(_mod) { Error("I am error") })
-  |> should.be_error
-  |> should.equal(error.LoadError("I am error"))
+  let assert Error(error) =
+    glimpse.load_package("main_module", fn(_mod) { Error("I am error") })
+  assert error == error.LoadError("I am error")
 }
 
 fn expect_modules_equal(
@@ -97,19 +93,14 @@ fn expect_modules_equal(
   expected_dependencies: List(String),
   expected_module_contents: String,
 ) -> Nil {
-  let module =
-    package.modules
-    |> dict.get(name)
-    |> should.be_ok
+  let assert Ok(module) = dict.get(package.modules, name)
 
-  module.name
-  |> should.equal(name)
+  assert module.name == name
 
-  module.dependencies
-  |> should.equal(expected_dependencies)
+  assert module.dependencies == expected_dependencies
 
-  module.module
-  |> should.equal(expected_module_contents |> glance.module |> should.be_ok)
+  let assert Ok(expected_module) = glance.module(expected_module_contents)
+  assert module.module == expected_module
 
   Nil
 }

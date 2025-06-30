@@ -1,6 +1,5 @@
 import glance
 import gleam/option
-import gleeunit/should
 import glimpse/error
 import typecheck/helpers
 
@@ -8,10 +7,10 @@ pub fn assign_let_returned_test() {
   let function_out =
     helpers.ok_function_typecheck("fn foo() -> Int { let x = 5 }")
 
-  function_out.return
-  |> should.equal(
-    option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])),
-  )
+  assert function_out.return
+    == option.Some(
+      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+    )
 }
 
 pub fn assign_let_used_test() {
@@ -22,10 +21,10 @@ pub fn assign_let_used_test() {
     x + 2}",
     )
 
-  function_out.return
-  |> should.equal(
-    option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])),
-  )
+  assert function_out.return
+    == option.Some(
+      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+    )
 }
 
 pub fn assign_let_with_type() {
@@ -36,10 +35,10 @@ pub fn assign_let_with_type() {
     x + 2}",
     )
 
-  function_out.return
-  |> should.equal(
-    option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])),
-  )
+  assert function_out.return
+    == option.Some(
+      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+    )
 }
 
 pub fn assign_let_with_binop() {
@@ -51,26 +50,26 @@ pub fn assign_let_with_binop() {
     y + 2}",
     )
 
-  function_out.return
-  |> should.equal(
-    option.Some(glance.NamedType(glance.Span(12, 15), "Int", option.None, [])),
-  )
+  assert function_out.return
+    == option.Some(
+      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+    )
 }
 
 pub fn assign_let_incorrect_type_test() {
-  helpers.error_function_typecheck(
-    "fn foo() {
+  assert helpers.error_function_typecheck(
+      "fn foo() {
     let x: String = 5
   }",
-  )
-  |> should.equal(error.InvalidType("Int", "String", "during assignment of x"))
+    )
+    == error.InvalidType("Int", "String", "during assignment of x")
 }
 
 pub fn assign_let_value_error_test() {
-  helpers.error_function_typecheck(
-    "fn foo() {
+  assert helpers.error_function_typecheck(
+      "fn foo() {
     let x: String = a
   }",
-  )
-  |> should.equal(error.InvalidName("a"))
+    )
+    == error.InvalidName("a")
 }
