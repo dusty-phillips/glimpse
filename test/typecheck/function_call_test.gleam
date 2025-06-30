@@ -1,3 +1,6 @@
+import glance
+import gleam/list
+import gleam/option
 import gleeunit/should
 import glimpse/error
 import typecheck/assertions
@@ -235,4 +238,74 @@ pub fn shorthand_field_error_if_variable_not_in_scope_test() {
     } ",
   )
   |> should.equal(error.InvalidName("name"))
+}
+
+pub fn generic_identity_function_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn identity(x: a) -> a { x }
+       fn use_identity() -> Int { identity(42) }",
+    )
+
+  echo module
+  assertions.should_have_list_length(module.module.functions, 2)
+}
+
+pub fn generic_function_shorthand_call_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn consume(value x: a) -> a { x }
+       fn use_consume() -> Int {
+         let value = 42
+         consume(value:)
+       }",
+    )
+
+  assert list.length(module.module.functions) == 2
+
+  let assert [use_consume_def, _] = module.module.functions
+  assert use_consume_def.definition.return
+    == option.Some(
+      glance.NamedType(glance.Span(61, 64), "Int", option.None, []),
+    )
+}
+
+pub fn multiple_type_variables_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn first(x: a, y: b) -> a { x }
+       fn use_first() -> Int { first(42, \"hello\") }",
+    )
+
+  assert list.length(module.module.functions) == 2
+
+  let assert [use_first_def, _] = module.module.functions
+  assert use_first_def.definition.return
+    == option.Some(
+      glance.NamedType(glance.Span(57, 60), "Int", option.None, []),
+    )
+}
+
+pub fn mixed_generic_concrete_parameters_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn repeat(value: a, count: Int) -> a { value }
+       fn use_repeat() -> String { repeat(\"hello\", 3) }",
+    )
+
+  assert list.length(module.module.functions) == 2
+
+  let assert [use_repeat_def, _] = module.module.functions
+  assert use_repeat_def.definition.return
+    == option.Some(
+      glance.NamedType(glance.Span(73, 79), "String", option.None, []),
+    )
+}
+
+pub fn generic_function_wrong_arity_test() {
+  helpers.error_module_typecheck(
+    "fn identity(x: a) -> a { x }
+     fn use_identity() -> Int { identity(42, \"extra\") }",
+  )
+  |> should.equal(error.InvalidArguments("(a)", "(Int, String)"))
 }

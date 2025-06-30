@@ -17,6 +17,10 @@ Glimpse is a Gleam library that provides package loading and typechecking capabi
 
 The library is filesystem-agnostic, requiring external module loading through a loader function.
 
+## Code Style
+
+- Never ever add useless comments to the code. Docstrings are good, but comments that just say what the code obviously said should always be avoided.
+
 ## Core Architecture
 
 ### Main Types
@@ -56,6 +60,7 @@ The typechecking uses an `Environment` type that tracks:
 - Main test files are in `test/` directory
 - Typecheck tests are organized in `test/typecheck/` with helper utilities in `helpers.gleam`
 - Test helpers provide utilities for parsing glance modules and validating typecheck results
+- Use `assert actual == expected` syntax instead of gleeunit.should or let assert in unit tests. For example, to verify that a Result containing a string has a certain value, use `assert actual == Ok("hello world")`. This is a new feature introduced in gleam 1.11.
 
 ## Dependencies
 
