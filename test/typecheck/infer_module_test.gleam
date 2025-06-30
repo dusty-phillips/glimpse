@@ -1,6 +1,5 @@
 import glance
 import gleam/option
-import gleeunit/should
 import glimpse/error
 import typecheck/helpers
 
@@ -17,17 +16,13 @@ pub fn module_with_two_functions_skip() {
 
   let assert [fun1, fun2] = inferred_module.module.functions
 
-  fun1.definition.return
-  |> should.equal(
-    option.Some(glance.NamedType(unknown_span, "Int", option.None, [])),
-  )
-  fun2.definition.return
-  |> should.equal(
-    option.Some(glance.NamedType(unknown_span, "Int", option.None, [])),
-  )
+  assert fun1.definition.return
+    == option.Some(glance.NamedType(unknown_span, "Int", option.None, []))
+  assert fun2.definition.return
+    == option.Some(glance.NamedType(unknown_span, "Int", option.None, []))
 }
 
 pub fn proxy_function_error_test() {
-  helpers.error_function_typecheck("fn foo(a: Float) -> Float { -a }")
-  |> should.equal(error.InvalidType("Float", "Int", "- can only negate Int"))
+  assert helpers.error_function_typecheck("fn foo(a: Float) -> Float { -a }")
+    == error.InvalidType("Float", "Int", "- can only negate Int")
 }

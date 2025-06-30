@@ -1,41 +1,36 @@
 import glance
 import gleam/dict
 import gleam/list
-import gleeunit/should
 import glimpse
 import glimpse/error
 import glimpse/internal/typecheck/types.{type Environment}
 import glimpse/typecheck
-import typecheck/assertions
 
 pub fn glance_custom_type(definition: String) -> glance.CustomType {
-  let module =
-    glance.module(definition)
-    |> should.be_ok
+  let assert Ok(module) = glance.module(definition)
 
-  assertions.should_have_list_length(module.custom_types, 1)
+  assert list.length(module.custom_types) == 1
 
-  let definition =
-    list.first(module.custom_types)
-    |> should.be_ok
+  let assert Ok(definition) = list.first(module.custom_types)
 
   definition.definition
 }
 
 pub fn ok_custom_type(definition: String) -> Environment {
-  glance_custom_type(definition)
-  |> typecheck.custom_type(types.new_env("main_module"), _)
-  |> should.be_ok
+  let assert Ok(result) =
+    typecheck.custom_type(
+      types.new_env("main_module"),
+      glance_custom_type(definition),
+    )
+  result
 }
 
 pub fn glance_function(definition: String) -> glance.Function {
-  let module =
-    glance.module(definition)
-    |> should.be_ok
+  let assert Ok(module) = glance.module(definition)
 
-  assertions.should_have_list_length(module.functions, 1)
+  assert list.length(module.functions) == 1
 
-  let definition = list.first(module.functions) |> should.be_ok
+  let assert Ok(definition) = list.first(module.functions)
   definition.definition
 }
 
@@ -44,8 +39,8 @@ pub fn ok_function_env_typecheck(
   definition: String,
 ) -> glance.Function {
   let function = glance_function(definition)
-  typecheck.function(env, function)
-  |> should.be_ok
+  let assert Ok(result) = typecheck.function(env, function)
+  result
 }
 
 pub fn ok_function_typecheck(definition: String) -> glance.Function {
@@ -54,32 +49,30 @@ pub fn ok_function_typecheck(definition: String) -> glance.Function {
 
 pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
   let function = glance_function(definition)
-  typecheck.function(types.new_env("main_module"), function)
-  |> should.be_error
+  let assert Error(error) =
+    typecheck.function(types.new_env("main_module"), function)
+  error
 }
 
 pub fn ok_module_typecheck(definition: String) -> #(glimpse.Module, Environment) {
-  glance.module(definition)
-  |> should.be_ok
-  |> glimpse.Module("main_module", _, [])
-  |> typecheck.module(dict.new())
-  |> should.be_ok
+  let assert Ok(module) = glance.module(definition)
+  let assert Ok(result) =
+    typecheck.module(glimpse.Module("main_module", module, []), dict.new())
+  result
 }
 
 pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
-  glance.module(definition)
-  |> should.be_ok
-  |> glimpse.Module("main_module", _, [])
-  |> typecheck.module(dict.new())
-  |> should.be_error
+  let assert Ok(module) = glance.module(definition)
+  let assert Error(error) =
+    typecheck.module(glimpse.Module("main_module", module, []), dict.new())
+  error
 }
 
 pub fn ok_package_check(
   main_module: String,
   loader: fn(String) -> Result(String, Nil),
 ) -> glimpse.Package {
-  glimpse.load_package(main_module, loader)
-  |> should.be_ok
-  |> typecheck.package
-  |> should.be_ok
+  let assert Ok(package) = glimpse.load_package(main_module, loader)
+  let assert Ok(result) = typecheck.package(package)
+  result
 }

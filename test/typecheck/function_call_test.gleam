@@ -1,9 +1,7 @@
 import glance
 import gleam/list
 import gleam/option
-import gleeunit/should
 import glimpse/error
-import typecheck/assertions
 import typecheck/helpers
 
 pub fn simple_nil_function_call_test() {
@@ -13,7 +11,7 @@ pub fn simple_nil_function_call_test() {
     fn bar() -> Nil { foo() } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn fully_typed_function_call_test() {
@@ -25,7 +23,7 @@ pub fn fully_typed_function_call_test() {
     } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn fully_labelled_function_call_test() {
@@ -37,7 +35,7 @@ pub fn fully_labelled_function_call_test() {
     } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn partially_labelled_function_call_test() {
@@ -49,60 +47,63 @@ pub fn partially_labelled_function_call_test() {
     } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn error_if_incorrect_args_test() {
-  helpers.error_module_typecheck(
-    "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
     fn bar() -> Nil { foo(\"Some\", 1)
       Nil
     } ",
-  )
-  |> should.equal(error.InvalidArguments("(String, String)", "(String, Int)"))
+    )
+  assert actual == error.InvalidArguments("(String, String)", "(String, Int)")
 }
 
 pub fn error_if_missing_args_test() {
-  helpers.error_module_typecheck(
-    "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
     fn bar() -> Nil { foo(\"Some\", )
       Nil
     } ",
-  )
-  |> should.equal(error.InvalidArguments("(String, String)", "(String)"))
+    )
+  assert actual == error.InvalidArguments("(String, String)", "(String)")
 }
 
 pub fn error_if_extra_args_test() {
-  helpers.error_module_typecheck(
-    "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
     fn bar() -> Nil { foo(\"Some\", \"Body\", \"else\")
       Nil
     } ",
-  )
-  |> should.equal(error.InvalidArguments(
-    "(String, String)",
-    "(String, String, String)",
-  ))
+    )
+  assert actual
+    == error.InvalidArguments("(String, String)", "(String, String, String)")
 }
 
 pub fn error_if_unknown_label_test() {
-  helpers.error_module_typecheck(
-    "fn foo(one first: String, two last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn foo(one first: String, two last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
     fn bar() -> Nil { foo(\"Some\", xxx: \"Body\")
       Nil
     } ",
-  )
-  |> should.equal(error.InvalidArgumentLabel("(one, two)", "xxx"))
+    )
+  assert actual == error.InvalidArgumentLabel("(one, two)", "xxx")
 }
 
 pub fn error_if_label_unlabelled_args_test() {
-  helpers.error_module_typecheck(
-    "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn foo(first: String, last: String) -> String { \"Hello, \" <> first <> \" \" <> last }
     fn bar() -> Nil { foo(first: \"Some\", last: \"Body\")
       Nil
     } ",
-  )
-  |> should.equal(error.InvalidArgumentLabel("()", "first"))
+    )
+  assert actual == error.InvalidArgumentLabel("()", "first")
 }
 
 pub fn simple_nil_variant_call_test() {
@@ -156,36 +157,39 @@ pub fn labelled_param_variant_optional_call_test() {
 }
 
 pub fn unexpected_label_in_variant_call_test() {
-  helpers.error_module_typecheck(
-    "pub type Foo {
+  let actual =
+    helpers.error_module_typecheck(
+      "pub type Foo {
         Foo(name: String)
     }
     fn bar() -> Foo { Foo(wrong_label: \"hello\") } 
   ",
-  )
-  |> should.equal(error.InvalidArgumentLabel("(name)", "wrong_label"))
+    )
+  assert actual == error.InvalidArgumentLabel("(name)", "wrong_label")
 }
 
 pub fn incorrect_arity_in_variant_call_test() {
-  helpers.error_module_typecheck(
-    "pub type Foo {
+  let actual =
+    helpers.error_module_typecheck(
+      "pub type Foo {
         Foo(name: String)
     }
     fn bar() -> Foo { Foo(\"hello\", 2) } 
   ",
-  )
-  |> should.equal(error.InvalidArguments("(String)", "(String, Int)"))
+    )
+  assert actual == error.InvalidArguments("(String)", "(String, Int)")
 }
 
 pub fn incorrect_type_in_variant_call_test() {
-  helpers.error_module_typecheck(
-    "pub type Foo {
+  let actual =
+    helpers.error_module_typecheck(
+      "pub type Foo {
         Foo(name: String)
     }
     fn bar() -> Foo { Foo(2) } 
   ",
-  )
-  |> should.equal(error.InvalidArguments("(String)", "(Int)"))
+    )
+  assert actual == error.InvalidArguments("(String)", "(Int)")
 }
 
 pub fn shorthand_field_function_call_test() {
@@ -198,7 +202,7 @@ pub fn shorthand_field_function_call_test() {
     } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn shorthand_field_variant_call_test() {
@@ -214,7 +218,7 @@ pub fn shorthand_field_variant_call_test() {
       } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 1)
+  assert list.length(module.module.functions) == 1
 }
 
 pub fn shorthand_field_mixed_with_regular_test() {
@@ -227,17 +231,18 @@ pub fn shorthand_field_mixed_with_regular_test() {
     } ",
     )
 
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn shorthand_field_error_if_variable_not_in_scope_test() {
-  helpers.error_module_typecheck(
-    "fn greet(name person: String) -> String { \"Hello, \" <> person }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn greet(name person: String) -> String { \"Hello, \" <> person }
     fn bar() -> String { 
       greet(name:)
     } ",
-  )
-  |> should.equal(error.InvalidName("name"))
+    )
+  assert actual == error.InvalidName("name")
 }
 
 pub fn generic_identity_function_test() {
@@ -247,8 +252,7 @@ pub fn generic_identity_function_test() {
        fn use_identity() -> Int { identity(42) }",
     )
 
-  echo module
-  assertions.should_have_list_length(module.module.functions, 2)
+  assert list.length(module.module.functions) == 2
 }
 
 pub fn generic_function_shorthand_call_test() {
@@ -303,9 +307,10 @@ pub fn mixed_generic_concrete_parameters_test() {
 }
 
 pub fn generic_function_wrong_arity_test() {
-  helpers.error_module_typecheck(
-    "fn identity(x: a) -> a { x }
+  let actual =
+    helpers.error_module_typecheck(
+      "fn identity(x: a) -> a { x }
      fn use_identity() -> Int { identity(42, \"extra\") }",
-  )
-  |> should.equal(error.InvalidArguments("(a)", "(Int, String)"))
+    )
+  assert actual == error.InvalidArguments("(a)", "(Int, String)")
 }

@@ -2,8 +2,6 @@ import glance
 import gleam/dict
 import gleam/list
 import gleam/option
-import gleeunit/should
-import typecheck/assertions
 import typecheck/helpers
 
 pub fn typecheck_single_module_package_test() {
@@ -12,26 +10,24 @@ pub fn typecheck_single_module_package_test() {
       Ok("pub fn main() -> Nil {}")
     })
 
-  let module =
-    package.modules
-    |> dict.get("main_module")
-    |> should.be_ok
+  let assert Ok(module) = dict.get(package.modules, "main_module")
 
-  module.module.functions
-  |> assertions.should_have_list_length(1)
-  |> list.first
-  |> should.be_ok
-  |> should.equal(glance.Definition(
-    [],
-    glance.Function(
-      glance.Span(0, 23),
-      "main",
-      glance.Public,
+  assert list.length(module.module.functions) == 1
+  let assert Ok(function) = list.first(module.module.functions)
+  assert function
+    == glance.Definition(
       [],
-      option.Some(glance.NamedType(glance.Span(17, 20), "Nil", option.None, [])),
-      [],
-    ),
-  ))
+      glance.Function(
+        glance.Span(0, 23),
+        "main",
+        glance.Public,
+        [],
+        option.Some(
+          glance.NamedType(glance.Span(17, 20), "Nil", option.None, []),
+        ),
+        [],
+      ),
+    )
 }
 
 pub fn typecheck_dependent_module_package_test() {

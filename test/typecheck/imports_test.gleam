@@ -1,10 +1,8 @@
 import glance
 import gleam/dict
-import gleeunit/should
 import glimpse
 import glimpse/internal/typecheck/types
 import glimpse/typecheck
-import typecheck/assertions
 import typecheck/helpers
 
 pub fn import_adds_function_to_env_test() {
@@ -12,26 +10,23 @@ pub fn import_adds_function_to_env_test() {
 
   let other_envs = dict.from_list([#("foo", foo_env)])
 
-  let #(_, main_env) =
-    glance.module("import foo")
-    |> should.be_ok
-    |> glimpse.Module("main_module", _, ["foo"])
+  let assert Ok(parsed_module) = glance.module("import foo")
+  let assert Ok(#(_, main_env)) =
+    glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
-    |> should.be_ok
 
-  main_env.definitions
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
-  |> should.equal(types.NamespaceType(
-    dict.from_list([#("bar", types.CallableType([], dict.new(), types.NilType))]),
-    dict.new(),
-  ))
+  assert dict.size(main_env.definitions) == 1
+  let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
+  assert foo_namespace
+    == types.NamespaceType(
+      dict.from_list([
+        #("bar", types.CallableType([], dict.new(), types.NilType)),
+      ]),
+      dict.new(),
+    )
 
-  main_env.import_names
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
+  assert dict.size(main_env.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.import_names, "foo")
 }
 
 pub fn import_no_add_private_function_to_env_test() {
@@ -39,23 +34,17 @@ pub fn import_no_add_private_function_to_env_test() {
 
   let other_envs = dict.from_list([#("foo", foo_env)])
 
-  let #(_, main_env) =
-    glance.module("import foo")
-    |> should.be_ok
-    |> glimpse.Module("main_module", _, ["foo"])
+  let assert Ok(parsed_module) = glance.module("import foo")
+  let assert Ok(#(_, main_env)) =
+    glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
-    |> should.be_ok
 
-  main_env.definitions
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
-  |> should.equal(types.NamespaceType(dict.new(), dict.new()))
+  assert dict.size(main_env.definitions) == 1
+  let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
+  assert foo_namespace == types.NamespaceType(dict.new(), dict.new())
 
-  main_env.import_names
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
+  assert dict.size(main_env.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.import_names, "foo")
 }
 
 pub fn import_adds_variant_to_env_test() {
@@ -63,35 +52,30 @@ pub fn import_adds_variant_to_env_test() {
 
   let other_envs = dict.from_list([#("foo", foo_env)])
 
-  let #(_, main_env) =
-    glance.module("import foo")
-    |> should.be_ok
-    |> glimpse.Module("main_module", _, ["foo"])
+  let assert Ok(parsed_module) = glance.module("import foo")
+  let assert Ok(#(_, main_env)) =
+    glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
-    |> should.be_ok
 
-  main_env.definitions
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
-  |> should.equal(types.NamespaceType(
-    dict.from_list([
-      #(
-        "Foo",
-        types.CallableType(
-          [],
-          dict.new(),
-          types.CustomType("main_module", "Foo"),
+  assert dict.size(main_env.definitions) == 1
+  let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
+  assert foo_namespace
+    == types.NamespaceType(
+      dict.from_list([
+        #(
+          "Foo",
+          types.CallableType(
+            [],
+            dict.new(),
+            types.CustomType("main_module", "Foo"),
+          ),
         ),
-      ),
-    ]),
-    dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
-  ))
+      ]),
+      dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
+    )
 
-  main_env.import_names
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
+  assert dict.size(main_env.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.import_names, "foo")
 }
 
 pub fn import_no_add_private_variant_to_env_test() {
@@ -99,23 +83,17 @@ pub fn import_no_add_private_variant_to_env_test() {
 
   let other_envs = dict.from_list([#("foo", foo_env)])
 
-  let #(_, main_env) =
-    glance.module("import foo")
-    |> should.be_ok
-    |> glimpse.Module("main_module", _, ["foo"])
+  let assert Ok(parsed_module) = glance.module("import foo")
+  let assert Ok(#(_, main_env)) =
+    glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
-    |> should.be_ok
 
-  main_env.definitions
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
-  |> should.equal(types.NamespaceType(dict.from_list([]), dict.new()))
+  assert dict.size(main_env.definitions) == 1
+  let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
+  assert foo_namespace == types.NamespaceType(dict.from_list([]), dict.new())
 
-  main_env.import_names
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
+  assert dict.size(main_env.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.import_names, "foo")
 }
 
 pub fn import_call_function_field_access_test() {
@@ -123,31 +101,30 @@ pub fn import_call_function_field_access_test() {
 
   let other_envs = dict.from_list([#("foo", foo_env)])
 
-  let #(_, main_env) =
+  let assert Ok(glance_module) =
     glance.module(
       "import foo
     pub fn main() -> Nil {
       foo.bar()
     }",
     )
-    |> should.be_ok
-    |> glimpse.Module("main_module", _, ["foo"])
-    |> typecheck.module(other_envs)
-    |> should.be_ok
+  let assert Ok(#(_, main_env)) =
+    typecheck.module(
+      glimpse.Module("main_module", glance_module, ["foo"]),
+      other_envs,
+    )
 
-  main_env.definitions
-  |> assertions.should_have_dict_size(2)
-  |> dict.get("foo")
-  |> should.be_ok
-  |> should.equal(types.NamespaceType(
-    dict.from_list([#("bar", types.CallableType([], dict.new(), types.NilType))]),
-    dict.new(),
-  ))
+  assert dict.size(main_env.definitions) == 2
+  let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
+  assert foo_namespace
+    == types.NamespaceType(
+      dict.from_list([
+        #("bar", types.CallableType([], dict.new(), types.NilType)),
+      ]),
+      dict.new(),
+    )
 
-  main_env.import_names
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
+  assert dict.size(main_env.import_names) == 1
 }
 
 pub fn variant_call_function_field_access_test() {
@@ -155,38 +132,35 @@ pub fn variant_call_function_field_access_test() {
 
   let other_envs = dict.from_list([#("foo", foo_env)])
 
-  let #(_, main_env) =
+  let assert Ok(glance_module) =
     glance.module(
       "import foo
     pub fn main() -> foo.Foo {
     foo.Foo()
     }",
     )
-    |> should.be_ok
-    |> glimpse.Module("main_module", _, ["foo"])
-    |> typecheck.module(other_envs)
-    |> should.be_ok
+  let assert Ok(#(_, main_env)) =
+    typecheck.module(
+      glimpse.Module("main_module", glance_module, ["foo"]),
+      other_envs,
+    )
 
-  main_env.definitions
-  |> assertions.should_have_dict_size(2)
-  |> dict.get("foo")
-  |> should.be_ok
-  |> should.equal(types.NamespaceType(
-    dict.from_list([
-      #(
-        "Foo",
-        types.CallableType(
-          [],
-          dict.new(),
-          types.CustomType("main_module", "Foo"),
+  assert dict.size(main_env.definitions) == 2
+  let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
+  assert foo_namespace
+    == types.NamespaceType(
+      dict.from_list([
+        #(
+          "Foo",
+          types.CallableType(
+            [],
+            dict.new(),
+            types.CustomType("main_module", "Foo"),
+          ),
         ),
-      ),
-    ]),
-    dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
-  ))
+      ]),
+      dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
+    )
 
-  main_env.import_names
-  |> assertions.should_have_dict_size(1)
-  |> dict.get("foo")
-  |> should.be_ok
+  assert dict.size(main_env.import_names) == 1
 }
