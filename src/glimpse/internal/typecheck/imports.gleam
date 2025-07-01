@@ -34,7 +34,7 @@ pub fn fold_import_from_env(
                 let assert Ok(namespace) =
                   string.split(module, "/") |> list.last
 
-                types.add_def_to_env(
+                types.add_or_update_def_in_env(
                   environment,
                   namespace,
                   types.NamespaceType(

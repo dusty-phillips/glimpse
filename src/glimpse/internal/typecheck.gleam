@@ -62,7 +62,8 @@ pub fn statement(
       }
 
       use type_ <- result.try(inferred_type_result)
-      let updated_environment = types.add_def_to_env(environment, name, type_)
+      let updated_environment =
+        types.add_or_update_def_in_env(environment, name, type_)
       Ok(types.EnvState(updated_environment, type_))
     }
     _ -> {
@@ -341,7 +342,7 @@ fn typecheck_function_with_concrete_types(
           let #(param, concrete_type) = param_type
           case param {
             glance.FunctionParameter(name: glance.Named(name), ..) ->
-              Ok(types.add_def_to_env(env, name, concrete_type))
+              Ok(types.add_or_update_def_in_env(env, name, concrete_type))
             _ -> Ok(env)
           }
         }),

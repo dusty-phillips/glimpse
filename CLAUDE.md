@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `gleam test` - Run all tests
 - `gleam build` - Build the project
 - `gleam format` - Format code (if available)
+- Always run `gleam format` after completing a task to ensure the files are formatted correctly
 
 ## Project Overview
 

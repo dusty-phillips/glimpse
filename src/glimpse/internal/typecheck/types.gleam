@@ -46,6 +46,7 @@ pub type Type {
     custom_types: Dict(String, Type),
   )
   GenericTypeVariable(name: String)
+  InferredReturn
 }
 
 pub type TypeResult =
@@ -104,7 +105,7 @@ pub fn new_env(current_module: String) -> Environment {
   )
 }
 
-pub fn add_def_to_env(
+pub fn add_or_update_def_in_env(
   environment: Environment,
   name: String,
   type_: Type,
@@ -240,6 +241,7 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
       <> to_string(environment, return)
     NamespaceType(..) -> "<Namespace>"
     GenericTypeVariable(name) -> name
+    InferredReturn -> ""
   }
 }
 
@@ -279,6 +281,8 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
       )
     NamespaceType(..) -> panic as "Cannot convert namespace to glance"
     GenericTypeVariable(name) -> glance.VariableType(unknown_span, name)
+    InferredReturn ->
+      panic as "InferredReturn should be replaced with actual type before conversion to glance"
   }
 }
 

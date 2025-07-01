@@ -163,3 +163,41 @@ pub fn generic_function_parameter_test() {
       ),
     ))
 }
+
+pub fn implicit_return_type_test() {
+  let #(_, env) = helpers.ok_module_typecheck("fn implicit_int() { 42 }")
+
+  assert dict.size(env.definitions) == 1
+  assert dict.get(env.definitions, "implicit_int")
+    == Ok(types.CallableType([], dict.new(), types.IntType))
+}
+
+pub fn implicit_return_nil_test() {
+  let #(_, env) = helpers.ok_module_typecheck("fn implicit_nil() { Nil }")
+
+  assert dict.get(env.definitions, "implicit_nil")
+    == Ok(types.CallableType([], dict.new(), types.NilType))
+}
+
+pub fn implicit_return_with_params_test() {
+  let #(_, env) = helpers.ok_module_typecheck("fn double(x: Int) { x + x }")
+
+  assert dict.get(env.definitions, "double")
+    == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
+}
+
+pub fn multiple_implicit_returns_test() {
+  let #(_, env) =
+    helpers.ok_module_typecheck(
+      "
+    fn get_int() { 42 }
+    fn get_string() { \"hello\" }
+  ",
+    )
+
+  assert dict.size(env.definitions) == 2
+  assert dict.get(env.definitions, "get_int")
+    == Ok(types.CallableType([], dict.new(), types.IntType))
+  assert dict.get(env.definitions, "get_string")
+    == Ok(types.CallableType([], dict.new(), types.StringType))
+}

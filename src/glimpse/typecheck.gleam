@@ -111,20 +111,26 @@ pub fn module(
 
   use environment <- result.try(function_signature_result)
 
-  // I'm pretty sure functions cannot update the global environment,
-  // so we don't need to reassign it.
-  let functions_result =
+  use functions_env_state <- result.try(
     glimpse_module.module.functions
-    |> list.map(fn(definition) {
-      use updated_function <- result.try(function(
-        environment,
+    |> list.try_fold(types.EnvState(environment, []), fn(env_state, definition) {
+      use function_env_state <- result.try(function(
+        env_state.environment,
         definition.definition,
       ))
-      Ok(glance.Definition(..definition, definition: updated_function))
-    })
-    |> result.all()
+      let updated_definition =
+        glance.Definition(..definition, definition: function_env_state.state)
+      Ok(
+        types.EnvState(function_env_state.environment, [
+          updated_definition,
+          ..env_state.state
+        ]),
+      )
+    }),
+  )
 
-  use functions <- result.try(functions_result)
+  let functions = list.reverse(functions_env_state.state)
+  let environment = functions_env_state.environment
 
   let new_glance_module =
     glance.Module(..glimpse_module.module, functions: functions)
@@ -166,28 +172,33 @@ pub fn custom_type(
 /// Takes a glance function as input and returns the same function, but
 /// with the inferred return type if the original function did not have
 /// a return type. Returns an error if anything in the function doesn't
-/// typecheck.
+/// typecheck. The function signature in the environment may be updated
+/// with an inferred return type.
 pub fn function(
   environment: Environment,
   function: glance.Function,
-) -> error.TypeCheckResult(glance.Function) {
-  use environment <- result.try(list.fold_until(
+) -> types.EnvStateResult(glance.Function) {
+  use function_locals_environment <- result.try(list.fold_until(
     function.parameters,
     Ok(environment),
     functions.fold_function_parameter_into_env,
   ))
 
-  case intern.block(environment, function.body) {
+  case intern.block(function_locals_environment, function.body) {
     Error(err) -> Error(err)
     Ok(block_out) ->
       case function.return {
         option.None -> {
-          Ok(
+          let updated_function =
             glance.Function(
               ..function,
               return: option.Some(types.to_glance(environment, block_out.state)),
-            ),
+            )
+
+          use updated_environment <- result.try(
+            functions.update_function_signature(environment, updated_function),
           )
+          Ok(types.EnvState(updated_environment, updated_function))
         }
         option.Some(expected_type) -> {
           case types.type_(environment, expected_type) {
@@ -198,7 +209,7 @@ pub fn function(
                 types.to_string(environment, block_out.state),
                 types.to_string(environment, expected),
               ))
-            Ok(_) -> Ok(function)
+            Ok(_) -> Ok(types.EnvState(environment, function))
           }
         }
       }

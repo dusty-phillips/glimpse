@@ -39,8 +39,9 @@ pub fn ok_function_env_typecheck(
   definition: String,
 ) -> glance.Function {
   let function = glance_function(definition)
-  let assert Ok(result) = typecheck.function(env, function)
-  result
+  let assert Ok(types.EnvState(_, updated_function)) =
+    typecheck.function(env, function)
+  updated_function
 }
 
 pub fn ok_function_typecheck(definition: String) -> glance.Function {

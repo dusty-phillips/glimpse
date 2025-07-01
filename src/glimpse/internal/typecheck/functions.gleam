@@ -72,6 +72,40 @@ type OrderedFoldState {
   )
 }
 
+/// Update environment with function signature. Non-fold version.
+pub fn update_function_signature(
+  environment: Environment,
+  function: glance.Function,
+) -> EnvironmentResult {
+  use param_state <- result.try(
+    function.parameters
+    |> list.fold_until(
+      Ok(empty_state(environment)),
+      fold_parameter_into_callable,
+    ),
+  )
+
+  let return_type = case function.return {
+    option.None -> Ok(types.InferredReturn)
+    option.Some(glance_return_type) ->
+      types.type_(environment, glance_return_type)
+  }
+
+  use return <- result.try(return_type)
+  let updated_environment =
+    environment
+    |> types.add_or_update_def_in_env(
+      function.name,
+      to_callable_type_with_original(param_state, return, function),
+    )
+
+  case function.publicity {
+    glance.Private -> Ok(updated_environment)
+    glance.Public ->
+      Ok(types.publish_def_in_env(updated_environment, function.name))
+  }
+}
+
 /// Given a glance function signature, inject that signature into the environment definitions as
 /// a callable type. The body is not typechecked at this point.
 /// TODO: Inferring function parameter types
@@ -82,39 +116,7 @@ pub fn function_signature(
   case state {
     Error(error) -> list.Stop(Error(error))
     Ok(environment) ->
-      {
-        use param_state <- result.try(
-          function.parameters
-          |> list.fold_until(
-            Ok(empty_state(environment)),
-            fold_parameter_into_callable,
-          ),
-        )
-
-        let return_result = case function.return {
-          option.None -> todo as "not inferring return values yet"
-          option.Some(glance_return_type) -> {
-            use return <- result.try(types.type_(
-              environment,
-              glance_return_type,
-            ))
-            Ok(
-              environment
-              |> types.add_def_to_env(
-                function.name,
-                to_callable_type_with_original(param_state, return, function),
-              ),
-            )
-          }
-        }
-
-        use environment <- result.try(return_result)
-        case function.publicity {
-          glance.Private -> Ok(environment)
-          glance.Public ->
-            Ok(types.publish_def_in_env(environment, function.name))
-        }
-      }
+      update_function_signature(environment, function)
       |> list.Continue
   }
 }
@@ -185,7 +187,7 @@ pub fn fold_function_parameter_into_env(
             ..,
           ) -> {
             use check_type <- result.try(types.type_(environment, glance_type))
-            Ok(types.add_def_to_env(environment, name, check_type))
+            Ok(types.add_or_update_def_in_env(environment, name, check_type))
           }
         }
       }
@@ -213,7 +215,7 @@ pub fn fold_variant_constructors_into_env(
 
         let environment =
           environment
-          |> types.add_def_to_env(
+          |> types.add_or_update_def_in_env(
             variant.name,
             to_callable_type(
               callable_state,
