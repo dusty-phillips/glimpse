@@ -33,6 +33,21 @@ pub type TypeCheckError {
   InvalidArgumentLabel(expected: String, got: String)
   DuplicateCustomType(name: String)
   InvalidFieldAccess(container: String, label: String)
+  /// Raised when a type is used where a tuple/record/etc is required
+  UnexpectedType(got: String, expected: String)
+  /// Raised when an annotation on a `let` or parameter does not match the
+  /// inferred type
+  InvalidAnnotation(got: String, expected: String, name: String)
+  /// Raised when a case expression's clauses don't all agree on their type
+  CaseClauseMismatch(got: String, expected: String)
+  /// Raised when a pattern expects a type that doesn't match the scrutinee
+  PatternMismatch(pattern: String, expected: String, got: String)
+  /// Raised when the guard of a case clause is not a Bool
+  InvalidGuard(got: String)
+  /// Raised when a function parameter is missing a type annotation
+  MissingParameterAnnotation(name: String)
+  /// Raised when `use` syntax is used with an unsupported number of subjects
+  InvalidUse(subject_count: Int)
 }
 
 pub type TypeCheckResult(a) =
