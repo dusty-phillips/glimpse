@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/result
+import gleam/set
 import glimpse
 import glimpse/error
 import glimpse/internal/import_dependencies
@@ -92,17 +93,37 @@ pub fn module(
 
   use types.EnvState(environment, _) <- result.try(imports_result)
 
-  let custom_type_result =
-    glimpse_module.module.custom_types
-    |> list.fold_until(Ok(environment), fn(state, glance_custom_type) {
-      case state {
-        Error(error) -> list.Stop(Error(error))
-        Ok(environment) ->
-          list.Continue(custom_type(environment, glance_custom_type.definition))
-      }
-    })
+  use environment <- result.try(
+    glimpse_module.module.type_aliases
+    |> list.map(fn(d) { d.definition })
+    |> list.try_fold(environment, type_alias),
+  )
 
-  use environment <- result.try(custom_type_result)
+  use environment <- result.try(
+    glimpse_module.module.custom_types
+    |> list.try_fold(environment, fn(environment, glance_custom_type) {
+      custom_type(environment, glance_custom_type.definition)
+    }),
+  )
+
+  use constants_env_state <- result.try(
+    glimpse_module.module.constants
+    |> list.try_fold(types.EnvState(environment, []), fn(env_state, definition) {
+      use constant_env_state <- result.try(constant(
+        env_state.environment,
+        definition.definition,
+      ))
+      Ok(
+        types.EnvState(constant_env_state.environment, [
+          definition,
+          ..env_state.state
+        ]),
+      )
+    }),
+  )
+
+  let constants = list.reverse(constants_env_state.state)
+  let environment = constants_env_state.environment
 
   let function_signature_result =
     glimpse_module.module.functions
@@ -133,10 +154,33 @@ pub fn module(
   let environment = functions_env_state.environment
 
   let new_glance_module =
-    glance.Module(..glimpse_module.module, functions: functions)
+    glance.Module(
+      ..glimpse_module.module,
+      functions: functions,
+      constants: constants,
+    )
   let new_glimpse_module =
     glimpse.Module(..glimpse_module, module: new_glance_module)
   Ok(#(new_glimpse_module, environment))
+}
+
+/// Register a type alias so that using the alias name in an annotation resolves
+/// to the aliased type.
+pub fn type_alias(
+  environment: Environment,
+  alias: glance.TypeAlias,
+) -> EnvironmentResult {
+  use resolved <- result.try(types.type_(environment, alias.aliased))
+  let environment =
+    types.Environment(
+      ..environment,
+      custom_types: dict.insert(environment.custom_types, alias.name, resolved),
+    )
+  let environment = case alias.publicity {
+    glance.Public -> types.publish_custom_type_in_env(environment, alias.name)
+    glance.Private -> environment
+  }
+  Ok(environment)
 }
 
 /// Update the environment to include the custom type and all its constructors.
@@ -158,15 +202,68 @@ pub fn custom_type(
         glance.Private -> environment
       }
 
-      list.fold_until(
-        custom_type.variants,
-        Ok(types.EnvState(environment, custom_type)),
-        functions.fold_variant_constructors_into_env,
-      )
-      |> result.map(types.extract_env)
+      let environment_result =
+        list.fold_until(
+          custom_type.variants,
+          Ok(types.EnvState(environment, custom_type)),
+          functions.fold_variant_constructors_into_env,
+        )
+        |> result.map(types.extract_env)
+
+      use environment <- result.try(environment_result)
+
+      let environment = case custom_type.opaque_ {
+        True ->
+          list.fold(custom_type.variants, environment, fn(env, variant) {
+            types.Environment(
+              ..env,
+              public_definitions: set.delete(
+                env.public_definitions,
+                variant.name,
+              ),
+            )
+          })
+        False -> environment
+      }
+
+      Ok(environment)
     }
   }
   // TODO: Also add variants
+}
+
+/// Typecheck a module constant's value and register it in the environment.
+pub fn constant(
+  environment: Environment,
+  constant: glance.Constant,
+) -> types.EnvStateResult(glance.Constant) {
+  use value_type <- result.try(intern.expression(environment, constant.value))
+
+  let constant_type = case constant.annotation {
+    option.None -> Ok(value_type)
+    option.Some(annotation) ->
+      types.type_(environment, annotation)
+      |> result.try(fn(annotated) {
+        case annotated == value_type {
+          True -> Ok(annotated)
+          False ->
+            Error(error.InvalidAnnotation(
+              types.to_string(environment, value_type),
+              types.to_string(environment, annotated),
+              constant.name,
+            ))
+        }
+      })
+  }
+
+  use type_ <- result.try(constant_type)
+  let environment =
+    types.add_or_update_def_in_env(environment, constant.name, type_)
+  let environment = case constant.publicity {
+    glance.Public -> types.publish_def_in_env(environment, constant.name)
+    glance.Private -> environment
+  }
+  Ok(types.EnvState(environment, constant))
 }
 
 /// Takes a glance function as input and returns the same function, but
@@ -184,34 +281,37 @@ pub fn function(
     functions.fold_function_parameter_into_env,
   ))
 
-  case intern.block(function_locals_environment, function.body) {
-    Error(err) -> Error(err)
-    Ok(block_out) ->
-      case function.return {
-        option.None -> {
-          let updated_function =
-            glance.Function(
-              ..function,
-              return: option.Some(types.to_glance(environment, block_out.state)),
-            )
+  use block_out <- result.try(intern.block(
+    function_locals_environment,
+    function.body,
+  ))
 
-          use updated_environment <- result.try(
-            functions.update_function_signature(environment, updated_function),
-          )
-          Ok(types.EnvState(updated_environment, updated_function))
-        }
-        option.Some(expected_type) -> {
-          case types.type_(environment, expected_type) {
-            Error(err) -> Error(err)
-            Ok(expected) if expected != block_out.state ->
-              Error(error.InvalidReturnType(
-                function.name,
-                types.to_string(environment, block_out.state),
-                types.to_string(environment, expected),
-              ))
-            Ok(_) -> Ok(types.EnvState(environment, function))
-          }
-        }
+  case function.return {
+    option.None -> {
+      let updated_function =
+        glance.Function(
+          ..function,
+          return: option.Some(types.to_glance(environment, block_out.state)),
+        )
+
+      use updated_environment <- result.try(functions.update_function_signature(
+        environment,
+        updated_function,
+      ))
+      Ok(types.EnvState(updated_environment, updated_function))
+    }
+    option.Some(expected_type) -> {
+      use expected <- result.try(types.type_(environment, expected_type))
+      let store = types.new_type_store()
+      case types.unify(store, environment, block_out.state, expected) {
+        Error(_) ->
+          Error(error.InvalidReturnType(
+            function.name,
+            types.to_string(environment, block_out.state),
+            types.to_string(environment, expected),
+          ))
+        Ok(_) -> Ok(types.EnvState(environment, function))
       }
+    }
   }
 }
