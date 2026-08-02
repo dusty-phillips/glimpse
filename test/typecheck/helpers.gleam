@@ -55,7 +55,9 @@ pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
   error
 }
 
-pub fn ok_module_typecheck(definition: String) -> #(glimpse.Module, Environment) {
+pub fn ok_module_typecheck(
+  definition: String,
+) -> #(glimpse.Module, Environment) {
   let assert Ok(module) = glance.module(definition)
   let assert Ok(result) =
     typecheck.module(glimpse.Module("main_module", module, []), dict.new())

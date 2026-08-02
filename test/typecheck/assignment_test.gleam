@@ -62,7 +62,7 @@ pub fn assign_let_incorrect_type_test() {
     let x: String = 5
   }",
     )
-    == error.InvalidType("Int", "String", "during assignment of x")
+    == error.InvalidAnnotation("Int", "String", "x")
 }
 
 pub fn assign_let_value_error_test() {

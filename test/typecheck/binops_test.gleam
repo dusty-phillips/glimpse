@@ -56,11 +56,12 @@ pub fn bool_eq_test() {
 }
 
 pub fn int_eq_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 1 == 2 }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1 == 2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
@@ -68,7 +69,7 @@ pub fn int_eq_infer_return_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { 1 == 2 }")
 
   assert function_out.return
-    == option.Some(glance.NamedType(unknown_span, "Int", option.None, []))
+    == option.Some(glance.NamedType(unknown_span, "Bool", option.None, []))
 }
 
 pub fn eq_invalid_left_test() {
@@ -82,11 +83,12 @@ pub fn eq_invalid_right_test() {
 }
 
 pub fn int_neq_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 1 != 2 }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1 != 2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
@@ -94,7 +96,7 @@ pub fn int_neq_infer_return_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { 1 != 2 }")
 
   assert function_out.return
-    == option.Some(glance.NamedType(unknown_span, "Int", option.None, []))
+    == option.Some(glance.NamedType(unknown_span, "Bool", option.None, []))
 }
 
 pub fn neq_invalid_left_test() {
