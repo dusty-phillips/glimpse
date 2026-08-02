@@ -1,5 +1,6 @@
 import glance
 import gleam/dict
+import gleam/int
 import gleam/list
 import gleam/option
 import gleam/result
@@ -7,7 +8,7 @@ import gleam/string
 import glimpse/error
 import glimpse/internal/typecheck/types.{
   type EnvStateFold, type EnvStateResult, type Environment, type EnvironmentFold,
-  type EnvironmentResult, type Type,
+  type EnvironmentResult, type Type, type TypeStore,
 }
 
 pub type CallableState {
@@ -15,6 +16,8 @@ pub type CallableState {
     environment: Environment,
     reversed_by_position: List(Type),
     labels: dict.Dict(String, Int),
+    /// Counter for generating unique generic type variable names for unannotated params
+    generic_var_counter: Int,
   )
 }
 
@@ -25,7 +28,7 @@ pub type CallableStateFold =
   error.TypeCheckFold(CallableState)
 
 pub fn empty_state(environment: Environment) -> CallableState {
-  CallableState(environment, [], dict.new())
+  CallableState(environment, [], dict.new(), 0)
 }
 
 pub fn has_generic_types(types: List(Type)) -> Bool {
@@ -82,12 +85,24 @@ pub fn update_function_signature(
     function.parameters
     |> list.fold_until(
       Ok(empty_state(environment)),
-      fold_parameter_into_callable,
+      fold_parameter_into_callable(function.publicity),
     ),
   )
 
   let return_type = case function.return {
-    option.None -> Ok(types.InferredReturn)
+    option.None -> {
+      // If this is a private function with unannotated params (detected by generic vars in params),
+      // use the `todo` wildcard for return. It unifies with anything, so calls to this
+      // function (including recursive calls) can resolve their argument types during the
+      // signature phase. It is replaced with the real return type once the body is checked.
+      case
+        has_generic_types(param_state.reversed_by_position)
+        && function.publicity == glance.Private
+      {
+        True -> Ok(types.GenericTypeVariable("todo"))
+        False -> Ok(types.InferredReturn)
+      }
+    }
     option.Some(glance_return_type) ->
       types.type_(environment, glance_return_type)
   }
@@ -124,19 +139,52 @@ pub fn function_signature(
 
 /// Used when checking the function signature.
 /// Ensures that the types in the signature exist in our environment and maps them
-/// to glimpse Types.
+/// to glimpse Types. Unannotated parameters are permitted for private functions;
+/// they are given a placeholder type that will be replaced with the inferred type
+/// once the body has been checked.
 pub fn fold_parameter_into_callable(
+  publicity: glance.Publicity,
+) -> fn(CallableStateResult, glance.FunctionParameter) -> CallableStateFold {
+  fn(state, param) {
+    fold_parameter_into_callable_inner(state, publicity, param)
+  }
+}
+
+fn fold_parameter_into_callable_inner(
   state: CallableStateResult,
+  publicity: glance.Publicity,
   param: glance.FunctionParameter,
 ) -> CallableStateFold {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(CallableState(environment, reversed_by_position, labels)) ->
+    Ok(CallableState(
+      environment,
+      reversed_by_position,
+      labels,
+      generic_var_counter,
+    )) ->
       case param {
         glance.FunctionParameter(type_: option.None, name: name, ..) ->
-          list.Stop(
-            Error(error.MissingParameterAnnotation(parameter_name(name))),
-          )
+          case publicity {
+            glance.Public ->
+              list.Stop(
+                Error(error.MissingParameterAnnotation(parameter_name(name))),
+              )
+            glance.Private -> {
+              let generic_name = "t" <> int.to_string(generic_var_counter)
+              list.Continue(
+                Ok(CallableState(
+                  environment,
+                  [
+                    types.GenericTypeVariable(generic_name),
+                    ..reversed_by_position
+                  ],
+                  labels,
+                  generic_var_counter + 1,
+                )),
+              )
+            }
+          }
 
         glance.FunctionParameter(
           label: label,
@@ -160,6 +208,7 @@ pub fn fold_parameter_into_callable(
                   environment,
                   [glimpse_type, ..reversed_by_position],
                   labels,
+                  generic_var_counter,
                 )),
               )
             }
@@ -177,20 +226,58 @@ fn parameter_name(name: glance.AssignmentName) -> String {
 
 /// Used when typechceking the function *body*. Adds all parameters to the environment
 /// to be used as a local scope.
+/// Unannotated parameters of private functions are given fresh inference variables,
+/// which are resolved after the body has been checked. Public functions still
+/// require explicit parameter annotations.
+pub type FunctionParamState {
+  FunctionParamState(
+    store: TypeStore,
+    environment: Environment,
+    publicity: glance.Publicity,
+    /// (parameter index, fresh var type) for each parameter whose type was inferred
+    inferred: List(#(Int, Type)),
+  )
+}
+
+pub type FunctionParamStateResult =
+  error.TypeCheckResult(FunctionParamState)
+
+pub type FunctionParamStateFold =
+  error.TypeCheckFold(FunctionParamState)
+
 pub fn fold_function_parameter_into_env(
-  state: EnvironmentResult,
+  state: FunctionParamStateResult,
+  index: Int,
   param: glance.FunctionParameter,
-) -> EnvironmentFold {
+) -> FunctionParamStateFold {
   case state {
     Error(_err) -> list.Stop(state)
-    Ok(environment) ->
+    Ok(FunctionParamState(store, environment, publicity, inferred)) ->
       case param {
-        glance.FunctionParameter(name: glance.Discarded(_), ..) ->
-          list.Continue(Ok(environment))
         glance.FunctionParameter(type_: option.None, name: name, ..) ->
-          list.Stop(
-            Error(error.MissingParameterAnnotation(parameter_name(name))),
-          )
+          case publicity {
+            glance.Public ->
+              list.Stop(
+                Error(error.MissingParameterAnnotation(parameter_name(name))),
+              )
+            glance.Private -> {
+              let #(store, type_) = types.fresh_var(store)
+              let environment = case name {
+                glance.Named(n) ->
+                  types.add_or_update_def_in_env(environment, n, type_)
+                glance.Discarded(_) -> environment
+              }
+              list.Continue(
+                Ok(
+                  FunctionParamState(store, environment, publicity, [
+                    #(index, type_),
+                    ..inferred
+                  ]),
+                ),
+              )
+            }
+          }
+
         glance.FunctionParameter(
           name: glance.Named(name),
           type_: option.Some(glance_type),
@@ -200,9 +287,23 @@ pub fn fold_function_parameter_into_env(
             Error(error) -> list.Stop(Error(error))
             Ok(check_type) ->
               list.Continue(
-                Ok(types.add_or_update_def_in_env(environment, name, check_type)),
+                Ok(FunctionParamState(
+                  store,
+                  types.add_or_update_def_in_env(environment, name, check_type),
+                  publicity,
+                  inferred,
+                )),
               )
           }
+
+        glance.FunctionParameter(
+          name: glance.Discarded(_),
+          type_: option.Some(_),
+          ..,
+        ) ->
+          list.Continue(
+            Ok(FunctionParamState(store, environment, publicity, inferred)),
+          )
       }
   }
 }
@@ -267,7 +368,12 @@ fn fold_variant_field_into_callable(
 ) -> CallableStateFold {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(CallableState(environment, reversed_by_position, labels)) ->
+    Ok(CallableState(
+      environment,
+      reversed_by_position,
+      labels,
+      generic_var_counter,
+    )) ->
       {
         case field {
           glance.LabelledVariantField(item: glance_type, label: label) -> {
@@ -276,6 +382,7 @@ fn fold_variant_field_into_callable(
               environment,
               [glimpse_type, ..reversed_by_position],
               dict.insert(labels, label, reversed_by_position |> list.length),
+              generic_var_counter,
             ))
           }
 
@@ -285,6 +392,7 @@ fn fold_variant_field_into_callable(
               environment,
               [glimpse_type, ..reversed_by_position],
               labels,
+              generic_var_counter,
             ))
           }
         }
