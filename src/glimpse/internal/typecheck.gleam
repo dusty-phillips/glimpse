@@ -10,41 +10,54 @@ import glimpse/error
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/pattern
 import glimpse/internal/typecheck/types.{
-  type Environment, type Type, type TypeResult, type TypeStateResult,
-  type TypeStore,
+  type Environment, type Type, type TypeStore,
 }
 
-/// Typecheck a sequence of statements, threading the environment through each
-/// one. Returns the type of the final statement, or Nil if the block is empty.
+/// Typecheck a sequence of statements, threading the environment and type store
+/// through each one. Returns the type of the final statement, or Nil if the
+/// block is empty.
 pub fn block(
   environment: Environment,
+  store: TypeStore,
   statements: List(glance.Statement),
-) -> TypeStateResult {
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   list.fold_until(
     statements,
-    Ok(types.EnvState(environment, types.NilType)),
+    Ok(#(store, environment, types.NilType)),
     fn(state, stmnt) {
       case state {
         Error(_) -> list.Stop(state)
-        Ok(type_out) -> list.Continue(statement(type_out.environment, stmnt))
+        Ok(#(store, env, _type)) -> list.Continue(statement(env, store, stmnt))
       }
     },
   )
+  |> result.map(fn(state) {
+    let #(store, _env, type_) = state
+    #(store, type_)
+  })
 }
 
-/// Typecheck a single statement, returning the updated environment and the
-/// statement's type.
+/// Typecheck a single statement, returning the updated environment, the
+/// threaded type store, and the statement's type.
 pub fn statement(
   environment: Environment,
+  store: TypeStore,
   statement: glance.Statement,
-) -> TypeStateResult {
+) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
   case statement {
     glance.Expression(expr) ->
-      expression(environment, expr)
-      |> result.map(types.EnvState(environment, _))
+      expression(environment, store, expr)
+      |> result.map(fn(state) {
+        let #(store, type_) = state
+        #(store, environment, type_)
+      })
 
     glance.Assignment(_, kind, pat, annotation, value_expression) -> {
-      let value_type_result = expression(environment, value_expression)
+      use #(store, value_type) <- result.try(expression(
+        environment,
+        store,
+        value_expression,
+      ))
 
       let annotated_type_result = case annotation {
         option.None -> Ok(option.None)
@@ -54,13 +67,11 @@ pub fn statement(
       }
 
       use annotated_type <- result.try(annotated_type_result)
-      use value_type <- result.try(value_type_result)
 
       let checked_type = case annotated_type {
         option.Some(annotated) -> {
-          let store = types.new_type_store()
           types.unify(store, environment, value_type, annotated)
-          |> result.map(fn(_) { annotated })
+          |> result.map(fn(store) { #(store, annotated) })
           |> result.map_error(fn(_) {
             error.InvalidAnnotation(
               types.to_string(environment, value_type),
@@ -69,36 +80,42 @@ pub fn statement(
             )
           })
         }
-        option.None -> Ok(value_type)
+        option.None -> Ok(#(store, value_type))
       }
 
-      use type_ <- result.try(checked_type)
+      use #(store, type_) <- result.try(checked_type)
 
       case kind {
         glance.Let -> {
-          use env <- result.try(pattern.typecheck_pattern(
+          use #(store, env) <- result.try(pattern.typecheck_pattern(
             environment,
+            store,
             type_,
             pat,
           ))
-          Ok(types.EnvState(env, type_))
+          Ok(#(store, env, type_))
         }
         glance.LetAssert(_) -> {
-          use env <- result.try(pattern.typecheck_pattern(
+          use #(store, env) <- result.try(pattern.typecheck_pattern(
             environment,
+            store,
             type_,
             pat,
           ))
-          Ok(types.EnvState(env, types.NilType))
+          Ok(#(store, env, types.NilType))
         }
       }
     }
 
     glance.Assert(_, expression_, _message) -> {
-      use type_ <- result.try(expression(environment, expression_))
-      case type_ {
-        types.BoolType -> Ok(types.EnvState(environment, types.NilType))
-        _ ->
+      use #(store, type_) <- result.try(expression(
+        environment,
+        store,
+        expression_,
+      ))
+      case types.unify(store, environment, type_, types.BoolType) {
+        Ok(store) -> Ok(#(store, environment, types.NilType))
+        Error(_) ->
           Error(error.InvalidType(
             types.to_string(environment, type_),
             "Bool",
@@ -108,7 +125,7 @@ pub fn statement(
     }
 
     glance.Use(_, patterns, function_expr) ->
-      use_statement(environment, patterns, function_expr)
+      use_statement(environment, store, patterns, function_expr)
   }
 }
 
@@ -125,13 +142,14 @@ fn type_name(pat: glance.Pattern) -> String {
 /// The result of the use expression is the return type of that inner function.
 fn use_statement(
   environment: Environment,
+  store: TypeStore,
   patterns: List(glance.UsePattern),
   function_expr: glance.Expression,
-) -> TypeStateResult {
+) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
   case function_expr {
     glance.Call(_, target, arguments) ->
-      use_call(environment, patterns, target, arguments)
-    _ -> use_statement_with_type(environment, patterns, function_expr)
+      use_call(environment, store, patterns, target, arguments)
+    _ -> use_statement_with_type(environment, store, patterns, function_expr)
   }
 }
 
@@ -141,22 +159,30 @@ fn use_statement(
 /// `use` expression provides.
 fn use_call(
   environment: Environment,
+  store: TypeStore,
   patterns: List(glance.UsePattern),
   target: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
-) -> TypeStateResult {
-  use glimpse_target <- result.try(expression(environment, target))
-  use argument_fields <- result.try(
-    arguments |> list.map(call_field(environment, _)) |> result.all,
-  )
+) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
+  use #(store, glimpse_target) <- result.try(expression(
+    environment,
+    store,
+    target,
+  ))
+  use #(store, argument_fields) <- result.try(fold_fields(
+    environment,
+    store,
+    arguments,
+  ))
 
   case glimpse_target {
     types.CallableType(..) | types.GenericCallableType(..) -> {
       let #(store, parameters, labels, _) =
-        types.instantiate_callable(types.new_type_store(), glimpse_target)
+        types.instantiate_callable(store, glimpse_target)
 
-      use types.EnvState(env, callback_return) <- result.try(fold_use_patterns(
+      use #(store, env, callback_return) <- result.try(fold_use_patterns(
         environment,
+        store,
         patterns,
         parameters,
       ))
@@ -191,8 +217,9 @@ fn use_call(
 
       use store <- result.try(store_result)
 
-      let #(_, resolved_callback_return) = types.resolve(store, callback_return)
-      Ok(types.EnvState(env, types.generalise(store, resolved_callback_return)))
+      let #(store, generalised) =
+        types.resolve_and_generalise(store, callback_return)
+      Ok(#(store, env, generalised))
     }
     _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
@@ -203,15 +230,20 @@ fn use_call(
 /// a callable taking the use patterns plus a callback.
 fn use_statement_with_type(
   environment: Environment,
+  store: TypeStore,
   patterns: List(glance.UsePattern),
   function_expr: glance.Expression,
-) -> TypeStateResult {
-  use target_type <- result.try(expression(environment, function_expr))
+) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
+  use #(store, target_type) <- result.try(expression(
+    environment,
+    store,
+    function_expr,
+  ))
 
   case target_type {
     types.CallableType(parameters, _, _)
     | types.GenericCallableType(parameters, _, _, _) ->
-      fold_use_patterns(environment, patterns, parameters)
+      fold_use_patterns(environment, store, patterns, parameters)
     _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
   }
 }
@@ -222,9 +254,10 @@ fn use_statement_with_type(
 /// callback's parameter types.
 fn fold_use_patterns(
   environment: Environment,
+  store: TypeStore,
   patterns: List(glance.UsePattern),
   parameters: List(types.Type),
-) -> TypeStateResult {
+) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
   case list.length(parameters) == list.length(patterns) + 1 {
     False -> Error(error.InvalidUse(list.length(patterns)))
     True -> {
@@ -247,13 +280,17 @@ fn fold_use_patterns(
         True ->
           list.try_fold(
             list.zip(patterns, callback_params),
-            environment,
-            fn(env, pair) {
+            #(store, environment),
+            fn(state, pair) {
+              let #(store, env) = state
               let #(use_pattern, type_) = pair
-              pattern.typecheck_pattern(env, type_, use_pattern.pattern)
+              pattern.typecheck_pattern(env, store, type_, use_pattern.pattern)
             },
           )
-          |> result.map(fn(env) { types.EnvState(env, callback_return) })
+          |> result.map(fn(state) {
+            let #(store, env) = state
+            #(store, env, callback_return)
+          })
       }
     }
   }
@@ -262,58 +299,71 @@ fn fold_use_patterns(
 /// Typecheck an expression and return its type.
 pub fn expression(
   environment: Environment,
+  store: TypeStore,
   expr: glance.Expression,
-) -> TypeResult {
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   case expr {
-    glance.Int(_, _) -> Ok(types.IntType)
-    glance.Float(_, _) -> Ok(types.FloatType)
-    glance.String(_, _) -> Ok(types.StringType)
-    glance.Variable(_, "Nil") -> Ok(types.NilType)
+    glance.Int(_, _) -> Ok(#(store, types.IntType))
+    glance.Float(_, _) -> Ok(#(store, types.FloatType))
+    glance.String(_, _) -> Ok(#(store, types.StringType))
+    glance.Variable(_, "Nil") -> Ok(#(store, types.NilType))
     glance.Variable(_, "True") | glance.Variable(_, "False") ->
-      Ok(types.BoolType)
-    glance.Variable(_, name) -> types.lookup_variable_type(environment, name)
+      Ok(#(store, types.BoolType))
+    glance.Variable(_, name) ->
+      types.lookup_variable_type(environment, name)
+      |> result.map(fn(type_) { #(store, type_) })
 
-    glance.NegateInt(_, int_expr) ->
-      expression(environment, int_expr)
-      |> result.try(fn(got) {
-        case got {
-          types.IntType -> Ok(types.IntType)
-          _ ->
-            Error(error.InvalidType(
-              types.to_string(environment, got),
-              "Int",
-              "- can only negate Int",
-            ))
-        }
-      })
+    glance.NegateInt(_, int_expr) -> {
+      use #(store, got) <- result.try(expression(environment, store, int_expr))
+      case types.unify(store, environment, got, types.IntType) {
+        Ok(store) -> Ok(#(store, types.IntType))
+        Error(_) ->
+          Error(error.InvalidType(
+            types.to_string(environment, got),
+            "Int",
+            "- can only negate Int",
+          ))
+      }
+    }
 
-    glance.NegateBool(_, bool_expr) ->
-      expression(environment, bool_expr)
-      |> result.try(fn(got) {
-        case got {
-          types.BoolType -> Ok(types.BoolType)
-          _ ->
-            Error(error.InvalidType(
-              types.to_string(environment, got),
-              "Bool",
-              "! can only negate Bool",
-            ))
-        }
-      })
+    glance.NegateBool(_, bool_expr) -> {
+      use #(store, got) <- result.try(expression(environment, store, bool_expr))
+      case types.unify(store, environment, got, types.BoolType) {
+        Ok(store) -> Ok(#(store, types.BoolType))
+        Error(_) ->
+          Error(error.InvalidType(
+            types.to_string(environment, got),
+            "Bool",
+            "! can only negate Bool",
+          ))
+      }
+    }
 
-    glance.Block(_, statements) ->
-      block(environment, statements)
-      |> result.map(fn(state) { state.state })
+    glance.Block(_, statements) -> block(environment, store, statements)
 
-    glance.Panic(_, _) -> Ok(types.GenericTypeVariable("todo"))
-    glance.Todo(_, _) -> Ok(types.GenericTypeVariable("todo"))
+    glance.Panic(_, _) -> Ok(#(store, types.GenericTypeVariable("todo")))
+    glance.Todo(_, _) -> Ok(#(store, types.GenericTypeVariable("todo")))
 
-    glance.Tuple(_, elements) ->
-      list.try_map(elements, expression(environment, _))
-      |> result.map(types.TupleType)
+    glance.Tuple(_, elements) -> {
+      use #(store, types_rev) <- result.try(
+        list.try_fold(elements, #(store, []), fn(state, element) {
+          let #(store, reversed) = state
+          expression(environment, store, element)
+          |> result.map(fn(state) {
+            let #(store, type_) = state
+            #(store, [type_, ..reversed])
+          })
+        }),
+      )
+      Ok(#(store, types.TupleType(list.reverse(types_rev))))
+    }
 
     glance.TupleIndex(_, tuple_expr, index) -> {
-      use tuple_type <- result.try(expression(environment, tuple_expr))
+      use #(store, tuple_type) <- result.try(expression(
+        environment,
+        store,
+        tuple_expr,
+      ))
       case tuple_type {
         types.TupleType(elements) ->
           list.drop(elements, up_to: index)
@@ -322,26 +372,47 @@ pub fn expression(
             types.to_string(environment, tuple_type),
             "a tuple with an element at index " <> int.to_string(index),
           ))
-        _ ->
-          Error(error.UnexpectedType(
-            types.to_string(environment, tuple_type),
-            "a tuple",
-          ))
+          |> result.map(fn(element) { #(store, element) })
+        _ -> {
+          let #(store, elements) = fresh_tuple_elements(store, index + 1)
+          case
+            types.unify(
+              store,
+              environment,
+              tuple_type,
+              types.TupleType(elements),
+            )
+          {
+            Ok(store) -> {
+              let element =
+                list.drop(elements, up_to: index)
+                |> list.first
+                |> result.unwrap(types.GenericTypeVariable("todo"))
+              Ok(#(store, element))
+            }
+            Error(_) ->
+              Error(error.UnexpectedType(
+                types.to_string(environment, tuple_type),
+                "a tuple",
+              ))
+          }
+        }
       }
     }
 
     glance.List(_, elements, rest) ->
-      list_expression(environment, elements, rest)
+      list_expression(environment, store, elements, rest)
 
     glance.Fn(_, arguments, return_annotation, body) ->
-      fn_literal(environment, arguments, return_annotation, body)
+      fn_literal(environment, store, arguments, return_annotation, body)
 
     glance.RecordUpdate(_, module, constructor, record, fields) ->
-      record_update(environment, module, constructor, record, fields)
+      record_update(environment, store, module, constructor, record, fields)
 
     glance.FieldAccess(_, container, label) -> {
-      use container_expression_type <- result.try(expression(
+      use #(store, container_expression_type) <- result.try(expression(
         environment,
+        store,
         container,
       ))
       case container_expression_type {
@@ -349,6 +420,7 @@ pub fn expression(
           nested_defs
           |> dict.get(label)
           |> result.replace_error(error.InvalidName(label))
+          |> result.map(fn(type_) { #(store, type_) })
         type_ ->
           Error(error.InvalidFieldAccess(
             types.to_string(environment, type_),
@@ -357,49 +429,66 @@ pub fn expression(
       }
     }
 
-    glance.Call(_, target, arguments) -> call(environment, target, arguments)
+    glance.Call(_, target, arguments) ->
+      call(environment, store, target, arguments)
 
     glance.BinaryOperator(_, operator, left, right) ->
-      binop(environment, operator, left, right)
+      binop(environment, store, operator, left, right)
 
     glance.BitString(_, segments) -> {
-      list.try_map(segments, fn(segment) {
-        let #(value_expr, _options) = segment
-        expression(environment, value_expr)
-      })
-      |> result.map(fn(_) { types.BitArrayType })
+      use #(store, _) <- result.try(
+        list.try_fold(segments, #(store, Nil), fn(state, segment) {
+          let #(store, _) = state
+          let #(value_expr, _options) = segment
+          expression(environment, store, value_expr)
+          |> result.map(fn(state) {
+            let #(store, _type) = state
+            #(store, Nil)
+          })
+        }),
+      )
+      Ok(#(store, types.BitArrayType))
     }
 
     glance.Case(_, subjects, clauses) ->
-      case_expression(environment, subjects, clauses)
+      case_expression(environment, store, subjects, clauses)
 
     glance.Echo(_, message) -> {
       case message {
-        option.None -> Ok(types.NilType)
-        option.Some(message_expr) ->
-          expression(environment, message_expr)
-          |> result.map(fn(_) { types.NilType })
+        option.None -> Ok(#(store, types.NilType))
+        option.Some(message_expr) -> {
+          use #(store, _) <- result.try(expression(
+            environment,
+            store,
+            message_expr,
+          ))
+          Ok(#(store, types.NilType))
+        }
       }
     }
 
     glance.FnCapture(_, label, function, arguments_before, arguments_after) -> {
-      use target_type <- result.try(expression(environment, function))
+      use #(store, target_type) <- result.try(expression(
+        environment,
+        store,
+        function,
+      ))
 
       case target_type {
         types.CallableType(..) | types.GenericCallableType(..) -> {
           let #(store, parameters, labels, return) =
-            types.instantiate_callable(types.new_type_store(), target_type)
+            types.instantiate_callable(store, target_type)
 
-          use typed_before <- result.try(
-            arguments_before
-            |> list.map(call_field(environment, _))
-            |> result.all,
-          )
-          use typed_after <- result.try(
-            arguments_after
-            |> list.map(call_field(environment, _))
-            |> result.all,
-          )
+          use #(store, typed_before) <- result.try(fold_fields(
+            environment,
+            store,
+            arguments_before,
+          ))
+          use #(store, typed_after) <- result.try(fold_fields(
+            environment,
+            store,
+            arguments_after,
+          ))
 
           fn_capture(
             environment,
@@ -418,23 +507,44 @@ pub fn expression(
   }
 }
 
+fn fresh_tuple_elements(
+  store: TypeStore,
+  count: Int,
+) -> #(TypeStore, List(Type)) {
+  case count {
+    0 -> #(store, [])
+    _ -> {
+      let #(store, rest) = fresh_tuple_elements(store, count - 1)
+      let #(store, var_) = types.fresh_var(store)
+      #(store, [var_, ..rest])
+    }
+  }
+}
+
 /// Typecheck a list literal. All elements must unify to the same element type;
 /// the rest (if present) must be a list of that same element type.
 fn list_expression(
   environment: Environment,
+  store: TypeStore,
   elements: List(glance.Expression),
   rest: option.Option(glance.Expression),
-) -> TypeResult {
-  use element_types <- result.try(
-    list.try_map(elements, expression(environment, _)),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, element_types) <- result.try(
+    list.try_fold(elements, #(store, []), fn(state, element) {
+      let #(store, reversed) = state
+      expression(environment, store, element)
+      |> result.map(fn(state) {
+        let #(store, type_) = state
+        #(store, [type_, ..reversed])
+      })
+    }),
   )
-
-  let store = types.new_type_store()
+  let element_types = list.reverse(element_types)
 
   let element_type_result = case elements {
     [] -> {
       case rest {
-        option.None -> Ok(types.GenericTypeVariable("todo"))
+        option.None -> Ok(#(store, types.GenericTypeVariable("todo")))
         option.Some(_) ->
           Error(error.InvalidType("unknown", "List", "empty list with rest"))
       }
@@ -445,22 +555,32 @@ fn list_expression(
           list.try_fold(rest_types, store, fn(store, element_type) {
             types.unify(store, environment, first, element_type)
           })
-          |> result.map(fn(_) { first })
+          |> result.map(fn(store) { #(store, first) })
         [] -> Error(error.InvalidType("unknown", "List", "empty element types"))
       }
   }
 
-  use element_type <- result.try(element_type_result)
+  use #(store, element_type) <- result.try(element_type_result)
 
-  let element_type = case rest {
-    option.None -> Ok(element_type)
+  case rest {
+    option.None -> Ok(#(store, types.ListType(element_type)))
     option.Some(rest_expr) -> {
-      use rest_type <- result.try(expression(environment, rest_expr))
+      use #(store, rest_type) <- result.try(expression(
+        environment,
+        store,
+        rest_expr,
+      ))
       case rest_type {
         types.ListType(rest_element) -> {
-          let store = types.new_type_store()
-          types.unify(store, environment, element_type, rest_element)
-          |> result.map(fn(_) { element_type })
+          case types.unify(store, environment, element_type, rest_element) {
+            Ok(store) -> Ok(#(store, types.ListType(element_type)))
+            Error(_) ->
+              Error(error.InvalidType(
+                types.to_string(environment, rest_type),
+                "List(" <> types.to_string(environment, element_type) <> ")",
+                "list rest must be a list",
+              ))
+          }
         }
         _ ->
           Error(error.InvalidType(
@@ -471,76 +591,108 @@ fn list_expression(
       }
     }
   }
-
-  use element_type <- result.try(element_type)
-  Ok(types.ListType(element_type))
 }
 
-/// Typecheck a function literal. Parameters must be annotated (Gleam requires
-/// annotations on anonymous function parameters). Returns a CallableType.
+/// Typecheck a function literal. Parameters without annotations are inferred
+/// from their use within the body. Returns a CallableType.
 fn fn_literal(
   environment: Environment,
+  store: TypeStore,
   arguments: List(glance.FnParameter),
   return_annotation: option.Option(glance.Type),
   body: List(glance.Statement),
-) -> TypeResult {
-  use param_types <- result.try(
-    list.try_map(arguments, fn(param) {
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, param_types) <- result.try(
+    list.try_fold(arguments, #(store, []), fn(state, param) {
+      let #(store, reversed) = state
       case param {
         glance.FnParameter(_, type_: option.Some(annotation)) ->
           types.type_(environment, annotation)
-        glance.FnParameter(_, type_: option.None) ->
-          Error(error.MissingParameterAnnotation("anonymous function"))
+          |> result.map(fn(type_) { #(store, [type_, ..reversed]) })
+        glance.FnParameter(_, type_: option.None) -> {
+          let #(store, type_) = types.fresh_var(store)
+          Ok(#(store, [type_, ..reversed]))
+        }
       }
     }),
   )
+  let param_types = list.reverse(param_types)
 
-  use param_env <- result.try(
-    list.try_fold(list.zip(arguments, param_types), environment, fn(env, pair) {
-      let #(param, type_) = pair
-      case param {
-        glance.FnParameter(glance.Named(name), _) ->
-          Ok(types.add_or_update_def_in_env(env, name, type_))
-        glance.FnParameter(glance.Discarded(_), _) -> Ok(env)
-      }
-    }),
+  use #(store, param_env) <- result.try(
+    list.try_fold(
+      list.zip(arguments, param_types),
+      #(store, environment),
+      fn(state, pair) {
+        let #(store, env) = state
+        let #(param, type_) = pair
+        case param {
+          glance.FnParameter(glance.Named(name), _) ->
+            Ok(#(store, types.add_or_update_def_in_env(env, name, type_)))
+          glance.FnParameter(glance.Discarded(_), _) -> Ok(#(store, env))
+        }
+      },
+    ),
   )
 
-  use body_out <- result.try(block(param_env, body))
+  use #(store, inferred_return) <- result.try(block(param_env, store, body))
 
-  let inferred_return = body_out.state
-
-  let return_type_result = case return_annotation {
-    option.None -> Ok(inferred_return)
+  use #(store, return_type) <- result.try(case return_annotation {
+    option.None -> Ok(#(store, inferred_return))
     option.Some(annotation) -> {
       use annotated <- result.try(types.type_(environment, annotation))
-      let store = types.new_type_store()
-      types.unify(store, environment, inferred_return, annotated)
-      |> result.map(fn(_) { annotated })
-      |> result.map_error(fn(_) {
-        error.InvalidReturnType(
-          "anonymous function",
-          types.to_string(environment, inferred_return),
-          types.to_string(environment, annotated),
-        )
-      })
+      case types.unify(store, environment, inferred_return, annotated) {
+        Ok(store) -> {
+          let #(_, resolved) = types.resolve(store, annotated)
+          Ok(#(store, resolved))
+        }
+        Error(_) ->
+          Error(error.InvalidReturnType(
+            "anonymous function",
+            types.to_string(environment, inferred_return),
+            types.to_string(environment, annotated),
+          ))
+      }
     }
-  }
+  })
 
-  use return_type <- result.try(return_type_result)
-  Ok(types.CallableType(param_types, dict.new(), return_type))
+  let generalised =
+    types.generalise(
+      store,
+      types.CallableType(param_types, dict.new(), return_type),
+    )
+
+  Ok(
+    #(store, case generalised {
+      types.CallableType(parameters, labels, return) ->
+        case
+          functions.has_generic_types(parameters)
+          || functions.is_generic_type(return)
+        {
+          True ->
+            types.GenericCallableType(
+              parameters,
+              labels,
+              return,
+              functions.dummy_function(),
+            )
+          False -> generalised
+        }
+      other -> other
+    }),
+  )
 }
 
 /// Typecheck a record update expression (`Type(..record, field: value)`).
 /// The record must already be bound to a variable of the custom type.
 fn record_update(
   environment: Environment,
+  store: TypeStore,
   module: option.Option(String),
   constructor: String,
   record: glance.Expression,
   fields: List(glance.RecordUpdateField(glance.Expression)),
-) -> TypeResult {
-  use record_type <- result.try(expression(environment, record))
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, record_type) <- result.try(expression(environment, store, record))
 
   let constructor_lookup = case module {
     option.None ->
@@ -561,7 +713,7 @@ fn record_update(
   case constructor_type {
     types.CallableType(..) | types.GenericCallableType(..) -> {
       let #(store, parameters, labels, constructor_return) =
-        types.instantiate_callable(types.new_type_store(), constructor_type)
+        types.instantiate_callable(store, constructor_type)
 
       use store <- result.try(types.unify(
         store,
@@ -570,7 +722,8 @@ fn record_update(
         constructor_return,
       ))
 
-      list.try_fold(fields, environment, fn(env, field) {
+      list.try_fold(fields, #(store, environment), fn(state, field) {
+        let #(store, env) = state
         dict.get(labels, field.label)
         |> result.map_error(fn(_) {
           error.InvalidFieldAccess(
@@ -586,12 +739,15 @@ fn record_update(
           let #(_, expected_type) = types.resolve(store, expected_type)
           let expected_type = types.generalise(store, expected_type)
           case field.item {
-            option.None -> Ok(env)
+            option.None -> Ok(#(store, env))
             option.Some(value_expr) -> {
-              use value_type <- result.try(expression(env, value_expr))
-              let store = types.new_type_store()
+              use #(store, value_type) <- result.try(expression(
+                env,
+                store,
+                value_expr,
+              ))
               types.unify(store, env, value_type, expected_type)
-              |> result.map(fn(_) { env })
+              |> result.map(fn(store) { #(store, env) })
               |> result.map_error(fn(_) {
                 error.InvalidType(
                   types.to_string(env, value_type),
@@ -603,7 +759,10 @@ fn record_update(
           }
         })
       })
-      |> result.map(fn(_) { record_type })
+      |> result.map(fn(state) {
+        let #(store, _env) = state
+        #(store, record_type)
+      })
     }
     _ ->
       Error(error.NotCallable(types.to_string(environment, constructor_type)))
@@ -615,34 +774,44 @@ fn record_update(
 /// type, which is the type of the whole expression.
 fn case_expression(
   environment: Environment,
+  store: TypeStore,
   subjects: List(glance.Expression),
   clauses: List(glance.Clause),
-) -> TypeResult {
-  use subject_types <- result.try(
-    list.try_map(subjects, expression(environment, _)),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, subject_types) <- result.try(
+    list.try_fold(subjects, #(store, []), fn(state, subject) {
+      let #(store, reversed) = state
+      expression(environment, store, subject)
+      |> result.map(fn(state) {
+        let #(store, type_) = state
+        #(store, [type_, ..reversed])
+      })
+    }),
   )
+  let subject_types = list.reverse(subject_types)
 
   case clauses {
     [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
     [first_clause, ..] -> {
-      use first_body_type <- result.try(clause_body_type(
+      use #(store, first_body_type) <- result.try(clause_body_type(
         environment,
+        store,
         subject_types,
         first_clause,
       ))
 
       let remaining_types =
         list.map(list.drop(clauses, up_to: 1), fn(clause) {
-          clause_body_type(environment, subject_types, clause)
+          clause_body_type(environment, store, subject_types, clause)
         })
 
       result.all(remaining_types)
-      |> result.try(fn(clause_types) {
-        let store = types.new_type_store()
+      |> result.try(fn(clause_states) {
+        let clause_types = list.map(clause_states, fn(state) { state.1 })
         list.try_fold(clause_types, store, fn(store, clause_type) {
           types.unify(store, environment, first_body_type, clause_type)
         })
-        |> result.map(fn(_) { first_body_type })
+        |> result.map(fn(store) { #(store, first_body_type) })
       })
     }
   }
@@ -650,30 +819,34 @@ fn case_expression(
 
 fn clause_body_type(
   environment: Environment,
+  store: TypeStore,
   subject_types: List(Type),
   clause: glance.Clause,
-) -> TypeResult {
-  use pattern_env <- result.try(
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, pattern_env) <- result.try(
     list.try_fold(
       list.zip(subject_types, clause.patterns),
-      environment,
-      fn(env, pair) {
+      #(store, environment),
+      fn(state, pair) {
+        let #(store, env) = state
         let #(subject_type, patterns) = pair
-        list.try_fold(patterns, env, fn(env, pattern) {
-          pattern.typecheck_pattern(env, subject_type, pattern)
+        list.try_fold(patterns, #(store, env), fn(state, pattern) {
+          let #(store, env) = state
+          pattern.typecheck_pattern(env, store, subject_type, pattern)
         })
       },
     ),
   )
 
-  use guard_type <- result.try(case clause.guard {
-    option.None -> Ok(types.BoolType)
-    option.Some(guard_expr) -> expression(pattern_env, guard_expr)
+  use #(store, guard_type) <- result.try(case clause.guard {
+    option.None -> Ok(#(store, types.BoolType))
+    option.Some(guard_expr) -> expression(pattern_env, store, guard_expr)
   })
 
-  case guard_type {
-    types.BoolType -> expression(pattern_env, clause.body)
-    _ -> Error(error.InvalidGuard(types.to_string(pattern_env, guard_type)))
+  case types.unify(store, pattern_env, guard_type, types.BoolType) {
+    Ok(store) -> expression(pattern_env, store, clause.body)
+    Error(_) ->
+      Error(error.InvalidGuard(types.to_string(pattern_env, guard_type)))
   }
 }
 
@@ -684,22 +857,26 @@ fn clause_body_type(
 /// generalised back to named generic variables.
 pub fn call(
   environment: Environment,
+  store: TypeStore,
   target: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
-) -> TypeResult {
-  let glimpse_argument_fields_result =
-    arguments
-    |> list.map(call_field(environment, _))
-    |> result.all
-
-  use glimpse_target <- result.try(expression(environment, target))
-  use glimpse_argument_fields <- result.try(glimpse_argument_fields_result)
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, glimpse_target) <- result.try(expression(
+    environment,
+    store,
+    target,
+  ))
+  use #(store, glimpse_argument_fields) <- result.try(fold_fields(
+    environment,
+    store,
+    arguments,
+  ))
 
   case glimpse_target {
     types.CallableType(target_arguments, _, _)
     | types.GenericCallableType(target_arguments, _, _, _) -> {
       let #(store, parameters, labels, return) =
-        types.instantiate_callable(types.new_type_store(), glimpse_target)
+        types.instantiate_callable(store, glimpse_target)
 
       use positioned_arguments <- result.try(functions.order_call_arguments(
         environment,
@@ -729,8 +906,7 @@ pub fn call(
 
       use store <- result.try(store_result)
 
-      let #(_, resolved_return) = types.resolve(store, return)
-      Ok(types.generalise(store, resolved_return))
+      Ok(types.resolve_and_generalise(store, return))
     }
     _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
@@ -758,7 +934,7 @@ fn fn_capture(
   hole_label: option.Option(String),
   typed_before: List(glance.Field(Type)),
   typed_after: List(glance.Field(Type)),
-) -> TypeResult {
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   let parameter_count = list.length(parameters)
   let all_fields = list.append(typed_before, typed_after)
   let provided_types = list.map(all_fields, field_type)
@@ -863,23 +1039,25 @@ fn fn_capture(
           ),
         )
 
-      Ok(case generalised {
-        types.CallableType(parameters, labels, return) ->
-          case
-            functions.has_generic_types(parameters)
-            || functions.is_generic_type(return)
-          {
-            True ->
-              types.GenericCallableType(
-                parameters,
-                labels,
-                return,
-                functions.dummy_function(),
-              )
-            False -> generalised
-          }
-        other -> other
-      })
+      Ok(
+        #(store, case generalised {
+          types.CallableType(parameters, labels, return) ->
+            case
+              functions.has_generic_types(parameters)
+              || functions.is_generic_type(return)
+            {
+              True ->
+                types.GenericCallableType(
+                  parameters,
+                  labels,
+                  return,
+                  functions.dummy_function(),
+                )
+              False -> generalised
+            }
+          other -> other
+        }),
+      )
     }
   }
 }
@@ -959,65 +1137,94 @@ fn too_many_arguments(
   )
 }
 
+/// Typecheck each call argument, threading the store through the argument
+/// expressions.
+fn fold_fields(
+  environment: Environment,
+  store: TypeStore,
+  fields: List(glance.Field(glance.Expression)),
+) -> error.TypeCheckResult(#(TypeStore, List(glance.Field(types.Type)))) {
+  list.try_fold(fields, #(store, []), fn(state, field) {
+    let #(store, reversed) = state
+    call_field(environment, store, field)
+    |> result.map(fn(state) {
+      let #(store, field) = state
+      #(store, [field, ..reversed])
+    })
+  })
+  |> result.map(fn(state) {
+    let #(store, fields) = state
+    #(store, list.reverse(fields))
+  })
+}
+
 pub fn call_field(
   environment: Environment,
+  store: TypeStore,
   field: glance.Field(glance.Expression),
-) -> error.TypeCheckResult(glance.Field(types.Type)) {
+) -> error.TypeCheckResult(#(TypeStore, glance.Field(types.Type))) {
   case field {
     glance.LabelledField(label, arg_expr) ->
-      expression(environment, arg_expr)
-      |> result.map(glance.LabelledField(label, _))
+      expression(environment, store, arg_expr)
+      |> result.map(fn(state) {
+        let #(store, type_) = state
+        #(store, glance.LabelledField(label, type_))
+      })
     glance.UnlabelledField(arg_expr) ->
-      expression(environment, arg_expr)
-      |> result.map(glance.UnlabelledField)
+      expression(environment, store, arg_expr)
+      |> result.map(fn(state) {
+        let #(store, type_) = state
+        #(store, glance.UnlabelledField(type_))
+      })
     glance.ShorthandField(label) ->
       types.lookup_variable_type(environment, label)
-      |> result.map(glance.LabelledField(label, _))
+      |> result.map(fn(type_) { #(store, glance.LabelledField(label, type_)) })
   }
 }
 
-/// Typecheck a binary operator expression. Equality operators return Bool
-/// (after unifying both operands); Pipe is handled specially.
+/// Typecheck a binary operator expression. Operands are unified against the
+/// expected operand type so that unannotated values (e.g. inferred function
+/// parameters) are constrained by their use.
 pub fn binop(
   environment: Environment,
+  store: TypeStore,
   operator: glance.BinaryOperator,
   left: glance.Expression,
   right: glance.Expression,
-) -> TypeResult {
-  // TODO: I have a feeling precedence matters here. ;-)
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   case operator {
-    glance.Pipe -> pipe(environment, left, right)
+    glance.Pipe -> pipe(environment, store, left, right)
     _ -> {
-      use left_type <- result.try(expression(environment, left))
-      use right_type <- result.try(expression(environment, right))
+      use #(store, left_type) <- result.try(expression(environment, store, left))
+      use #(store, right_type) <- result.try(expression(
+        environment,
+        store,
+        right,
+      ))
 
       case operator {
-        glance.And | glance.Or -> {
-          case left_type, right_type {
-            types.BoolType, types.BoolType -> Ok(types.BoolType)
-            _, _ ->
-              types.to_binop_error(
-                environment,
-                operator_string(operator),
-                left_type,
-                right_type,
-                "two Bools",
-              )
-          }
-        }
+        glance.And | glance.Or ->
+          check_operands(
+            environment,
+            store,
+            operator_string(operator),
+            left_type,
+            right_type,
+            "two Bools",
+            types.BoolType,
+          )
 
         glance.Eq | glance.NotEq -> {
-          let store = types.new_type_store()
-          types.unify(store, environment, left_type, right_type)
-          |> result.map(fn(_) { types.BoolType })
-          |> result.map_error(fn(_) {
-            error.InvalidBinOp(
-              operator_string(operator),
-              types.to_string(environment, left_type),
-              types.to_string(environment, right_type),
-              "same type",
-            )
-          })
+          case types.unify(store, environment, left_type, right_type) {
+            Ok(store) -> Ok(#(store, types.BoolType))
+            Error(_) ->
+              Error(error.InvalidBinOp(
+                operator_string(operator),
+                types.to_string(environment, left_type),
+                types.to_string(environment, right_type),
+                "same type",
+              ))
+          }
         }
 
         glance.LtInt
@@ -1028,19 +1235,16 @@ pub fn binop(
         | glance.SubInt
         | glance.MultInt
         | glance.DivInt
-        | glance.RemainderInt -> {
-          case left_type, right_type {
-            types.IntType, types.IntType -> Ok(types.IntType)
-            _, _ ->
-              types.to_binop_error(
-                environment,
-                operator_string(operator),
-                left_type,
-                right_type,
-                "two Ints",
-              )
-          }
-        }
+        | glance.RemainderInt ->
+          check_operands(
+            environment,
+            store,
+            operator_string(operator),
+            left_type,
+            right_type,
+            "two Ints",
+            types.IntType,
+          )
 
         glance.LtFloat
         | glance.LtEqFloat
@@ -1049,38 +1253,58 @@ pub fn binop(
         | glance.AddFloat
         | glance.SubFloat
         | glance.MultFloat
-        | glance.DivFloat -> {
-          case left_type, right_type {
-            types.FloatType, types.FloatType -> Ok(types.FloatType)
-            _, _ ->
-              types.to_binop_error(
-                environment,
-                operator_string(operator),
-                left_type,
-                right_type,
-                "two Floats",
-              )
-          }
-        }
+        | glance.DivFloat ->
+          check_operands(
+            environment,
+            store,
+            operator_string(operator),
+            left_type,
+            right_type,
+            "two Floats",
+            types.FloatType,
+          )
 
-        glance.Concatenate -> {
-          case left_type, right_type {
-            types.StringType, types.StringType -> Ok(types.StringType)
-            _, _ ->
-              types.to_binop_error(
-                environment,
-                "<>",
-                left_type,
-                right_type,
-                "two Strings",
-              )
-          }
-        }
+        glance.Concatenate ->
+          check_operands(
+            environment,
+            store,
+            "<>",
+            left_type,
+            right_type,
+            "two Strings",
+            types.StringType,
+          )
 
-        glance.Pipe -> pipe(environment, left, right)
+        glance.Pipe -> pipe(environment, store, left, right)
       }
     }
   }
+}
+
+/// Unify both operands against the expected operand type, returning that type
+/// if they both match. Errors use the original operand types in the message.
+fn check_operands(
+  environment: Environment,
+  store: TypeStore,
+  operator: String,
+  left: Type,
+  right: Type,
+  expected: String,
+  expected_type: Type,
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  types.unify(store, environment, left, expected_type)
+  |> result.try(fn(store) {
+    types.unify(store, environment, right, expected_type)
+  })
+  |> result.map(fn(store) { #(store, expected_type) })
+  |> result.map_error(fn(_) {
+    error.InvalidBinOp(
+      operator,
+      types.to_string(environment, left),
+      types.to_string(environment, right),
+      expected,
+    )
+  })
 }
 
 fn operator_string(operator: glance.BinaryOperator) -> String {
@@ -1116,24 +1340,40 @@ fn operator_string(operator: glance.BinaryOperator) -> String {
 /// a call whose first argument is the piped value).
 fn pipe(
   environment: Environment,
+  store: TypeStore,
   left: glance.Expression,
   right: glance.Expression,
-) -> TypeResult {
-  use left_type <- result.try(expression(environment, left))
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, left_type) <- result.try(expression(environment, store, left))
 
   case right {
     glance.Call(_, target, arguments) -> {
-      use glimpse_target <- result.try(expression(environment, target))
+      use #(store, glimpse_target) <- result.try(expression(
+        environment,
+        store,
+        target,
+      ))
       pipe_value_into_callable(
         environment,
+        store,
         left_type,
         glimpse_target,
         arguments,
       )
     }
     _ -> {
-      use glimpse_target <- result.try(expression(environment, right))
-      pipe_value_into_callable(environment, left_type, glimpse_target, [])
+      use #(store, glimpse_target) <- result.try(expression(
+        environment,
+        store,
+        right,
+      ))
+      pipe_value_into_callable(
+        environment,
+        store,
+        left_type,
+        glimpse_target,
+        [],
+      )
     }
   }
 }
@@ -1143,14 +1383,15 @@ fn pipe(
 /// and generalised return type.
 fn pipe_value_into_callable(
   environment: Environment,
+  store: TypeStore,
   left_type: Type,
   glimpse_target: Type,
   arguments: List(glance.Field(glance.Expression)),
-) -> TypeResult {
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   case glimpse_target {
     types.CallableType(..) | types.GenericCallableType(..) -> {
       let #(store, parameters, labels, return) =
-        types.instantiate_callable(types.new_type_store(), glimpse_target)
+        types.instantiate_callable(store, glimpse_target)
 
       case parameters {
         [] -> Error(error.InvalidArguments("()", "a piped value"))
@@ -1162,12 +1403,11 @@ fn pipe_value_into_callable(
             first_param,
           ))
 
-          let argument_fields =
-            arguments
-            |> list.map(call_field(environment, _))
-            |> result.all
-
-          use argument_fields <- result.try(argument_fields)
+          use #(store, argument_fields) <- result.try(fold_fields(
+            environment,
+            store,
+            arguments,
+          ))
 
           use positioned <- result.try(functions.order_call_arguments(
             environment,
@@ -1187,8 +1427,7 @@ fn pipe_value_into_callable(
             ),
           )
 
-          let #(_, resolved_return) = types.resolve(store, return)
-          Ok(types.generalise(store, resolved_return))
+          Ok(types.resolve_and_generalise(store, return))
         }
       }
     }

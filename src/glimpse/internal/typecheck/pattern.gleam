@@ -9,51 +9,55 @@ import glimpse/internal/typecheck/types
 
 /// Check that a pattern is compatible with the expected type, returning the
 /// environment extended with any variable bindings the pattern introduces.
+/// The type store is threaded so that unification during variant matching can
+/// constrain inference variables created elsewhere (e.g. unannotated function
+/// parameters).
 pub fn typecheck_pattern(
   environment: types.Environment,
+  store: types.TypeStore,
   expected_type: types.Type,
   pattern: glance.Pattern,
-) -> error.TypeCheckResult(types.Environment) {
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   case pattern {
     glance.PatternVariable(_, name) ->
-      bind_variable(environment, name, expected_type)
+      bind_variable(environment, store, name, expected_type)
 
-    glance.PatternDiscard(_, _) -> Ok(environment)
+    glance.PatternDiscard(_, _) -> Ok(#(store, environment))
 
     glance.PatternInt(_, _) -> {
-      case expected_type {
-        types.IntType -> Ok(environment)
-        _ ->
-          Error(error.PatternMismatch(
-            "int pattern",
-            "Int",
-            types.to_string(environment, expected_type),
-          ))
-      }
+      types.unify(store, environment, expected_type, types.IntType)
+      |> result.map(fn(store) { #(store, environment) })
+      |> result.map_error(fn(_) {
+        error.PatternMismatch(
+          "int pattern",
+          "Int",
+          types.to_string(environment, expected_type),
+        )
+      })
     }
 
     glance.PatternFloat(_, _) -> {
-      case expected_type {
-        types.FloatType -> Ok(environment)
-        _ ->
-          Error(error.PatternMismatch(
-            "float pattern",
-            "Float",
-            types.to_string(environment, expected_type),
-          ))
-      }
+      types.unify(store, environment, expected_type, types.FloatType)
+      |> result.map(fn(store) { #(store, environment) })
+      |> result.map_error(fn(_) {
+        error.PatternMismatch(
+          "float pattern",
+          "Float",
+          types.to_string(environment, expected_type),
+        )
+      })
     }
 
     glance.PatternString(_, _) -> {
-      case expected_type {
-        types.StringType -> Ok(environment)
-        _ ->
-          Error(error.PatternMismatch(
-            "string pattern",
-            "String",
-            types.to_string(environment, expected_type),
-          ))
-      }
+      types.unify(store, environment, expected_type, types.StringType)
+      |> result.map(fn(store) { #(store, environment) })
+      |> result.map_error(fn(_) {
+        error.PatternMismatch(
+          "string pattern",
+          "String",
+          types.to_string(environment, expected_type),
+        )
+      })
     }
 
     glance.PatternTuple(_, elements) -> {
@@ -61,33 +65,47 @@ pub fn typecheck_pattern(
         types.TupleType(tuple_elements) ->
           case list.length(tuple_elements) == list.length(elements) {
             True ->
-              list.zip(elements, tuple_elements)
-              |> list.try_fold(environment, fn(env, pair) {
-                let #(element, expected) = pair
-                typecheck_pattern(env, expected, element)
-              })
-            False -> tuple_mismatch(environment, expected_type)
+              list.try_fold(
+                list.zip(elements, tuple_elements),
+                #(store, environment),
+                fn(state, pair) {
+                  let #(store, env) = state
+                  let #(element, expected) = pair
+                  typecheck_pattern(env, store, expected, element)
+                  |> result.map(fn(new_state) {
+                    let #(store, env) = new_state
+                    #(store, env)
+                  })
+                },
+              )
+            False -> Error(tuple_mismatch(environment, expected_type))
           }
-        _ -> tuple_mismatch(environment, expected_type)
+        _ -> Error(tuple_mismatch(environment, expected_type))
       }
     }
 
     glance.PatternList(_, elements, tail) -> {
       case expected_type {
         types.ListType(element_type) -> {
-          use environment <- result.try(fold_patterns(
+          use #(store, environment) <- result.try(fold_patterns(
             environment,
+            store,
             element_type,
             elements,
           ))
           case tail {
-            option.None -> Ok(environment)
+            option.None -> Ok(#(store, environment))
             option.Some(tail_pattern) ->
               typecheck_pattern(
                 environment,
+                store,
                 types.ListType(element_type),
                 tail_pattern,
               )
+              |> result.map(fn(new_state) {
+                let #(store, env) = new_state
+                #(store, env)
+              })
           }
         }
         _ ->
@@ -108,7 +126,7 @@ pub fn typecheck_pattern(
       case callable {
         types.CallableType(..) | types.GenericCallableType(..) -> {
           let #(store, parameters, position_labels, constructor_return) =
-            types.instantiate_callable(types.new_type_store(), callable)
+            types.instantiate_callable(store, callable)
           use store <- result.try(types.unify(
             store,
             environment,
@@ -122,6 +140,7 @@ pub fn typecheck_pattern(
             })
           check_variant_arguments(
             environment,
+            store,
             arguments,
             resolved_parameters,
             position_labels,
@@ -132,25 +151,27 @@ pub fn typecheck_pattern(
     }
 
     glance.PatternAssignment(_, attern, name) -> {
-      use environment <- result.try(bind_variable(
+      use #(store, environment) <- result.try(bind_variable(
         environment,
+        store,
         name,
         expected_type,
       ))
-      typecheck_pattern(environment, expected_type, attern)
+      typecheck_pattern(environment, store, expected_type, attern)
     }
 
     glance.PatternConcatenate(_, _prefix, prefix_name, rest_name) -> {
       case expected_type {
         types.StringType -> {
-          use environment <- result.try(bind_assignment_name(
+          use #(store, environment) <- result.try(bind_assignment_name(
             environment,
+            store,
             prefix_name,
           ))
           case rest_name {
             glance.Named(name) ->
-              bind_variable(environment, name, types.StringType)
-            glance.Discarded(_) -> Ok(environment)
+              bind_variable(environment, store, name, types.StringType)
+            glance.Discarded(_) -> Ok(#(store, environment))
           }
         }
         _ ->
@@ -165,9 +186,15 @@ pub fn typecheck_pattern(
     glance.PatternBitString(_, segments) -> {
       case expected_type {
         types.BitArrayType -> {
-          list.try_fold(segments, environment, fn(env, segment) {
+          list.try_fold(segments, #(store, environment), fn(state, segment) {
+            let #(store, env) = state
             let #(pattern, options) = segment
-            typecheck_pattern(env, bit_string_segment_type(options), pattern)
+            typecheck_pattern(
+              env,
+              store,
+              bit_string_segment_type(options),
+              pattern,
+            )
           })
         }
         _ ->
@@ -183,40 +210,44 @@ pub fn typecheck_pattern(
 
 fn bind_variable(
   environment: types.Environment,
+  store: types.TypeStore,
   name: String,
   type_: types.Type,
-) -> error.TypeCheckResult(types.Environment) {
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   case dict.get(environment.definitions, name) {
-    Ok(existing) if existing == type_ -> Ok(environment)
+    Ok(existing) if existing == type_ -> Ok(#(store, environment))
     Ok(existing) ->
       Error(error.InvalidType(
         types.to_string(environment, existing),
         types.to_string(environment, type_),
         "cannot rebind variable with different type",
       ))
-    Error(_) -> Ok(types.add_or_update_def_in_env(environment, name, type_))
+    Error(_) ->
+      Ok(#(store, types.add_or_update_def_in_env(environment, name, type_)))
   }
 }
 
 fn fold_patterns(
   environment: types.Environment,
+  store: types.TypeStore,
   expected_type: types.Type,
   patterns: List(glance.Pattern),
-) -> error.TypeCheckResult(types.Environment) {
-  list.try_fold(patterns, environment, fn(env, pattern) {
-    typecheck_pattern(env, expected_type, pattern)
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
+  list.try_fold(patterns, #(store, environment), fn(state, pattern) {
+    let #(store, env) = state
+    typecheck_pattern(env, store, expected_type, pattern)
   })
 }
 
 fn tuple_mismatch(
   environment: types.Environment,
   expected_type: types.Type,
-) -> error.TypeCheckResult(types.Environment) {
-  Error(error.PatternMismatch(
+) -> error.TypeCheckError {
+  error.PatternMismatch(
     "tuple pattern",
     types.to_string(environment, expected_type),
     "tuple",
-  ))
+  )
 }
 
 fn lookup_constructor(
@@ -241,12 +272,13 @@ fn lookup_constructor(
 /// against a value of that same custom type.
 fn check_variant_arguments(
   environment: types.Environment,
+  store: types.TypeStore,
   arguments: List(glance.Field(glance.Pattern)),
   parameters: List(types.Type),
   position_labels: dict.Dict(String, Int),
-) -> error.TypeCheckResult(types.Environment) {
-  list.try_fold(arguments, #(environment, 0), fn(state, field) {
-    let #(env, positional_count) = state
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
+  list.try_fold(arguments, #(store, environment, 0), fn(state, field) {
+    let #(store, env, positional_count) = state
     use expected <- result.try(variant_field_expected_type(
       env,
       parameters,
@@ -256,19 +288,29 @@ fn check_variant_arguments(
     ))
     case field {
       glance.UnlabelledField(pattern) -> {
-        use env <- result.try(typecheck_pattern(env, expected, pattern))
-        Ok(#(env, positional_count + 1))
+        use #(store, env) <- result.try(typecheck_pattern(
+          env,
+          store,
+          expected,
+          pattern,
+        ))
+        Ok(#(store, env, positional_count + 1))
       }
       glance.LabelledField(_label, pattern) -> {
-        use env <- result.try(typecheck_pattern(env, expected, pattern))
-        Ok(#(env, positional_count))
+        use #(store, env) <- result.try(typecheck_pattern(
+          env,
+          store,
+          expected,
+          pattern,
+        ))
+        Ok(#(store, env, positional_count))
       }
-      glance.ShorthandField(_label) -> Ok(#(env, positional_count))
+      glance.ShorthandField(_label) -> Ok(#(store, env, positional_count))
     }
   })
   |> result.map(fn(state) {
-    let #(environment, _positional_count) = state
-    environment
+    let #(store, environment, _positional_count) = state
+    #(store, environment)
   })
 }
 
@@ -315,13 +357,14 @@ fn unknown_label_error(
 
 fn bind_assignment_name(
   environment: types.Environment,
+  store: types.TypeStore,
   name: option.Option(glance.AssignmentName),
-) -> error.TypeCheckResult(types.Environment) {
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   case name {
-    option.None -> Ok(environment)
+    option.None -> Ok(#(store, environment))
     option.Some(glance.Named(bound_name)) ->
-      bind_variable(environment, bound_name, types.StringType)
-    option.Some(glance.Discarded(_)) -> Ok(environment)
+      bind_variable(environment, store, bound_name, types.StringType)
+    option.Some(glance.Discarded(_)) -> Ok(#(store, environment))
   }
 }
 

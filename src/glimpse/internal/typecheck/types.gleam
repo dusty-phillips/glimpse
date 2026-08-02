@@ -99,6 +99,12 @@ fn fresh_type(store: TypeStore) -> #(TypeStore, Type) {
   )
 }
 
+/// Create a fresh unbound inference variable. Used for parameters whose types
+/// are inferred from their use within a function body.
+pub fn fresh_var(store: TypeStore) -> #(TypeStore, Type) {
+  fresh_type(store)
+}
+
 /// Replace every `GenericTypeVariable(name)` with a fresh `Var`. Repeated
 /// occurrences of the same name are replaced with the *same* variable, which
 /// preserves the sharing that gives polymorphism its meaning.
@@ -145,6 +151,7 @@ fn do_instantiate(
   type_: Type,
 ) -> #(TypeStore, dict.Dict(String, Type), Type) {
   case type_ {
+    GenericTypeVariable(name) if name == "todo" -> #(store, substitutions, type_)
     GenericTypeVariable(name) -> {
       case dict.get(substitutions, name) {
         Ok(type_) -> #(store, substitutions, type_)
@@ -435,6 +442,37 @@ fn generalise_name(index: Int) -> String {
 pub fn generalise(store: TypeStore, type_: Type) -> Type {
   let #(_store, _names, type_) = do_generalise(store, dict.new(), type_)
   type_
+}
+
+/// Resolve a type then generalise it, replacing any remaining unbound
+/// inference variables with named generic type variables.
+pub fn resolve_and_generalise(
+  store: TypeStore,
+  type_: Type,
+) -> #(TypeStore, Type) {
+  let #(_, resolved) = resolve(store, type_)
+  #(store, generalise(store, resolved))
+}
+
+/// Generalise multiple types together, sharing the same name mapping
+/// so that the same inference variable gets the same generic name across all types.
+pub fn generalise_multi(store: TypeStore, types_: List(Type)) -> List(Type) {
+  let #(_store, _names, types_) = do_generalise_multi(store, dict.new(), types_)
+  types_
+}
+
+fn do_generalise_multi(
+  store: TypeStore,
+  names: dict.Dict(Int, String),
+  types_: List(Type),
+) -> #(TypeStore, dict.Dict(Int, String), List(Type)) {
+  let #(store, names, acc) =
+    list.fold(types_, #(store, names, []), fn(state, type_) {
+      let #(store, names, acc) = state
+      let #(store, names, type_) = do_generalise(store, names, type_)
+      #(store, names, [type_, ..acc])
+    })
+  #(store, names, list.reverse(acc))
 }
 
 fn do_generalise(
