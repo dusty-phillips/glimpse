@@ -61,59 +61,82 @@ pub fn typecheck_pattern(
     }
 
     glance.PatternTuple(_, elements) -> {
-      case expected_type {
-        types.TupleType(tuple_elements) ->
-          case list.length(tuple_elements) == list.length(elements) {
-            True ->
-              list.try_fold(
-                list.zip(elements, tuple_elements),
-                #(store, environment),
-                fn(state, pair) {
-                  let #(store, env) = state
-                  let #(element, expected) = pair
-                  typecheck_pattern(env, store, expected, element)
-                  |> result.map(fn(new_state) {
-                    let #(store, env) = new_state
-                    #(store, env)
-                  })
-                },
-              )
-            False -> Error(tuple_mismatch(environment, expected_type))
-          }
-        _ -> Error(tuple_mismatch(environment, expected_type))
-      }
-    }
-
-    glance.PatternList(_, elements, tail) -> {
-      case expected_type {
-        types.ListType(element_type) -> {
-          use #(store, environment) <- result.try(fold_patterns(
-            environment,
+      use #(store, expected_elements) <- result.try(case expected_type {
+        types.TupleType(tuple_elements) -> Ok(#(store, tuple_elements))
+        _ -> {
+          let #(store, expected_elements) =
+            types.fresh_vars(store, list.length(elements))
+          types.unify(
             store,
-            element_type,
-            elements,
-          ))
-          case tail {
-            option.None -> Ok(#(store, environment))
-            option.Some(tail_pattern) ->
-              typecheck_pattern(
-                environment,
-                store,
-                types.ListType(element_type),
-                tail_pattern,
-              )
+            environment,
+            expected_type,
+            types.TupleType(expected_elements),
+          )
+          |> result.map(fn(store) { #(store, expected_elements) })
+          |> result.map_error(fn(_) {
+            tuple_mismatch(environment, expected_type)
+          })
+        }
+      })
+      case list.length(expected_elements) == list.length(elements) {
+        True ->
+          list.try_fold(
+            list.zip(elements, expected_elements),
+            #(store, environment),
+            fn(state, pair) {
+              let #(store, env) = state
+              let #(element, expected) = pair
+              typecheck_pattern(env, store, expected, element)
               |> result.map(fn(new_state) {
                 let #(store, env) = new_state
                 #(store, env)
               })
-          }
+            },
+          )
+        False -> Error(tuple_mismatch(environment, expected_type))
+      }
+    }
+
+    glance.PatternList(_, elements, tail) -> {
+      use #(store, element_type) <- result.try(case expected_type {
+        types.ListType(element_type) -> Ok(#(store, element_type))
+        _ -> {
+          let #(store, element_type) = types.fresh_var(store)
+          types.unify(
+            store,
+            environment,
+            expected_type,
+            types.ListType(element_type),
+          )
+          |> result.map(fn(store) { #(store, element_type) })
+          |> result.map_error(fn(_) {
+            error.PatternMismatch(
+              "list pattern",
+              "List",
+              types.to_string(environment, expected_type),
+            )
+          })
         }
-        _ ->
-          Error(error.PatternMismatch(
-            "list pattern",
-            "List",
-            types.to_string(environment, expected_type),
-          ))
+      })
+      use #(store, environment) <- result.try(fold_patterns(
+        environment,
+        store,
+        element_type,
+        elements,
+      ))
+      case tail {
+        option.None -> Ok(#(store, environment))
+        option.Some(tail_pattern) ->
+          typecheck_pattern(
+            environment,
+            store,
+            types.ListType(element_type),
+            tail_pattern,
+          )
+          |> result.map(fn(new_state) {
+            let #(store, env) = new_state
+            #(store, env)
+          })
       }
     }
 
@@ -127,6 +150,12 @@ pub fn typecheck_pattern(
         types.CallableType(..) | types.GenericCallableType(..) -> {
           let #(store, parameters, position_labels, constructor_return) =
             types.instantiate_callable(store, callable)
+          echo "PATTERN-VARIANT "
+            <> constructor
+            <> " expected="
+            <> types.to_string(environment, expected_type)
+            <> " ret="
+            <> types.to_string(environment, constructor_return)
           use store <- result.try(types.unify(
             store,
             environment,
@@ -146,7 +175,31 @@ pub fn typecheck_pattern(
             position_labels,
           )
         }
-        _ -> Error(error.NotCallable(types.to_string(environment, callable)))
+        // Zero-field constructors (e.g. `True`, `Nil`, `None`) resolve directly
+        // to their type rather than a callable.
+        _ ->
+          case arguments {
+            [] -> {
+              let #(store, callable) = types.instantiate(store, callable)
+              echo "PATTERN-ZERO "
+                <> constructor
+                <> " expected="
+                <> types.to_string(environment, expected_type)
+                <> " callable="
+                <> types.to_string(environment, callable)
+              types.unify(store, environment, expected_type, callable)
+              |> result.map(fn(store) { #(store, environment) })
+              |> result.map_error(fn(_) {
+                error.PatternMismatch(
+                  constructor,
+                  types.to_string(environment, callable),
+                  types.to_string(environment, expected_type),
+                )
+              })
+            }
+            _ ->
+              Error(error.NotCallable(types.to_string(environment, callable)))
+          }
       }
     }
 
@@ -214,17 +267,13 @@ fn bind_variable(
   name: String,
   type_: types.Type,
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
-  case dict.get(environment.definitions, name) {
-    Ok(existing) if existing == type_ -> Ok(#(store, environment))
-    Ok(existing) ->
-      Error(error.InvalidType(
-        types.to_string(environment, existing),
-        types.to_string(environment, type_),
-        "cannot rebind variable with different type",
-      ))
-    Error(_) ->
-      Ok(#(store, types.add_or_update_def_in_env(environment, name, type_)))
-  }
+  // Generalise at the binding boundary (the HM "let" point): any inference
+  // variables still unbound here become named type variables, so the binding
+  // is polymorphic and later unifications cannot leak into it. Shadowing is
+  // allowed (Gleam permits rebinding in a new scope), so the definition is
+  // simply overwritten.
+  let generalised = types.generalise(store, type_)
+  Ok(#(store, types.add_or_update_def_in_env(environment, name, generalised)))
 }
 
 fn fold_patterns(
@@ -258,7 +307,7 @@ fn lookup_constructor(
   case module {
     option.None -> types.lookup_variable_type(environment, constructor)
     option.Some(module_name) -> {
-      case dict.get(environment.definitions, module_name) {
+      case dict.get(environment.module_imports, module_name) {
         Ok(types.NamespaceType(definitions, _custom_types)) ->
           dict.get(definitions, constructor)
           |> result.replace_error(error.InvalidName(constructor))
@@ -371,22 +420,58 @@ fn bind_assignment_name(
 fn bit_string_segment_type(
   options: List(glance.BitStringSegmentOption(glance.Pattern)),
 ) -> types.Type {
-  case list.any(options, is_string_option) {
+  case list.any(options, is_utf_option) {
     True -> types.StringType
-    False -> types.IntType
+    False ->
+      case list.any(options, is_codepoint_option) {
+        True -> types.CustomType("prelude", "UtfCodepoint", [])
+        False ->
+          case list.any(options, is_bit_option) {
+            True -> types.BitArrayType
+            False ->
+              case list.any(options, is_float_option) {
+                True -> types.FloatType
+                False -> types.IntType
+              }
+          }
+      }
   }
 }
 
-fn is_string_option(
+fn is_utf_option(
   option: glance.BitStringSegmentOption(glance.Pattern),
 ) -> Bool {
   case option {
-    glance.Utf8Option
-    | glance.Utf16Option
-    | glance.Utf32Option
-    | glance.Utf8CodepointOption
+    glance.Utf8Option | glance.Utf16Option | glance.Utf32Option -> True
+    _ -> False
+  }
+}
+
+fn is_codepoint_option(
+  option: glance.BitStringSegmentOption(glance.Pattern),
+) -> Bool {
+  case option {
+    glance.Utf8CodepointOption
     | glance.Utf16CodepointOption
     | glance.Utf32CodepointOption -> True
+    _ -> False
+  }
+}
+
+fn is_bit_option(
+  option: glance.BitStringSegmentOption(glance.Pattern),
+) -> Bool {
+  case option {
+    glance.BytesOption | glance.BitsOption -> True
+    _ -> False
+  }
+}
+
+fn is_float_option(
+  option: glance.BitStringSegmentOption(glance.Pattern),
+) -> Bool {
+  case option {
+    glance.FloatOption -> True
     _ -> False
   }
 }

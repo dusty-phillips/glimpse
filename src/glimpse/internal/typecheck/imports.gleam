@@ -54,22 +54,23 @@ pub fn fold_import_from_env(
           unqualified_types,
         ))
 
+        let namespace_type =
+          types.NamespaceType(
+            module_env.definitions
+              |> dict.filter(fn(key, _) {
+                set.contains(module_env.public_definitions, key)
+              }),
+            module_env.custom_types
+              |> dict.filter(fn(key, _) {
+                set.contains(module_env.public_custom_types, key)
+              }),
+          )
+
         let environment = case add_namespace {
           True ->
-            types.add_or_update_def_in_env(
-              environment,
-              namespace,
-              types.NamespaceType(
-                module_env.definitions
-                  |> dict.filter(fn(key, _) {
-                    set.contains(module_env.public_definitions, key)
-                  }),
-                module_env.custom_types
-                  |> dict.filter(fn(key, _) {
-                    set.contains(module_env.public_custom_types, key)
-                  }),
-              ),
-            )
+            environment
+            |> types.add_or_update_def_in_env(namespace, namespace_type)
+            |> types.add_or_update_namespace_in_env(namespace, namespace_type)
           False -> environment
         }
 
