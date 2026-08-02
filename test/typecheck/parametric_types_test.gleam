@@ -18,12 +18,20 @@ pub fn parametric_custom_type_def_test() {
     )
 
   assert dict.get(env.definitions, "Box")
-    == Ok(types.CallableType(
+    == Ok(types.GenericCallableType(
       [types.GenericTypeVariable("a")],
       dict.from_list([#("value", 0)]),
       types.CustomType("main_module", "Box", [
         types.GenericTypeVariable("a"),
       ]),
+      glance.Function(
+        glance.Span(-1, -1),
+        "",
+        glance.Private,
+        [],
+        option.None,
+        [],
+      ),
     ))
 }
 

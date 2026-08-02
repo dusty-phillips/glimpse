@@ -36,16 +36,16 @@ fn is_generic_type(type_: Type) -> Bool {
   case type_ {
     types.GenericTypeVariable(_) -> True
     types.CustomType(_, _, parameters) -> list.any(parameters, is_generic_type)
+    types.ListType(element) -> is_generic_type(element)
+    types.TupleType(elements) -> list.any(elements, is_generic_type)
+    types.ResultType(ok, error) -> is_generic_type(ok) || is_generic_type(error)
+    types.OptionType(inner) -> is_generic_type(inner)
+    types.CallableType(parameters, _, return) ->
+      has_generic_types(parameters) || is_generic_type(return)
+    types.GenericCallableType(parameters, _, return, _) ->
+      has_generic_types(parameters) || is_generic_type(return)
     _ -> False
   }
-}
-
-pub fn to_callable_type(state: CallableState, return_type: Type) -> Type {
-  types.CallableType(
-    state.reversed_by_position |> list.reverse,
-    state.labels,
-    return_type,
-  )
 }
 
 pub fn to_callable_type_with_original(
@@ -229,7 +229,7 @@ pub fn fold_variant_constructors_into_env(
           environment
           |> types.add_or_update_def_in_env(
             variant.name,
-            to_callable_type(
+            to_callable_type_with_original(
               callable_state,
               types.CustomType(
                 environment.current_module,
@@ -238,6 +238,7 @@ pub fn fold_variant_constructors_into_env(
                   types.GenericTypeVariable(parameter)
                 }),
               ),
+              dummy_function(),
             ),
           )
 
@@ -252,6 +253,12 @@ pub fn fold_variant_constructors_into_env(
       }
       |> list.Continue
   }
+}
+
+/// A sentinel function used as the `original_function` for variant constructor
+/// callables. The field is never read, so a placeholder is sufficient.
+fn dummy_function() -> glance.Function {
+  glance.Function(glance.Span(-1, -1), "", glance.Private, [], option.None, [])
 }
 
 fn fold_variant_field_into_callable(

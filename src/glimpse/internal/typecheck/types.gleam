@@ -108,21 +108,28 @@ pub fn instantiate(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
 }
 
 /// Instantiate a callable type and return its parameters, labels, and return
-/// type. The given type is assumed to already be a callable; the `_` arm is
-/// unreachable since `instantiate` preserves the callable constructor.
+/// type. Only polymorphic callables (`GenericCallableType`) are instantiated,
+/// since their generic type variables are fresh at each call site. Plain
+/// `CallableType` carries the enclosing function's own (rigid) type parameters
+/// and is returned as-is.
 pub fn instantiate_callable(
   store: TypeStore,
   type_: Type,
 ) -> #(TypeStore, List(Type), dict.Dict(String, Int), Type) {
-  let #(store, instantiated) = instantiate(store, type_)
-  case instantiated {
+  case type_ {
+    GenericCallableType(..) -> {
+      let #(store, instantiated) = instantiate(store, type_)
+      case instantiated {
+        GenericCallableType(parameters, labels, return, _) -> #(
+          store,
+          parameters,
+          labels,
+          return,
+        )
+        _ -> #(store, [], dict.new(), NilType)
+      }
+    }
     CallableType(parameters, labels, return) -> #(
-      store,
-      parameters,
-      labels,
-      return,
-    )
-    GenericCallableType(parameters, labels, return, _) -> #(
       store,
       parameters,
       labels,
