@@ -28,11 +28,11 @@ pub fn empty_state(environment: Environment) -> CallableState {
   CallableState(environment, [], dict.new())
 }
 
-fn has_generic_types(types: List(Type)) -> Bool {
+pub fn has_generic_types(types: List(Type)) -> Bool {
   list.any(types, is_generic_type)
 }
 
-fn is_generic_type(type_: Type) -> Bool {
+pub fn is_generic_type(type_: Type) -> Bool {
   case type_ {
     types.GenericTypeVariable(_) -> True
     types.CustomType(_, _, parameters) -> list.any(parameters, is_generic_type)
@@ -257,7 +257,7 @@ pub fn fold_variant_constructors_into_env(
 
 /// A sentinel function used as the `original_function` for variant constructor
 /// callables. The field is never read, so a placeholder is sufficient.
-fn dummy_function() -> glance.Function {
+pub fn dummy_function() -> glance.Function {
   glance.Function(glance.Span(-1, -1), "", glance.Private, [], option.None, [])
 }
 

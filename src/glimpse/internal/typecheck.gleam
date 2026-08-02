@@ -853,13 +853,33 @@ fn fn_capture(
         })
 
       let #(_, resolved_return) = types.resolve(store, return)
-      let partial =
-        types.CallableType(
-          list.reverse(remaining_reversed),
-          reindexed_labels,
-          resolved_return,
+      let generalised =
+        types.generalise(
+          store,
+          types.CallableType(
+            list.reverse(remaining_reversed),
+            reindexed_labels,
+            resolved_return,
+          ),
         )
-      Ok(types.generalise(store, partial))
+
+      Ok(case generalised {
+        types.CallableType(parameters, labels, return) ->
+          case
+            functions.has_generic_types(parameters)
+            || functions.is_generic_type(return)
+          {
+            True ->
+              types.GenericCallableType(
+                parameters,
+                labels,
+                return,
+                functions.dummy_function(),
+              )
+            False -> generalised
+          }
+        other -> other
+      })
     }
   }
 }
