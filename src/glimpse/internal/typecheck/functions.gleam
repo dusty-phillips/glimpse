@@ -130,39 +130,47 @@ pub fn fold_parameter_into_callable(
 ) -> CallableStateFold {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(CallableState(environment, reversed_by_position, labels)) -> {
+    Ok(CallableState(environment, reversed_by_position, labels)) ->
       case param {
-        glance.FunctionParameter(type_: option.None, ..) ->
-          todo as "Not inferring function parameters yet (requires generics or Skolem vars)"
+        glance.FunctionParameter(type_: option.None, name: name, ..) ->
+          list.Stop(
+            Error(error.MissingParameterAnnotation(parameter_name(name))),
+          )
 
         glance.FunctionParameter(
-          label: option.Some(label),
+          label: label,
           type_: option.Some(glance_type),
           ..,
-        ) -> {
-          use glimpse_type <- result.try(types.type_(environment, glance_type))
-          Ok(CallableState(
-            environment,
-            [glimpse_type, ..reversed_by_position],
-            dict.insert(labels, label, reversed_by_position |> list.length),
-          ))
-        }
-
-        glance.FunctionParameter(
-          label: option.None,
-          type_: option.Some(glance_type),
-          ..,
-        ) -> {
-          use glimpse_type <- result.try(types.type_(environment, glance_type))
-          Ok(CallableState(
-            environment,
-            [glimpse_type, ..reversed_by_position],
-            labels,
-          ))
-        }
+        ) ->
+          case types.type_(environment, glance_type) {
+            Error(error) -> list.Stop(Error(error))
+            Ok(glimpse_type) -> {
+              let labels = case label {
+                option.None -> labels
+                option.Some(label) ->
+                  dict.insert(
+                    labels,
+                    label,
+                    reversed_by_position |> list.length,
+                  )
+              }
+              list.Continue(
+                Ok(CallableState(
+                  environment,
+                  [glimpse_type, ..reversed_by_position],
+                  labels,
+                )),
+              )
+            }
+          }
       }
-      |> list.Continue
-    }
+  }
+}
+
+fn parameter_name(name: glance.AssignmentName) -> String {
+  case name {
+    glance.Named(n) -> n
+    glance.Discarded(d) -> d
   }
 }
 
@@ -175,23 +183,26 @@ pub fn fold_function_parameter_into_env(
   case state {
     Error(_err) -> list.Stop(state)
     Ok(environment) ->
-      {
-        case param {
-          glance.FunctionParameter(name: glance.Discarded(_), ..) ->
-            Ok(environment)
-          glance.FunctionParameter(type_: option.None, ..) ->
-            todo as "Not inferring function parameters yet"
-          glance.FunctionParameter(
-            name: glance.Named(name),
-            type_: option.Some(glance_type),
-            ..,
-          ) -> {
-            use check_type <- result.try(types.type_(environment, glance_type))
-            Ok(types.add_or_update_def_in_env(environment, name, check_type))
+      case param {
+        glance.FunctionParameter(name: glance.Discarded(_), ..) ->
+          list.Continue(Ok(environment))
+        glance.FunctionParameter(type_: option.None, name: name, ..) ->
+          list.Stop(
+            Error(error.MissingParameterAnnotation(parameter_name(name))),
+          )
+        glance.FunctionParameter(
+          name: glance.Named(name),
+          type_: option.Some(glance_type),
+          ..,
+        ) ->
+          case types.type_(environment, glance_type) {
+            Error(error) -> list.Stop(Error(error))
+            Ok(check_type) ->
+              list.Continue(
+                Ok(types.add_or_update_def_in_env(environment, name, check_type)),
+              )
           }
-        }
       }
-      |> list.Continue
   }
 }
 
@@ -287,7 +298,7 @@ pub fn order_call_arguments(
   position_labels: dict.Dict(String, Int),
 ) -> error.TypeCheckResult(List(Type)) {
   let #(positional_called_with, labelled_called_with) =
-    split_fields_by_type(called_with)
+    split_fields_by_type(environment, called_with)
 
   use called_with_types_by_position <- result.try(labels_to_position_dict(
     labelled_called_with,
@@ -318,7 +329,9 @@ pub fn order_call_arguments(
 
   use positioned_argument_types <- result.try(target_argument_types_result)
 
-  case positioned_argument_types == target_argument_types {
+  case
+    list.length(positioned_argument_types) == list.length(target_argument_types)
+  {
     True -> Ok(positioned_argument_types)
     False ->
       Error(argument_error(
@@ -329,7 +342,11 @@ pub fn order_call_arguments(
   }
 }
 
+/// Splits fields into positional and labelled types. Shorthand fields resolve
+/// their variable from the environment, falling back to a generic type variable
+/// when the variable isn't found (the error surfaces later during checking).
 fn split_fields_by_type(
+  environment: Environment,
   fields: List(glance.Field(Type)),
 ) -> #(List(Type), dict.Dict(String, Type)) {
   let #(reversed_positional, labelled) =
@@ -344,10 +361,11 @@ fn split_fields_by_type(
           reversed_positional,
           dict.insert(labelled, label, type_),
         )
-        glance.ShorthandField(_label) -> {
-          // For shorthand syntax like `name:`, we need to look up the variable `name` in scope
-          // This is syntactic sugar for `name: name`
-          todo as "ShorthandField resolution requires environment context - not yet implemented"
+        glance.ShorthandField(label) -> {
+          let type_ =
+            types.lookup_variable_type(environment, label)
+            |> result.unwrap(types.GenericTypeVariable(label))
+          #(reversed_positional, dict.insert(labelled, label, type_))
         }
       }
     })
