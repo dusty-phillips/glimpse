@@ -125,8 +125,15 @@ pub fn anonymous_fn_return_test() {
 }
 
 pub fn anonymous_fn_missing_annotation_test() {
-  assert helpers.error_function_typecheck("fn foo() { fn(x) { x } }")
-    == error.MissingParameterAnnotation("anonymous function")
+  let function_out = helpers.ok_function_typecheck("fn foo() { fn(x) { x } }")
+
+  // The anonymous function's parameter should be inferred as a generic type variable
+  assert function_out.return
+    == option.Some(glance.FunctionType(
+      unknown_span,
+      [glance.VariableType(unknown_span, "a")],
+      glance.VariableType(unknown_span, "a"),
+    ))
 }
 
 pub fn record_update_test() {
