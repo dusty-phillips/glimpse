@@ -2,7 +2,6 @@ import glance
 import gleam/dict
 import gleam/list
 import gleam/option
-import glimpse/error
 import glimpse/internal/typecheck/types
 import typecheck/helpers
 
@@ -246,14 +245,28 @@ pub fn private_function_unannotated_float_ops_test() {
     == Ok(types.CallableType([types.FloatType], dict.new(), types.FloatType))
 }
 
-pub fn public_function_requires_annotation_test() {
-  assert helpers.error_module_typecheck("pub fn add(x, y) { x + y }")
-    == error.MissingParameterAnnotation("x")
+pub fn public_function_unannotated_params_inferred_test() {
+  let #(_module, env) =
+    helpers.ok_module_typecheck("pub fn add(x, y) { x + y }")
+
+  assert dict.get(env.definitions, "add")
+    == Ok(types.CallableType(
+      [types.IntType, types.IntType],
+      dict.new(),
+      types.IntType,
+    ))
 }
 
-pub fn public_function_mixed_requires_annotation_test() {
-  assert helpers.error_module_typecheck("pub fn foo(x: Int, y) { x + y }")
-    == error.MissingParameterAnnotation("y")
+pub fn public_function_mixed_unannotated_params_inferred_test() {
+  let #(_module, env) =
+    helpers.ok_module_typecheck("pub fn foo(x: Int, y) { x + y }")
+
+  assert dict.get(env.definitions, "foo")
+    == Ok(types.CallableType(
+      [types.IntType, types.IntType],
+      dict.new(),
+      types.IntType,
+    ))
 }
 
 pub fn private_function_unannotated_then_used_polymorphically_test() {

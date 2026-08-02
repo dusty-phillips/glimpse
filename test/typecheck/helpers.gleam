@@ -17,11 +17,11 @@ pub fn glance_custom_type(definition: String) -> glance.CustomType {
 }
 
 pub fn ok_custom_type(definition: String) -> Environment {
+  let custom_type = glance_custom_type(definition)
+  let assert Ok(environment) =
+    typecheck.custom_type_declaration(types.new_env("main_module"), custom_type)
   let assert Ok(result) =
-    typecheck.custom_type(
-      types.new_env("main_module"),
-      glance_custom_type(definition),
-    )
+    typecheck.custom_type_constructors(environment, custom_type)
   result
 }
 

@@ -80,7 +80,7 @@ pub fn unqualified_type_import_test() {
   let assert Ok(parsed_module) =
     glance.module(
       "import foo.{type Bar, Bar}
-    fn f() -> Bar { Bar() }",
+    fn f() -> Bar { Bar }",
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
@@ -101,11 +101,7 @@ pub fn unqualified_constructor_import_test() {
     |> typecheck.module(other_envs)
 
   assert dict.get(main_env.definitions, "Foo")
-    == Ok(types.CallableType(
-      [],
-      dict.new(),
-      types.CustomType("main_module", "Foo", []),
-    ))
+    == Ok(types.CustomType("main_module", "Foo", []))
 }
 
 pub fn renamed_unqualified_import_test() {
@@ -126,7 +122,7 @@ pub fn combined_value_and_type_import_test() {
   let #(_, foo_env) =
     helpers.ok_module_typecheck(
       "pub type Bar { Bar }
-    pub fn make() -> Bar { Bar() }",
+    pub fn make() -> Bar { Bar }",
     )
 
   let other_envs = dict.from_list([#("foo", foo_env)])

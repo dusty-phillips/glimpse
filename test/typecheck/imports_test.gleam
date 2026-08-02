@@ -15,7 +15,7 @@ pub fn import_adds_function_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
 
-  assert dict.size(main_env.definitions) == 1
+  assert dict.size(main_env.definitions) == 8
   let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
   assert foo_namespace
     == types.NamespaceType(
@@ -39,7 +39,7 @@ pub fn import_no_add_private_function_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
 
-  assert dict.size(main_env.definitions) == 1
+  assert dict.size(main_env.definitions) == 8
   let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
   assert foo_namespace == types.NamespaceType(dict.new(), dict.new())
 
@@ -57,19 +57,12 @@ pub fn import_adds_variant_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
 
-  assert dict.size(main_env.definitions) == 1
+  assert dict.size(main_env.definitions) == 8
   let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
   assert foo_namespace
     == types.NamespaceType(
       dict.from_list([
-        #(
-          "Foo",
-          types.CallableType(
-            [],
-            dict.new(),
-            types.CustomType("main_module", "Foo", []),
-          ),
-        ),
+        #("Foo", types.CustomType("main_module", "Foo", [])),
       ]),
       dict.from_list([#("Foo", types.CustomType("main_module", "Foo", []))]),
     )
@@ -88,7 +81,7 @@ pub fn import_no_add_private_variant_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs)
 
-  assert dict.size(main_env.definitions) == 1
+  assert dict.size(main_env.definitions) == 8
   let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
   assert foo_namespace == types.NamespaceType(dict.from_list([]), dict.new())
 
@@ -114,7 +107,7 @@ pub fn import_call_function_field_access_test() {
       other_envs,
     )
 
-  assert dict.size(main_env.definitions) == 2
+  assert dict.size(main_env.definitions) == 9
   let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
   assert foo_namespace
     == types.NamespaceType(
@@ -136,7 +129,7 @@ pub fn variant_call_function_field_access_test() {
     glance.module(
       "import foo
     pub fn main() -> foo.Foo {
-    foo.Foo()
+    foo.Foo
     }",
     )
   let assert Ok(#(_, main_env)) =
@@ -145,19 +138,12 @@ pub fn variant_call_function_field_access_test() {
       other_envs,
     )
 
-  assert dict.size(main_env.definitions) == 2
+  assert dict.size(main_env.definitions) == 9
   let assert Ok(foo_namespace) = dict.get(main_env.definitions, "foo")
   assert foo_namespace
     == types.NamespaceType(
       dict.from_list([
-        #(
-          "Foo",
-          types.CallableType(
-            [],
-            dict.new(),
-            types.CustomType("main_module", "Foo", []),
-          ),
-        ),
+        #("Foo", types.CustomType("main_module", "Foo", [])),
       ]),
       dict.from_list([#("Foo", types.CustomType("main_module", "Foo", []))]),
     )

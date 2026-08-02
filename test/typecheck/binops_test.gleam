@@ -110,158 +110,160 @@ pub fn neq_invalid_right_test() {
 }
 
 pub fn int_less_than_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 1 < 2 }")
+  let function_out = helpers.ok_function_typecheck("fn foo() -> Bool { 1 < 2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn int_less_than_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1.0 < 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.0 < 2 }")
     == error.InvalidBinOp("<", "Float", "Int", "two Ints")
 }
 
 pub fn int_less_than_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1 < 2.0 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 < 2.0 }")
     == error.InvalidBinOp("<", "Int", "Float", "two Ints")
 }
 
 pub fn float_less_than_test() {
   let function_out =
-    helpers.ok_function_typecheck("fn foo() -> Float { 1.1 <. 2.2 }")
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1.1 <. 2.2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 17), "Float", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn float_less_than_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1 <. 2.2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 <. 2.2 }")
     == error.InvalidBinOp("<.", "Int", "Float", "two Floats")
 }
 
 pub fn float_less_than_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1.1 <. 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.1 <. 2 }")
     == error.InvalidBinOp("<.", "Float", "Int", "two Floats")
 }
 
 pub fn int_less_than_or_equal_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 1 <= 2 }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1 <= 2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn int_less_than_or_equal_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1.0 <= 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.0 <= 2 }")
     == error.InvalidBinOp("<=", "Float", "Int", "two Ints")
 }
 
 pub fn int_less_than_or_equal_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1 <= 2.0 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 <= 2.0 }")
     == error.InvalidBinOp("<=", "Int", "Float", "two Ints")
 }
 
 pub fn float_less_than_or_equal_test() {
   let function_out =
-    helpers.ok_function_typecheck("fn foo() -> Float { 1.1 <=. 2.2 }")
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1.1 <=. 2.2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 17), "Float", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn float_less_than_or_equal_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1 <=. 2.2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 <=. 2.2 }")
     == error.InvalidBinOp("<=.", "Int", "Float", "two Floats")
 }
 
 pub fn float_less_than_or_equal_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1.1 <=. 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.1 <=. 2 }")
     == error.InvalidBinOp("<=.", "Float", "Int", "two Floats")
 }
 
 pub fn int_greater_than_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 1 > 2 }")
+  let function_out = helpers.ok_function_typecheck("fn foo() -> Bool { 1 > 2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn int_greater_than_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1.0 > 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.0 > 2 }")
     == error.InvalidBinOp(">", "Float", "Int", "two Ints")
 }
 
 pub fn int_greater_than_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1 > 2.0 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 > 2.0 }")
     == error.InvalidBinOp(">", "Int", "Float", "two Ints")
 }
 
 pub fn float_greater_than_test() {
   let function_out =
-    helpers.ok_function_typecheck("fn foo() -> Float { 1.1 >. 2.2 }")
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1.1 >. 2.2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 17), "Float", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn float_greater_than_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1 >. 2.2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 >. 2.2 }")
     == error.InvalidBinOp(">.", "Int", "Float", "two Floats")
 }
 
 pub fn int_greater_than_or_equal_test() {
-  let function_out = helpers.ok_function_typecheck("fn foo() -> Int { 1 >= 2 }")
+  let function_out =
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1 >= 2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn int_greater_than_or_equal_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1.0 >= 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.0 >= 2 }")
     == error.InvalidBinOp(">=", "Float", "Int", "two Ints")
 }
 
 pub fn int_greater_than_or_equal_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Int { 1 >= 2.0 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 >= 2.0 }")
     == error.InvalidBinOp(">=", "Int", "Float", "two Ints")
 }
 
 pub fn float_greater_than_or_equal_test() {
   let function_out =
-    helpers.ok_function_typecheck("fn foo() -> Float { 1.1 >=. 2.2 }")
+    helpers.ok_function_typecheck("fn foo() -> Bool { 1.1 >=. 2.2 }")
 
   assert function_out.return
     == option.Some(
-      glance.NamedType(glance.Span(12, 17), "Float", option.None, []),
+      glance.NamedType(glance.Span(12, 16), "Bool", option.None, []),
     )
 }
 
 pub fn float_greater_than_or_equal_invalid_left_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1 >=. 2.2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1 >=. 2.2 }")
     == error.InvalidBinOp(">=.", "Int", "Float", "two Floats")
 }
 
 pub fn float_greater_than_or_equal_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1.1 >=. 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.1 >=. 2 }")
     == error.InvalidBinOp(">=.", "Float", "Int", "two Floats")
 }
 
 pub fn float_greater_than_invalid_right_test() {
-  assert helpers.error_function_typecheck("fn foo() -> Float { 1.1 >. 2 }")
+  assert helpers.error_function_typecheck("fn foo() -> Bool { 1.1 >. 2 }")
     == error.InvalidBinOp(">.", "Float", "Int", "two Floats")
 }
 

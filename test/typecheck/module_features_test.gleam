@@ -47,7 +47,8 @@ pub fn alias_used_in_annotation_test() {
     fn foo() -> Temperature { 5 }",
     )
 
-  assert dict.get(env.custom_types, "Temperature") == Ok(types.IntType)
+  assert dict.get(env.custom_types, "Temperature")
+    == Ok(types.TypeAlias([], types.IntType))
   assert set.contains(env.public_custom_types, "Temperature")
 
   assert dict.get(env.definitions, "foo")
@@ -57,7 +58,8 @@ pub fn alias_used_in_annotation_test() {
 pub fn private_alias_not_public_test() {
   let #(_module, env) = helpers.ok_module_typecheck("type Alias = Int")
 
-  assert dict.get(env.custom_types, "Alias") == Ok(types.IntType)
+  assert dict.get(env.custom_types, "Alias")
+    == Ok(types.TypeAlias([], types.IntType))
   assert set.contains(env.public_custom_types, "Alias") == False
 }
 

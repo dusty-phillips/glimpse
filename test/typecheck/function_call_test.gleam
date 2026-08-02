@@ -111,7 +111,7 @@ pub fn simple_nil_variant_call_test() {
     "pub type Foo {
         Foo
     }
-    fn bar() -> Foo { Foo() } ",
+    fn bar() -> Foo { Foo } ",
   )
 }
 
@@ -121,8 +121,8 @@ pub fn multi_nil_variant_call_test() {
         Foo
         Bar
     }
-    fn bar() -> Foo { Foo() } 
-    fn bar() -> Foo { Bar() } ",
+    fn bar() -> Foo { Foo } 
+    fn bar() -> Foo { Bar } ",
   )
 }
 
@@ -312,5 +312,5 @@ pub fn generic_function_wrong_arity_test() {
       "fn identity(x: a) -> a { x }
      fn use_identity() -> Int { identity(42, \"extra\") }",
     )
-  assert actual == error.InvalidArguments("(a)", "(Int, String)")
+  assert actual == error.InvalidArguments("(var_0)", "(Int, String)")
 }

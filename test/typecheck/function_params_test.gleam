@@ -67,7 +67,7 @@ pub fn custom_type_param_test() {
 pub fn empty_signature_definition_test() {
   let #(_, env) = helpers.ok_module_typecheck("fn foo() -> Nil {}")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
 
   assert dict.get(env.definitions, "foo")
     == Ok(types.CallableType([], dict.from_list([]), types.NilType))
@@ -76,7 +76,7 @@ pub fn empty_signature_definition_test() {
 pub fn single_parameter_definition_test() {
   let #(_, env) = helpers.ok_module_typecheck("fn foo(a: Int) -> Nil {}")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
 
   assert dict.get(env.definitions, "foo")
     == Ok(types.CallableType([types.IntType], dict.from_list([]), types.NilType))
@@ -85,7 +85,7 @@ pub fn single_parameter_definition_test() {
 pub fn single_parameter_labelled_definition_test() {
   let #(_, env) = helpers.ok_module_typecheck("fn foo(lab a: Int) -> Nil {}")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
 
   assert dict.get(env.definitions, "foo")
     == Ok(types.CallableType(
@@ -99,7 +99,7 @@ pub fn multi_parameter_definition_test() {
   let #(_, env) =
     helpers.ok_module_typecheck("fn foo(a: Int, b: String) -> Nil {}")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
 
   assert dict.get(env.definitions, "foo")
     == Ok(types.CallableType(
@@ -113,7 +113,7 @@ pub fn multi_parameter_labelled_definition_test() {
   let #(_, env) =
     helpers.ok_module_typecheck("fn foo(lab a: Int, lab2 b: String) -> Nil {}")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
 
   assert dict.get(env.definitions, "foo")
     == Ok(types.CallableType(
@@ -127,7 +127,7 @@ pub fn mixed_positional_and_labelled_definition_test() {
   let #(_, env) =
     helpers.ok_module_typecheck("fn foo(a: Int, lab b: String) -> Nil {}")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
 
   assert dict.get(env.definitions, "foo")
     == Ok(types.CallableType(
@@ -140,7 +140,7 @@ pub fn mixed_positional_and_labelled_definition_test() {
 pub fn generic_function_parameter_test() {
   let #(_, env) = helpers.ok_module_typecheck("fn consume(x: a) -> Nil { Nil }")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
   assert dict.get(env.definitions, "consume")
     == Ok(types.GenericCallableType(
       [types.GenericTypeVariable("a")],
@@ -168,7 +168,7 @@ pub fn generic_function_parameter_test() {
 pub fn implicit_return_type_test() {
   let #(_, env) = helpers.ok_module_typecheck("fn implicit_int() { 42 }")
 
-  assert dict.size(env.definitions) == 1
+  assert dict.size(env.definitions) == 8
   assert dict.get(env.definitions, "implicit_int")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
@@ -196,7 +196,7 @@ pub fn multiple_implicit_returns_test() {
   ",
     )
 
-  assert dict.size(env.definitions) == 2
+  assert dict.size(env.definitions) == 9
   assert dict.get(env.definitions, "get_int")
     == Ok(types.CallableType([], dict.new(), types.IntType))
   assert dict.get(env.definitions, "get_string")

@@ -1,7 +1,9 @@
 import glance
+import gleam/dict
 import gleam/list
 import gleam/option
 import glimpse/error
+import glimpse/internal/typecheck/types
 import typecheck/helpers
 
 const unknown_span = glance.Span(-1, -1)
@@ -387,4 +389,17 @@ pub fn let_annotation_mismatch_test() {
   }",
     )
     == error.InvalidAnnotation("Int", "String", "x")
+}
+
+pub fn zero_arg_variant_constructor_test() {
+  let #(_module, env) =
+    helpers.ok_module_typecheck(
+      "pub type Foo { Bar } pub fn main() -> Foo { Bar }",
+    )
+  assert dict.get(env.definitions, "main")
+    == Ok(types.CallableType(
+      [],
+      dict.new(),
+      types.CustomType("main_module", "Foo", []),
+    ))
 }

@@ -241,16 +241,17 @@ pub fn let_variable_rebind_same_type_test() {
     )
 }
 
-pub fn let_variable_rebind_different_type_test() {
-  assert helpers.error_function_typecheck(
-      "fn foo(x: Int) -> Int {
+pub fn let_variable_shadows_parameter_test() {
+  let function_out =
+    helpers.ok_function_typecheck(
+      "fn foo(x: Int) -> String {
     let x = \"a\"
     x}",
     )
-    == error.InvalidType(
-      "Int",
-      "String",
-      "cannot rebind variable with different type",
+
+  assert function_out.return
+    == option.Some(
+      glance.NamedType(glance.Span(18, 24), "String", option.None, []),
     )
 }
 
