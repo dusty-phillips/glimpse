@@ -53,7 +53,8 @@ pub fn incorrect_param_return_fails_test() {
 pub fn custom_type_param_test() {
   let function_out =
     helpers.ok_function_env_typecheck(
-      types.new_env("main_module") |> types.add_custom_type_to_env("MyType"),
+      types.new_env("main_module")
+        |> types.add_custom_type_to_env("MyType", []),
       "fn foo(my_type: MyType) -> MyType { my_type }",
     )
 

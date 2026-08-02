@@ -124,7 +124,15 @@ fn fold_types_into_env(
         False -> Error(error.InvalidName(name))
         True -> {
           let scope_name = option.unwrap(import_alias, name)
-          Ok(types.add_custom_type_to_env(environment, scope_name))
+          case dict.get(module_env.custom_types, name) {
+            Error(_) -> Error(error.InvalidName(name))
+            Ok(type_) ->
+              Ok(types.add_or_update_custom_type_in_env(
+                environment,
+                scope_name,
+                type_,
+              ))
+          }
         }
       }
     },

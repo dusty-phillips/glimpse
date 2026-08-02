@@ -194,7 +194,10 @@ pub fn custom_type(
       // add to env first so variants can parse recursive types
       let environment =
         environment
-        |> types.add_custom_type_to_env(custom_type.name)
+        |> types.add_custom_type_to_env(
+          custom_type.name,
+          custom_type.parameters,
+        )
 
       let environment = case custom_type.publicity {
         glance.Public ->

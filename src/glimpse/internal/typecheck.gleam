@@ -535,10 +535,18 @@ fn record_update(
   use constructor_type <- result.try(constructor_lookup)
 
   case constructor_type {
-    types.CallableType(parameters, labels, _) ->
-      list.try_fold(fields, environment, fn(env, field) {
-        let store = types.new_type_store()
+    types.CallableType(..) | types.GenericCallableType(..) -> {
+      let #(store, parameters, labels, constructor_return) =
+        types.instantiate_callable(types.new_type_store(), constructor_type)
 
+      use store <- result.try(types.unify(
+        store,
+        environment,
+        record_type,
+        constructor_return,
+      ))
+
+      list.try_fold(fields, environment, fn(env, field) {
         dict.get(labels, field.label)
         |> result.map_error(fn(_) {
           error.InvalidFieldAccess(
@@ -551,10 +559,13 @@ fn record_update(
             list.drop(parameters, up_to: position)
             |> list.first
             |> result.unwrap(types.GenericTypeVariable("todo"))
+          let #(_, expected_type) = types.resolve(store, expected_type)
+          let expected_type = types.generalise(store, expected_type)
           case field.item {
             option.None -> Ok(env)
             option.Some(value_expr) -> {
               use value_type <- result.try(expression(env, value_expr))
+              let store = types.new_type_store()
               types.unify(store, env, value_type, expected_type)
               |> result.map(fn(_) { env })
               |> result.map_error(fn(_) {
@@ -569,6 +580,7 @@ fn record_update(
         })
       })
       |> result.map(fn(_) { record_type })
+    }
     _ ->
       Error(error.NotCallable(types.to_string(environment, constructor_type)))
   }

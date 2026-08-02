@@ -28,7 +28,7 @@ pub type Type {
   ListType(element: Type)
   ResultType(ok: Type, error: Type)
   OptionType(inner: Type)
-  CustomType(module: String, name: String)
+  CustomType(module: String, name: String, parameters: List(Type))
   CallableType(
     /// All parameters (labelled or otherwise)
     parameters: List(Type),
@@ -230,6 +230,20 @@ fn do_instantiate(
         do_instantiate(store, substitutions, inner)
       #(store, substitutions, OptionType(inner))
     }
+    CustomType(module, name, parameters) -> {
+      let #(store, substitutions, parameters) =
+        list.fold(parameters, #(store, substitutions, []), fn(state, parameter) {
+          let #(store, substitutions, acc) = state
+          let #(store, substitutions, parameter) =
+            do_instantiate(store, substitutions, parameter)
+          #(store, substitutions, [parameter, ..acc])
+        })
+      #(
+        store,
+        substitutions,
+        CustomType(module, name, list.reverse(parameters)),
+      )
+    }
     _ -> #(store, substitutions, type_)
   }
 }
@@ -255,6 +269,8 @@ fn occurs_check(store: TypeStore, id: Int, type_: Type) -> Bool {
     ResultType(ok, error) ->
       occurs_check(store, id, ok) || occurs_check(store, id, error)
     OptionType(inner) -> occurs_check(store, id, inner)
+    CustomType(_module, _name, parameters) ->
+      list.any(parameters, occurs_check(store, id, _))
     _ -> False
   }
 }
@@ -310,8 +326,10 @@ pub fn unify(
       unify(store, environment, le, re)
     }
     OptionType(li), OptionType(ri) -> unify(store, environment, li, ri)
-    CustomType(lm, ln), CustomType(rm, rn) if lm == rm && ln == rn -> Ok(store)
-    CustomType(_, _), CustomType(_, _) -> {
+    CustomType(lm, ln, lp), CustomType(rm, rn, rp) if lm == rm && ln == rn -> {
+      unify_list_of_types(store, environment, lp, rp)
+    }
+    CustomType(_, _, _), CustomType(_, _, _) -> {
       Error(mismatch_error(environment, left, right))
     }
     CallableType(lp, ll, lr), CallableType(rp, rl, rr) ->
@@ -480,6 +498,16 @@ fn do_generalise(
       let #(store, names, inner) = do_generalise(store, names, inner)
       #(store, names, OptionType(inner))
     }
+    CustomType(module, name, parameters) -> {
+      let #(store, names, parameters) =
+        list.fold(parameters, #(store, names, []), fn(state, parameter) {
+          let #(store, names, acc) = state
+          let #(store, names, parameter) =
+            do_generalise(store, names, parameter)
+          #(store, names, [parameter, ..acc])
+        })
+      #(store, names, CustomType(module, name, list.reverse(parameters)))
+    }
     _ -> #(store, names, type_)
   }
 }
@@ -578,14 +606,32 @@ pub fn publish_custom_type_in_env(
 pub fn add_custom_type_to_env(
   environment: Environment,
   name: String,
+  parameters: List(String),
 ) -> Environment {
   Environment(
     ..environment,
     custom_types: dict.insert(
       environment.custom_types,
       name,
-      CustomType(environment.current_module, name),
+      CustomType(
+        environment.current_module,
+        name,
+        list.map(parameters, fn(parameter) { GenericTypeVariable(parameter) }),
+      ),
     ),
+  )
+}
+
+/// Insert a custom type under a new name, preserving its defining module and
+/// type parameters. Used when importing types unqualified from another module.
+pub fn add_or_update_custom_type_in_env(
+  environment: Environment,
+  name: String,
+  type_: Type,
+) -> Environment {
+  Environment(
+    ..environment,
+    custom_types: dict.insert(environment.custom_types, name, type_),
   )
 }
 
@@ -655,18 +701,37 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
       Ok(CallableType(parameters, dict.new(), return))
     }
 
-    // TODO: custom types with parameters need to be supported
-    // TODO: not 100% certain all named types that are not covered
-    // above are actually custom types
-    glance.NamedType(_, name, option.None, []) ->
-      lookup_custom_type(environment, name)
-    glance.NamedType(_, name, option.Some(module), []) -> {
-      let namespace = environment.definitions |> dict.get(module)
-      case namespace {
-        Ok(NamespaceType(_, custom_types)) ->
-          dict.get(custom_types, name)
-          |> result.replace_error(error.InvalidFieldAccess(module, name))
-        _ -> Error(error.InvalidFieldAccess(module, name))
+    glance.NamedType(_, name, module, parameters) -> {
+      use declared <- result.try(lookup_named_type(environment, module, name))
+      case declared {
+        CustomType(declared_module, declared_name, declared_parameters) ->
+          case list.length(declared_parameters) == list.length(parameters) {
+            False ->
+              Error(error.InvalidType(
+                name,
+                to_string(environment, declared),
+                "wrong number of type parameters: expected "
+                  <> int.to_string(list.length(declared_parameters))
+                  <> ", got "
+                  <> int.to_string(list.length(parameters)),
+              ))
+            True -> {
+              use parameter_types <- result.try(
+                list.try_map(parameters, type_(environment, _)),
+              )
+              Ok(CustomType(declared_module, declared_name, parameter_types))
+            }
+          }
+        _ ->
+          case parameters {
+            [] -> Ok(declared)
+            _ ->
+              Error(error.InvalidType(
+                name,
+                to_string(environment, declared),
+                "type does not take parameters",
+              ))
+          }
       }
     }
 
@@ -679,7 +744,26 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
 
     glance.HoleType(_, _) ->
       Error(error.InvalidType("hole", "a known type", "holes are not supported"))
-    glance.NamedType(_, name, _, _) -> Error(error.UnknownCustomType(name))
+  }
+}
+
+/// Look up the type a name refers to, either directly in the environment or
+/// through an imported namespace.
+fn lookup_named_type(
+  environment: Environment,
+  module: option.Option(String),
+  name: String,
+) -> TypeResult {
+  case module {
+    option.None -> lookup_custom_type(environment, name)
+    option.Some(module_name) -> {
+      case dict.get(environment.definitions, module_name) {
+        Ok(NamespaceType(_, custom_types)) ->
+          dict.get(custom_types, name)
+          |> result.replace_error(error.InvalidFieldAccess(module_name, name))
+        _ -> Error(error.InvalidFieldAccess(module_name, name))
+      }
+    }
   }
 }
 
@@ -700,7 +784,17 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
       <> to_string(environment, error)
       <> ")"
     OptionType(inner) -> "Option(" <> to_string(environment, inner) <> ")"
-    CustomType(module, name) -> module <> "." <> name
+    CustomType(module, name, parameters) ->
+      case parameters {
+        [] -> module <> "." <> name
+        _ ->
+          module
+          <> "."
+          <> name
+          <> "("
+          <> list_to_string(parameters, environment)
+          <> ")"
+      }
     CallableType(parameters, _labels, return) ->
       "fn ("
       <> list_to_string(parameters, environment)
@@ -750,13 +844,20 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
       glance.NamedType(unknown_span, "Option", option.None, [
         to_glance(environment, inner),
       ])
-    CustomType(module, name) -> {
+    CustomType(module, name, parameters) -> {
+      let glance_parameters = list.map(parameters, to_glance(environment, _))
       case module == environment.current_module {
-        True -> glance.NamedType(unknown_span, name, option.None, [])
+        True ->
+          glance.NamedType(unknown_span, name, option.None, glance_parameters)
         False -> {
           case dict.get(environment.import_names, module) {
             Ok(relative) ->
-              glance.NamedType(unknown_span, name, option.Some(relative), [])
+              glance.NamedType(
+                unknown_span,
+                name,
+                option.Some(relative),
+                glance_parameters,
+              )
             Error(_) -> panic as "Custom type should always have a valid module"
           }
         }

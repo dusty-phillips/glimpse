@@ -87,7 +87,7 @@ pub fn unqualified_type_import_test() {
     |> typecheck.module(other_envs)
 
   assert dict.get(main_env.custom_types, "Bar")
-    == Ok(types.CustomType("main_module", "Bar"))
+    == Ok(types.CustomType("main_module", "Bar", []))
 }
 
 pub fn unqualified_constructor_import_test() {
@@ -104,7 +104,7 @@ pub fn unqualified_constructor_import_test() {
     == Ok(types.CallableType(
       [],
       dict.new(),
-      types.CustomType("main_module", "Foo"),
+      types.CustomType("main_module", "Foo", []),
     ))
 }
 
@@ -144,7 +144,7 @@ pub fn combined_value_and_type_import_test() {
     == Ok(types.CallableType(
       [],
       dict.new(),
-      types.CustomType("main_module", "Bar"),
+      types.CustomType("main_module", "Bar", []),
     ))
 }
 

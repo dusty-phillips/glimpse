@@ -106,19 +106,26 @@ pub fn typecheck_pattern(
         constructor,
       ))
       case callable {
-        types.CallableType(parameters, position_labels, constructor_return)
-        | types.GenericCallableType(
-            parameters,
-            position_labels,
-            constructor_return,
-            _,
-          ) -> {
-          use env <- result.try(check_constructor_return(
+        types.CallableType(..) | types.GenericCallableType(..) -> {
+          let #(store, parameters, position_labels, constructor_return) =
+            types.instantiate_callable(types.new_type_store(), callable)
+          use store <- result.try(types.unify(
+            store,
             environment,
             expected_type,
             constructor_return,
           ))
-          check_variant_arguments(env, arguments, parameters, position_labels)
+          let resolved_parameters =
+            list.map(parameters, fn(parameter) {
+              let #(_store, resolved) = types.resolve(store, parameter)
+              types.generalise(store, resolved)
+            })
+          check_variant_arguments(
+            environment,
+            arguments,
+            resolved_parameters,
+            position_labels,
+          )
         }
         _ -> Error(error.NotCallable(types.to_string(environment, callable)))
       }
@@ -232,16 +239,6 @@ fn lookup_constructor(
 
 /// Check that a pattern matching a constructor of a custom type is being used
 /// against a value of that same custom type.
-fn check_constructor_return(
-  environment: types.Environment,
-  expected_type: types.Type,
-  constructor_return: types.Type,
-) -> error.TypeCheckResult(types.Environment) {
-  let store = types.new_type_store()
-  types.unify(store, environment, expected_type, constructor_return)
-  |> result.map(fn(_) { environment })
-}
-
 fn check_variant_arguments(
   environment: types.Environment,
   arguments: List(glance.Field(glance.Pattern)),

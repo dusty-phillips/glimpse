@@ -67,11 +67,11 @@ pub fn import_adds_variant_to_env_test() {
           types.CallableType(
             [],
             dict.new(),
-            types.CustomType("main_module", "Foo"),
+            types.CustomType("main_module", "Foo", []),
           ),
         ),
       ]),
-      dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
+      dict.from_list([#("Foo", types.CustomType("main_module", "Foo", []))]),
     )
 
   assert dict.size(main_env.import_names) == 1
@@ -155,11 +155,11 @@ pub fn variant_call_function_field_access_test() {
           types.CallableType(
             [],
             dict.new(),
-            types.CustomType("main_module", "Foo"),
+            types.CustomType("main_module", "Foo", []),
           ),
         ),
       ]),
-      dict.from_list([#("Foo", types.CustomType("main_module", "Foo"))]),
+      dict.from_list([#("Foo", types.CustomType("main_module", "Foo", []))]),
     )
 
   assert dict.size(main_env.import_names) == 1

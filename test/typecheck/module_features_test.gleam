@@ -83,7 +83,7 @@ pub fn opaque_type_hides_constructor_test() {
     == Ok(types.CallableType(
       [types.IntType],
       dict.from_list([#("x", 0)]),
-      types.CustomType("main_module", "Secret"),
+      types.CustomType("main_module", "Secret", []),
     ))
 }
 
@@ -106,7 +106,7 @@ pub fn opaque_constructor_usable_in_same_module_test() {
     == Ok(types.CallableType(
       [],
       dict.new(),
-      types.CustomType("main_module", "Secret"),
+      types.CustomType("main_module", "Secret", []),
     ))
 }
 

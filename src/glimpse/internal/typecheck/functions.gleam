@@ -35,6 +35,7 @@ fn has_generic_types(types: List(Type)) -> Bool {
 fn is_generic_type(type_: Type) -> Bool {
   case type_ {
     types.GenericTypeVariable(_) -> True
+    types.CustomType(_, _, parameters) -> list.any(parameters, is_generic_type)
     _ -> False
   }
 }
@@ -233,6 +234,9 @@ pub fn fold_variant_constructors_into_env(
               types.CustomType(
                 environment.current_module,
                 glance_custom_type.name,
+                list.map(glance_custom_type.parameters, fn(parameter) {
+                  types.GenericTypeVariable(parameter)
+                }),
               ),
             ),
           )

@@ -152,6 +152,25 @@ pub fn record_update_wrong_field_type_test() {
     == error.InvalidType("String", "Int", "in record update of field age")
 }
 
+pub fn parametric_record_update_test() {
+  helpers.ok_module_typecheck(
+    "type Box(a) { Box(value: a) }
+  fn update(b: Box(Int)) -> Box(Int) {
+    Box(..b, value: 30)
+  }",
+  )
+}
+
+pub fn parametric_record_update_wrong_field_type_test() {
+  assert helpers.error_module_typecheck(
+      "type Box(a) { Box(value: a) }
+  fn update(b: Box(Int)) -> Box(Int) {
+    Box(..b, value: \"thirty\")
+  }",
+    )
+    == error.InvalidType("String", "Int", "in record update of field value")
+}
+
 pub fn assert_bool_returns_nil_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { assert 1 == 1 }")
 
