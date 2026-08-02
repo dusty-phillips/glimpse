@@ -76,16 +76,14 @@ live in `glimpse/typecheck` for checking individual modules, constants, custom
 types, and functions.
 
 The typechecker covers expressions, statements, patterns, annotations, imports
-(including aliases and unqualified imports), module constants, custom types,
-function signatures and bodies, `use` syntax, and case expressions. Generic
-callables are instantiated at each call site, so polymorphic functions such as
+(including aliases and unqualified imports), module constants, custom types
+(including parametric types such as `type Box(a)`), function signatures and
+bodies, `use` syntax, and case expressions. Generic callables are instantiated
+at each call site, so polymorphic functions such as
 `fn identity(x: a) -> a { x }` check correctly.
 
-It is not yet a complete Gleam typechecker. Known gaps:
+It is not yet a complete Gleam typechecker. One known gap:
 
-- Parametric custom types (`type Box(a)`) are not supported: `List`, `Result`,
-  and `Option` are handled specially, but a user-defined type parameter in an
-  annotation currently errors.
 - Generic function inference is shallow: generic calls are checked for
   consistency at each call site, but the most general type is not inferred.
 
