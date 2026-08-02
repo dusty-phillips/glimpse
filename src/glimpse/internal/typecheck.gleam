@@ -16,6 +16,11 @@ import glimpse/internal/typecheck/types.{
 /// Typecheck a sequence of statements, threading the environment and type store
 /// through each one. Returns the type of the final statement, or Nil if the
 /// block is empty.
+///
+/// A `use` statement desugars to a call `f(args, fn(..) { .. })` whose value is
+/// `f`'s return type, and the statements after it are the callback body. So when
+/// the block contains a `use` statement, the block's type is the first
+/// (outermost) `use` statement's return type rather than the last statement's.
 pub fn block(
   environment: Environment,
   store: TypeStore,
@@ -23,17 +28,41 @@ pub fn block(
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
   list.fold_until(
     statements,
-    Ok(#(store, environment, types.NilType)),
+    Ok(#(store, environment, types.NilType, option.None)),
     fn(state, stmnt) {
       case state {
         Error(_) -> list.Stop(state)
-        Ok(#(store, env, _type)) -> list.Continue(statement(env, store, stmnt))
+        Ok(#(store, env, _type, use_type)) -> {
+          let statement_result = statement(env, store, stmnt)
+          case statement_result {
+            Error(_) ->
+              list.Stop(
+                result.map(statement_result, fn(t) {
+                  let #(s, e, ty) = t
+                  #(s, e, ty, use_type)
+                }),
+              )
+            Ok(#(store, env, stmt_type)) -> {
+              echo "BLOCK statement type=" <> types.raw_show(stmt_type)
+              let new_use_type = case stmnt {
+                glance.Use(..) ->
+                  case use_type {
+                    option.Some(_) -> use_type
+                    option.None -> option.Some(stmt_type)
+                  }
+                _ -> use_type
+              }
+              list.Continue(Ok(#(store, env, stmt_type, new_use_type)))
+            }
+          }
+        }
       }
     },
   )
   |> result.map(fn(state) {
-    let #(store, _env, type_) = state
-    #(store, type_)
+    let #(store, _env, last_type, use_type) = state
+    let block_type = option.unwrap(use_type, last_type)
+    #(store, block_type)
   })
 }
 
@@ -137,6 +166,52 @@ fn type_name(pat: glance.Pattern) -> String {
   }
 }
 
+/// Extract the parameters, labels, and return type of a call target, so a call
+/// can be checked against them. A target that is a bare unbound variable (an
+/// unannotated higher-order parameter) is constrained to a fresh callable
+/// taking the given number of arguments.
+fn callable_parts(
+  environment: Environment,
+  store: TypeStore,
+  target: types.Type,
+  argument_count: Int,
+) -> error.TypeCheckResult(
+  #(
+    TypeStore,
+    List(types.Type),
+    List(types.Type),
+    dict.Dict(String, Int),
+    types.Type,
+  ),
+) {
+  case target {
+    types.CallableType(target_arguments, _, _)
+    | types.GenericCallableType(target_arguments, _, _, _) -> {
+      echo "    CALLABLEPARTS callable nargs="
+      echo argument_count
+      echo " target="
+      echo types.to_string(environment, target)
+      let #(store, parameters, labels, return) =
+        types.instantiate_callable(store, target)
+      Ok(#(store, target_arguments, parameters, labels, return))
+    }
+    types.Var(_) -> {
+      echo "    CALLABLEPARTS var nargs="
+      echo argument_count
+      let #(store, parameters) = types.fresh_vars(store, argument_count)
+      let #(store, return) = types.fresh_var(store)
+      let callable = types.CallableType(parameters, dict.new(), return)
+      echo "    CALLABLEPARTS params="
+      echo types.list_to_string(parameters, environment)
+      types.unify(store, environment, target, callable)
+      |> result.map(fn(store) {
+        #(store, parameters, parameters, dict.new(), return)
+      })
+    }
+    _ -> Error(error.NotCallable(types.to_string(environment, target)))
+  }
+}
+
 /// Typecheck a `use` statement. The use function must be a callable whose last
 /// parameter is itself a function that takes the bound variables as arguments.
 /// The result of the use expression is the return type of that inner function.
@@ -169,57 +244,39 @@ fn use_call(
     store,
     target,
   ))
-  use #(store, argument_fields) <- result.try(fold_fields(
-    environment,
-    store,
-    arguments,
-  ))
 
   case glimpse_target {
     types.CallableType(..) | types.GenericCallableType(..) -> {
-      let #(store, parameters, labels, _) =
+      let #(store, parameters, labels, return) =
         types.instantiate_callable(store, glimpse_target)
-
-      use #(store, env, callback_return) <- result.try(fold_use_patterns(
-        environment,
-        store,
-        patterns,
-        parameters,
-      ))
 
       let given_parameters =
         list.take(parameters, up_to: list.length(parameters) - 1)
 
-      use positioned_arguments <- result.try(functions.order_call_arguments(
+      use #(store, _argument_types) <- result.try(check_arguments(
         environment,
-        argument_fields,
+        store,
+        arguments,
         given_parameters,
         labels,
       ))
 
-      let store_result =
-        list.try_fold(
-          list.zip(positioned_arguments, given_parameters),
-          store,
-          fn(store, pair) {
-            let #(arg_type, param_type) = pair
-            types.unify(store, environment, arg_type, param_type)
-          },
-        )
-        |> result.map_error(fn(_) {
-          error.InvalidArguments(
-            "(" <> types.list_to_string(given_parameters, environment) <> ")",
-            "("
-              <> types.list_to_string(positioned_arguments, environment)
-              <> ")",
-          )
-        })
+      // Fold the use patterns against the callback parameter only after the
+      // explicit arguments are unified, so the callback's types are resolved
+      // before they are generalised into the bound pattern variables.
+      use #(store, env, _callback_return) <- result.try(fold_use_patterns(
+        environment,
+        store,
+        patterns,
+        list.length(arguments),
+        parameters,
+      ))
 
-      use store <- result.try(store_result)
-
-      let #(store, generalised) =
-        types.resolve_and_generalise(store, callback_return)
-      Ok(#(store, env, generalised))
+      // The `use` expression has the type of the function call it desugars to
+      // (`f(y, fn(x) { body })`), i.e. the use function's return type, not the
+      // callback's.
+      let #(store, resolved) = types.resolve(store, return)
+      Ok(#(store, env, resolved))
     }
     _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
@@ -241,24 +298,35 @@ fn use_statement_with_type(
   ))
 
   case target_type {
-    types.CallableType(parameters, _, _)
-    | types.GenericCallableType(parameters, _, _, _) ->
-      fold_use_patterns(environment, store, patterns, parameters)
+    types.CallableType(parameters, _, return)
+    | types.GenericCallableType(parameters, _, return, _) -> {
+      use #(store, env, _callback_return) <- result.try(fold_use_patterns(
+        environment,
+        store,
+        patterns,
+        0,
+        parameters,
+      ))
+      let #(store, resolved) = types.resolve(store, return)
+      Ok(#(store, env, resolved))
+    }
     _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
   }
 }
 
-/// The parameters given to a `use` statement must be the number of patterns
-/// plus one callback parameter. This checks that, extracts the callback's
-/// parameter types and return type, and folds the use patterns against the
-/// callback's parameter types.
+/// The parameters given to a `use` statement are the call's explicit arguments
+/// plus one implicit callback parameter. The callback's parameters are matched
+/// against the use patterns. This extracts the callback's parameter types and
+/// return type, folds the use patterns against the callback's parameter types,
+/// and checks the explicit argument count against the callable's parameters.
 fn fold_use_patterns(
   environment: Environment,
   store: TypeStore,
   patterns: List(glance.UsePattern),
+  given_argument_count: Int,
   parameters: List(types.Type),
 ) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
-  case list.length(parameters) == list.length(patterns) + 1 {
+  case list.length(parameters) == given_argument_count + 1 {
     False -> Error(error.InvalidUse(list.length(patterns)))
     True -> {
       let callback_parameter =
@@ -302,6 +370,23 @@ pub fn expression(
   store: TypeStore,
   expr: glance.Expression,
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  typecheck_with_expected(environment, store, expr, option.None)
+}
+
+/// Typecheck an expression, optionally against an expected type.
+///
+/// The expected type is propagated only into call arguments and anonymous
+/// function parameters. It binds inferred (unannotated) lambda parameters to
+/// the parameter types of the callable they are passed to, so that field
+/// accesses and other type-directed sub-expressions inside a callback body
+/// resolve correctly even when the parameter type would otherwise remain an
+/// unbound inference variable (e.g. `result.map(expr, fn(x) { x.location })`).
+fn typecheck_with_expected(
+  environment: Environment,
+  store: TypeStore,
+  expr: glance.Expression,
+  expected: option.Option(Type),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   case expr {
     glance.Int(_, _) -> Ok(#(store, types.IntType))
     glance.Float(_, _) -> Ok(#(store, types.FloatType))
@@ -311,7 +396,12 @@ pub fn expression(
       Ok(#(store, types.BoolType))
     glance.Variable(_, name) ->
       types.lookup_variable_type(environment, name)
-      |> result.map(fn(type_) { #(store, type_) })
+      |> result.map(fn(type_) {
+        // Instantiate so generic values (constructors, polymorphic bindings)
+        // get fresh variables at each use site.
+        let #(store, type_) = types.instantiate(store, type_)
+        #(store, type_)
+      })
 
     glance.NegateInt(_, int_expr) -> {
       use #(store, got) <- result.try(expression(environment, store, int_expr))
@@ -404,28 +494,40 @@ pub fn expression(
       list_expression(environment, store, elements, rest)
 
     glance.Fn(_, arguments, return_annotation, body) ->
-      fn_literal(environment, store, arguments, return_annotation, body)
+      fn_literal(
+        environment,
+        store,
+        arguments,
+        return_annotation,
+        body,
+        expected,
+      )
 
     glance.RecordUpdate(_, module, constructor, record, fields) ->
       record_update(environment, store, module, constructor, record, fields)
 
     glance.FieldAccess(_, container, label) -> {
-      use #(store, container_expression_type) <- result.try(expression(
-        environment,
-        store,
-        container,
-      ))
+      // A bare module alias used as a namespace (e.g. `token.DotDot`) must
+      // resolve to the namespace even when a value with the same name exists.
+      let container_result = case container {
+        glance.Variable(_, name) ->
+          case dict.get(environment.module_imports, name) {
+            Ok(namespace) -> Ok(#(store, namespace))
+            Error(_) -> expression(environment, store, container)
+          }
+        _ -> expression(environment, store, container)
+      }
+      use #(store, container_expression_type) <- result.try(container_result)
       case container_expression_type {
         types.NamespaceType(nested_defs, _nested_types) ->
           nested_defs
           |> dict.get(label)
           |> result.replace_error(error.InvalidName(label))
-          |> result.map(fn(type_) { #(store, type_) })
-        type_ ->
-          Error(error.InvalidFieldAccess(
-            types.to_string(environment, type_),
-            label,
-          ))
+          |> result.map(fn(type_) {
+            let #(store, type_) = types.instantiate(store, type_)
+            #(store, type_)
+          })
+        type_ -> field_access_type(environment, store, type_, label)
       }
     }
 
@@ -570,37 +672,51 @@ fn list_expression(
         store,
         rest_expr,
       ))
-      case rest_type {
-        types.ListType(rest_element) -> {
-          case types.unify(store, environment, element_type, rest_element) {
-            Ok(store) -> Ok(#(store, types.ListType(element_type)))
-            Error(_) ->
-              Error(error.InvalidType(
-                types.to_string(environment, rest_type),
-                "List(" <> types.to_string(environment, element_type) <> ")",
-                "list rest must be a list",
-              ))
-          }
+      let #(store, rest_element) = case rest_type {
+        types.ListType(rest_element) -> #(store, rest_element)
+        _ -> {
+          let #(store, rest_element) = types.fresh_var(store)
+          #(store, rest_element)
         }
-        _ ->
-          Error(error.InvalidType(
-            types.to_string(environment, rest_type),
-            "List(" <> types.to_string(environment, element_type) <> ")",
-            "list rest must be a list",
-          ))
       }
+      let mismatch = fn(_) {
+        error.InvalidType(
+          types.to_string(environment, rest_type),
+          "List(" <> types.to_string(environment, element_type) <> ")",
+          "list rest must be a list",
+        )
+      }
+      types.unify(store, environment, rest_type, types.ListType(rest_element))
+      |> result.map_error(mismatch)
+      |> result.map(fn(store) {
+        types.unify(store, environment, element_type, rest_element)
+      })
+      |> result.flatten
+      |> result.map_error(mismatch)
+      |> result.map(fn(store) { #(store, types.ListType(element_type)) })
     }
   }
 }
 
 /// Typecheck a function literal. Parameters without annotations are inferred
-/// from their use within the body. Returns a CallableType.
+/// from their use within the body.
+///
+/// When an `expected` type is supplied (a callable type from the call site),
+/// unannotated parameters are bound to the corresponding expected parameter
+/// types *before* the body is checked. This is what lets a callback's body
+/// typecheck correctly when the parameter's type can only be learned from the
+/// callee's signature — e.g. `result.map(expr, fn(x) { x.location })` where
+/// `x` must be `Expression` for the field access to resolve. Annotated
+/// parameters are left to the user's annotation; the whole lambda is unified
+/// with the expected type by the call site afterwards. Generalisation happens
+/// at binding boundaries, not on the lambda itself.
 fn fn_literal(
   environment: Environment,
   store: TypeStore,
   arguments: List(glance.FnParameter),
   return_annotation: option.Option(glance.Type),
   body: List(glance.Statement),
+  expected: option.Option(Type),
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
   use #(store, param_types) <- result.try(
     list.try_fold(arguments, #(store, []), fn(state, param) {
@@ -617,6 +733,45 @@ fn fn_literal(
     }),
   )
   let param_types = list.reverse(param_types)
+
+  // Bind unannotated parameters to their expected types, in case this literal
+  // is supplied where a concrete callable type is expected (e.g. as a callback
+  // argument). Only unbinded inference variables are bound here; annotated and
+  // explicitly-generic parameters keep their given types so the lambda may
+  // remain polymorphic.
+  use #(store, _) <- result.try(case expected {
+    option.Some(expected_type) ->
+      case expected_type {
+        types.CallableType(expected_params, _, _)
+        | types.GenericCallableType(expected_params, _, _, _) ->
+          case list.length(param_types) == list.length(expected_params) {
+            True ->
+              list.try_fold(
+                list.zip(param_types, expected_params),
+                #(store, Nil),
+                fn(state, pair) {
+                  let #(store, _) = state
+                  let #(param_type, expected_param) = pair
+                  case param_type {
+                    types.Var(_) ->
+                      types.unify(
+                        store,
+                        environment,
+                        param_type,
+                        expected_param,
+                      )
+                    _ -> Ok(store)
+                  }
+                  |> result.map(fn(store) { #(store, Nil) })
+                },
+              )
+              |> result.map(fn(state) { #(state.0, Nil) })
+            False -> Ok(#(store, Nil))
+          }
+        _ -> Ok(#(store, Nil))
+      }
+    option.None -> Ok(#(store, Nil))
+  })
 
   use #(store, param_env) <- result.try(
     list.try_fold(
@@ -655,31 +810,118 @@ fn fn_literal(
     }
   })
 
-  let generalised =
-    types.generalise(
-      store,
-      types.CallableType(param_types, dict.new(), return_type),
-    )
+  // Don't generalise here: unannotated parameters and the return type are
+  // inference variables that should be bound by the expected type at the use
+  // site. Generalisation happens at binding boundaries, not on the lambda
+  // itself. Annotations may still introduce named generics, which keep the
+  // lambda polymorphic.
+  let lambda_type = case
+    functions.has_generic_types(param_types)
+    || functions.is_generic_type(return_type)
+  {
+    True ->
+      types.GenericCallableType(
+        param_types,
+        dict.new(),
+        return_type,
+        functions.dummy_function(),
+      )
+    False -> types.CallableType(param_types, dict.new(), return_type)
+  }
 
-  Ok(
-    #(store, case generalised {
-      types.CallableType(parameters, labels, return) ->
-        case
-          functions.has_generic_types(parameters)
-          || functions.is_generic_type(return)
-        {
-          True ->
-            types.GenericCallableType(
-              parameters,
-              labels,
-              return,
-              functions.dummy_function(),
-            )
-          False -> generalised
+  Ok(#(store, lambda_type))
+}
+
+/// Typecheck a field access expression (`record.label`). The container must
+/// be a custom type whose constructor has a parameter with the given label.
+fn field_access_type(
+  environment: Environment,
+  store: TypeStore,
+  container_type: types.Type,
+  label: String,
+) -> error.TypeCheckResult(#(TypeStore, types.Type)) {
+  echo "FIELDSEL container="
+    <> types.to_string(environment, container_type)
+    <> " label="
+    <> label
+  case container_type {
+    types.CustomType(module, name, _parameters) -> {
+      let definitions_result = case module == environment.current_module {
+        True -> Ok(environment.definitions)
+        False -> {
+          case dict.get(environment.module_imports, module) {
+            Ok(types.NamespaceType(nested_defs, _)) -> Ok(nested_defs)
+            _ ->
+              Error(error.InvalidFieldAccess(
+                types.to_string(environment, container_type),
+                label,
+              ))
+          }
         }
-      other -> other
-    }),
-  )
+      }
+
+      use definitions <- result.try(definitions_result)
+
+      // Constructor names differ from the type name for multi-constructor
+      // types, so find the constructor whose return type is this custom type
+      // and which carries the label.
+      let constructor_result =
+        dict.fold(
+          definitions,
+          Error(error.InvalidFieldAccess(
+            types.to_string(environment, container_type),
+            label,
+          )),
+          fn(acc, _ctor_name, def) {
+            case acc {
+              Ok(_) -> acc
+              Error(_) -> {
+                case def {
+                  types.CallableType(..) | types.GenericCallableType(..) -> {
+                    let #(store, parameters, labels, return) =
+                      types.instantiate_callable(store, def)
+                    let is_target = case return {
+                      types.CustomType(return_module, return_name, _) ->
+                        return_module == module && return_name == name
+                      _ -> False
+                    }
+                    case is_target && dict.has_key(labels, label) {
+                      True -> Ok(#(store, parameters, labels))
+                      False -> acc
+                    }
+                  }
+                  _ -> acc
+                }
+              }
+            }
+          },
+        )
+
+      use constructor_data <- result.try(constructor_result)
+      let #(store, parameters, labels) = constructor_data
+      dict.get(labels, label)
+      |> result.map(fn(position) {
+        let expected_type =
+          list.drop(parameters, up_to: position)
+          |> list.first
+          |> result.unwrap(types.GenericTypeVariable("todo"))
+        let #(_, expected_type) = types.resolve(store, expected_type)
+        let expected_type = types.generalise(store, expected_type)
+        #(store, expected_type)
+      })
+      |> result.map_error(fn(_) {
+        error.InvalidFieldAccess(
+          types.to_string(environment, container_type),
+          label,
+        )
+      })
+    }
+    _ ->
+      Error(error.InvalidFieldAccess(
+        types.to_string(environment, container_type),
+        label,
+      ))
+  }
 }
 
 /// Typecheck a record update expression (`Type(..record, field: value)`).
@@ -699,7 +941,7 @@ fn record_update(
       dict.get(environment.definitions, constructor)
       |> result.replace_error(error.InvalidName(constructor))
     option.Some(module_name) -> {
-      case dict.get(environment.definitions, module_name) {
+      case dict.get(environment.module_imports, module_name) {
         Ok(types.NamespaceType(nested_defs, _)) ->
           dict.get(nested_defs, constructor)
           |> result.replace_error(error.InvalidName(constructor))
@@ -792,27 +1034,31 @@ fn case_expression(
 
   case clauses {
     [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
-    [first_clause, ..] -> {
-      use #(store, first_body_type) <- result.try(clause_body_type(
-        environment,
-        store,
-        subject_types,
-        first_clause,
-      ))
-
-      let remaining_types =
-        list.map(list.drop(clauses, up_to: 1), fn(clause) {
+    [_first_clause, ..] -> {
+      // Typecheck every clause body sequentially, threading the store so each
+      // clause gets a distinct namespace of inference variables. Unifying the
+      // bodies afterwards then cannot conflate vars that belong to different
+      // clauses.
+      use #(store, clause_types) <- result.try(
+        list.try_fold(clauses, #(store, []), fn(state, clause) {
+          let #(store, reversed) = state
           clause_body_type(environment, store, subject_types, clause)
-        })
+          |> result.map(fn(state) {
+            let #(store, type_) = state
+            #(store, [type_, ..reversed])
+          })
+        }),
+      )
+      let clause_types = list.reverse(clause_types)
 
-      result.all(remaining_types)
-      |> result.try(fn(clause_states) {
-        let clause_types = list.map(clause_states, fn(state) { state.1 })
-        list.try_fold(clause_types, store, fn(store, clause_type) {
-          types.unify(store, environment, first_body_type, clause_type)
-        })
-        |> result.map(fn(store) { #(store, first_body_type) })
-      })
+      case clause_types {
+        [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
+        [first_body_type, ..remaining_types] ->
+          list.try_fold(remaining_types, store, fn(store, clause_type) {
+            types.unify(store, environment, first_body_type, clause_type)
+          })
+          |> result.map(fn(store) { #(store, first_body_type) })
+      }
     }
   }
 }
@@ -823,17 +1069,24 @@ fn clause_body_type(
   subject_types: List(Type),
   clause: glance.Clause,
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  // `clause.patterns` is a list of OR-alternatives, each a list of patterns
+  // aligned with the subjects. Typecheck every alternative against the base
+  // environment so bindings from one alternative don't leak into another.
   use #(store, pattern_env) <- result.try(
     list.try_fold(
-      list.zip(subject_types, clause.patterns),
+      clause.patterns,
       #(store, environment),
-      fn(state, pair) {
-        let #(store, env) = state
-        let #(subject_type, patterns) = pair
-        list.try_fold(patterns, #(store, env), fn(state, pattern) {
-          let #(store, env) = state
-          pattern.typecheck_pattern(env, store, subject_type, pattern)
-        })
+      fn(state, alternative) {
+        let #(store, _) = state
+        list.try_fold(
+          list.zip(subject_types, alternative),
+          #(store, environment),
+          fn(state, pair) {
+            let #(store, env) = state
+            let #(subject_type, pattern) = pair
+            pattern.typecheck_pattern(env, store, subject_type, pattern)
+          },
+        )
       },
     ),
   )
@@ -850,11 +1103,17 @@ fn clause_body_type(
   }
 }
 
-/// Typecheck a function call. The target is typechecked, instantiated (so
-/// generic parameters become fresh variables), arguments are ordered to match
-/// the target's parameter positions, and each is unified with its parameter
-/// type. The return type is resolved and any remaining variables are
-/// generalised back to named generic variables.
+/// Typecheck a function call. The target is typechecked and instantiated (so
+/// generic parameters become fresh variables), then each argument is checked
+/// against — and unified with — its parameter type *in parameter order*.
+///
+/// Checking arguments in parameter order (rather than typechecking them all
+/// first and unifying afterwards) is what lets a callback supplied later in
+/// the argument list learn parameter types that were constrained by earlier
+/// arguments (e.g. `result.map(expr, fn(x) { ...})` where `x`'s type is only
+/// determined once `expr` has fixed the generic). Anonymous function
+/// arguments are typechecked with the expected parameter type, so their
+/// parameters are bound to concrete types before the body is checked.
 pub fn call(
   environment: Environment,
   store: TypeStore,
@@ -866,50 +1125,225 @@ pub fn call(
     store,
     target,
   ))
-  use #(store, glimpse_argument_fields) <- result.try(fold_fields(
+
+  use #(store, _target_arguments, parameters, labels, return) <- result.try(
+    callable_parts(environment, store, glimpse_target, list.length(arguments)),
+  )
+
+  use #(store, _argument_types) <- result.try(check_arguments(
     environment,
     store,
     arguments,
+    parameters,
+    labels,
   ))
 
-  case glimpse_target {
-    types.CallableType(target_arguments, _, _)
-    | types.GenericCallableType(target_arguments, _, _, _) -> {
-      let #(store, parameters, labels, return) =
-        types.instantiate_callable(store, glimpse_target)
+  Ok(types.resolve(store, return))
+}
 
-      use positioned_arguments <- result.try(functions.order_call_arguments(
-        environment,
-        glimpse_argument_fields,
-        target_arguments,
-        labels,
+/// Type-check call arguments against their parameter types.
+///
+/// Arguments are aligned to parameters (by label for labelled/shorthand
+/// fields, positionally otherwise) and checked in *parameter* order so that
+/// earlier arguments can constrain generic parameters that later, callback
+/// arguments depend on. Anonymous function arguments are typechecked with the
+/// expected parameter type so their bodies resolve; other arguments are
+/// typechecked without an expected type (matching previous behaviour) and
+/// then unified with their parameter.
+fn check_arguments(
+  environment: Environment,
+  store: TypeStore,
+  fields: List(glance.Field(glance.Expression)),
+  parameters: List(Type),
+  position_labels: dict.Dict(String, Int),
+) -> error.TypeCheckResult(#(TypeStore, List(Type))) {
+  let param_count = list.length(parameters)
+
+  // Shorthand fields (`f(label:)`) reference a variable in scope. Resolve those
+  // first so an `InvalidName` is reported before label/argument errors, matching
+  // the previous behaviour where argument fields were fully typechecked before
+  // argument ordering was performed.
+  use #(store, shorthand_types) <- result.try(
+    list.try_fold(fields, #(store, dict.new()), fn(state, field) {
+      let #(store, acc) = state
+      case field {
+        glance.ShorthandField(label) ->
+          types.lookup_variable_type(environment, label)
+          |> result.try(fn(type_) {
+            Ok(#(store, dict.insert(acc, label, type_)))
+          })
+        _ -> Ok(#(store, acc))
+      }
+    }),
+  )
+
+  // Arity mismatch: report using the inferred argument types, exactly as the
+  // previous argument-typechecking pass did.
+  case list.length(fields) == param_count {
+    False -> {
+      use #(_store, arg_types) <- result.try(
+        list.try_fold(fields, #(store, []), fn(state, field) {
+          let #(store, reversed) = state
+          use #(store, type_) <- result.try(case field {
+            glance.ShorthandField(label) ->
+              Ok(#(
+                store,
+                shorthand_types
+                  |> dict.get(label)
+                  |> result.unwrap(types.GenericTypeVariable(label)),
+              ))
+            _ -> field_expression_type(environment, store, field, option.None)
+          })
+          Ok(#(store, [type_, ..reversed]))
+        }),
+      )
+      Error(error.InvalidArguments(
+        "(" <> types.list_to_string(parameters, environment) <> ")",
+        "(" <> types.list_to_string(list.reverse(arg_types), environment) <> ")",
+      ))
+    }
+
+    True -> {
+      use ordered_fields <- result.try(align_argument_fields(
+        fields,
+        position_labels,
+        param_count,
       ))
 
-      let store_result =
+      use #(store, arg_types) <- result.try(
         list.try_fold(
-          list.zip(positioned_arguments, parameters),
-          store,
-          fn(store, pair) {
-            let #(arg_type, param_type) = pair
-            types.unify(store, environment, arg_type, param_type)
+          list.zip(parameters, ordered_fields),
+          #(store, []),
+          fn(state, pair) {
+            let #(store, reversed) = state
+            let #(param, field) = pair
+            let #(store, resolved_param) = types.resolve(store, param)
+            use #(store, arg_type) <- result.try(field_expression_type(
+              environment,
+              store,
+              field,
+              option.Some(resolved_param),
+            ))
+            types.unify(store, environment, arg_type, param)
+            |> result.map(fn(store) { #(store, [arg_type, ..reversed]) })
+            |> result.map_error(fn(_) {
+              let actual =
+                "("
+                <> types.list_to_string(
+                  list.reverse([arg_type, ..reversed]),
+                  environment,
+                )
+                <> ")"
+              error.InvalidArguments(
+                "(" <> types.list_to_string(parameters, environment) <> ")",
+                actual,
+              )
+            })
           },
-        )
-        |> result.map_error(fn(_) {
-          let expected =
-            "(" <> types.list_to_string(target_arguments, environment) <> ")"
-          let actual =
-            "("
-            <> types.list_to_string(positioned_arguments, environment)
-            <> ")"
-          error.InvalidArguments(expected, actual)
-        })
-
-      use store <- result.try(store_result)
-
-      Ok(types.resolve_and_generalise(store, return))
+        ),
+      )
+      Ok(#(store, list.reverse(arg_types)))
     }
-    _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
+}
+
+/// Type-check a single argument field, optionally against an expected type.
+/// Only anonymous function literal arguments make use of the expected type
+/// (see `fn_literal`); other argument shapes are typechecked without one.
+fn field_expression_type(
+  environment: Environment,
+  store: TypeStore,
+  field: glance.Field(glance.Expression),
+  expected: option.Option(Type),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  case field {
+    glance.LabelledField(_, expr) ->
+      case expr {
+        glance.Fn(..) ->
+          typecheck_with_expected(environment, store, expr, expected)
+        _ -> expression(environment, store, expr)
+      }
+    glance.UnlabelledField(expr) ->
+      case expr {
+        glance.Fn(..) ->
+          typecheck_with_expected(environment, store, expr, expected)
+        _ -> expression(environment, store, expr)
+      }
+    glance.ShorthandField(label) ->
+      types.lookup_variable_type(environment, label)
+      |> result.map(fn(type_) { #(store, type_) })
+  }
+}
+
+/// Align argument fields to parameter positions by label (for labelled and
+/// shorthand fields) and position (for unlabelled fields), returning the fields
+/// in parameter order. Reports `InvalidArgumentLabel` for unknown labels.
+/// Argument count equality must be established by the caller.
+fn align_argument_fields(
+  fields: List(glance.Field(glance.Expression)),
+  position_labels: dict.Dict(String, Int),
+  param_count: Int,
+) -> error.TypeCheckResult(List(glance.Field(glance.Expression))) {
+  let #(positional, labelled) =
+    list.fold(fields, #([], dict.new()), fn(state, field) {
+      let #(positional, labelled) = state
+      case field {
+        glance.UnlabelledField(_) -> #([field, ..positional], labelled)
+        glance.LabelledField(label, _) -> #(
+          positional,
+          dict.insert(labelled, label, field),
+        )
+        glance.ShorthandField(label) -> #(
+          positional,
+          dict.insert(labelled, label, field),
+        )
+      }
+    })
+  let positional = list.reverse(positional)
+
+  // Place labelled/shorthand fields at their labelled parameter position,
+  // surfacing an `InvalidArgumentLabel` error for any label the callable does
+  // not declare.
+  use by_position <- result.try(
+    list.try_fold(dict.to_list(labelled), dict.new(), fn(by_position, pair) {
+      let #(label, field) = pair
+      use position <- result.try(
+        dict.get(position_labels, label)
+        |> result.replace_error(error.InvalidArgumentLabel(
+          "("
+            <> position_labels
+          |> dict.keys
+          |> list.sort(string.compare)
+          |> string.join(", ")
+            <> ")",
+          label,
+        )),
+      )
+      Ok(dict.insert(by_position, position, field))
+    }),
+  )
+
+  // Fill the remaining (unlabelled) parameter positions with positional
+  // arguments, in source order. A label error already short-circuited above;
+  // here a count mismatch means too few positional arguments, which the
+  // caller's arity check should have ruled out, but guard defensively.
+  let #(_, acc) =
+    list.fold_until(
+      list.range(0, param_count - 1),
+      #(positional, []),
+      fn(state, position) {
+        let #(remaining, acc) = state
+        case dict.get(by_position, position) {
+          Ok(field) -> list.Continue(#(remaining, [field, ..acc]))
+          Error(_) ->
+            case remaining {
+              [] -> list.Stop(#([], acc))
+              [field, ..rest] -> list.Continue(#(rest, [field, ..acc]))
+            }
+        }
+      },
+    )
+  Ok(list.reverse(acc))
 }
 
 type CaptureState {
@@ -1227,11 +1661,18 @@ pub fn binop(
           }
         }
 
-        glance.LtInt
-        | glance.LtEqInt
-        | glance.GtEqInt
-        | glance.GtInt
-        | glance.AddInt
+        glance.LtInt | glance.LtEqInt | glance.GtEqInt | glance.GtInt ->
+          check_comparison_operands(
+            environment,
+            store,
+            operator_string(operator),
+            left_type,
+            right_type,
+            "two Ints",
+            types.IntType,
+          )
+
+        glance.AddInt
         | glance.SubInt
         | glance.MultInt
         | glance.DivInt
@@ -1246,11 +1687,18 @@ pub fn binop(
             types.IntType,
           )
 
-        glance.LtFloat
-        | glance.LtEqFloat
-        | glance.GtEqFloat
-        | glance.GtFloat
-        | glance.AddFloat
+        glance.LtFloat | glance.LtEqFloat | glance.GtEqFloat | glance.GtFloat ->
+          check_comparison_operands(
+            environment,
+            store,
+            operator_string(operator),
+            left_type,
+            right_type,
+            "two Floats",
+            types.FloatType,
+          )
+
+        glance.AddFloat
         | glance.SubFloat
         | glance.MultFloat
         | glance.DivFloat ->
@@ -1279,6 +1727,32 @@ pub fn binop(
       }
     }
   }
+}
+
+/// Unify both operands against the expected operand type, returning `Bool`
+/// (the result of a comparison operator) if they both match.
+fn check_comparison_operands(
+  environment: Environment,
+  store: TypeStore,
+  operator: String,
+  left: Type,
+  right: Type,
+  expected: String,
+  expected_type: Type,
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  check_operands(
+    environment,
+    store,
+    operator,
+    left,
+    right,
+    expected,
+    expected_type,
+  )
+  |> result.map(fn(state) {
+    let #(store, _) = state
+    #(store, types.BoolType)
+  })
 }
 
 /// Unify both operands against the expected operand type, returning that type
@@ -1403,31 +1877,25 @@ fn pipe_value_into_callable(
             first_param,
           ))
 
-          use #(store, argument_fields) <- result.try(fold_fields(
+          // The piped value occupies the first parameter position, so labels
+          // must be re-indexed relative to the remaining parameters.
+          let shifted_labels =
+            dict.fold(labels, dict.new(), fn(acc, label, position) {
+              case position {
+                0 -> acc
+                _ -> dict.insert(acc, label, position - 1)
+              }
+            })
+
+          use #(store, _argument_types) <- result.try(check_arguments(
             environment,
             store,
             arguments,
-          ))
-
-          use positioned <- result.try(functions.order_call_arguments(
-            environment,
-            argument_fields,
             rest_params,
-            labels,
+            shifted_labels,
           ))
 
-          use store <- result.try(
-            list.try_fold(
-              list.zip(positioned, rest_params),
-              store,
-              fn(store, pair) {
-                let #(arg_type, param_type) = pair
-                types.unify(store, environment, arg_type, param_type)
-              },
-            ),
-          )
-
-          Ok(types.resolve_and_generalise(store, return))
+          Ok(types.resolve(store, return))
         }
       }
     }

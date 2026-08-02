@@ -50,6 +50,10 @@ pub type Type {
     definitions: Dict(String, Type),
     custom_types: Dict(String, Type),
   )
+  /// A type alias that has not been applied to its parameters yet. The aliased
+  /// type uses `GenericTypeVariable` for the parameter names; applying the alias
+  /// substitutes those variables (see `type_`).
+  TypeAlias(parameters: List(String), aliased: Type)
   GenericTypeVariable(name: String)
   /// An inference/instantiation variable created while checking a call. These
   /// only exist transiently during call checking and are resolved or generalised
@@ -75,7 +79,8 @@ pub fn new_type_store() -> TypeStore {
 }
 
 /// Follow any `Link` chains on a type variable to its current binding. If the
-/// variable is unbound (or unknown) it is returned as-is.
+/// variable is unbound (or unknown) it is returned as-is. Recurses into
+/// compound types so linked variables nested inside them are resolved too.
 pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
   case type_ {
     Var(id) -> {
@@ -83,6 +88,60 @@ pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
         Ok(Link(type_)) -> resolve(store, type_)
         Ok(Unbound) | Error(_) -> #(store, Var(id))
       }
+    }
+    CallableType(parameters, labels, return) -> {
+      let #(store, parameters) =
+        list.fold(parameters, #(store, []), fn(state, parameter) {
+          let #(store, acc) = state
+          let #(store, parameter) = resolve(store, parameter)
+          #(store, [parameter, ..acc])
+        })
+      let #(store, return) = resolve(store, return)
+      #(store, CallableType(list.reverse(parameters), labels, return))
+    }
+    GenericCallableType(parameters, labels, return, original) -> {
+      let #(store, parameters) =
+        list.fold(parameters, #(store, []), fn(state, parameter) {
+          let #(store, acc) = state
+          let #(store, parameter) = resolve(store, parameter)
+          #(store, [parameter, ..acc])
+        })
+      let #(store, return) = resolve(store, return)
+      #(
+        store,
+        GenericCallableType(list.reverse(parameters), labels, return, original),
+      )
+    }
+    TupleType(elements) -> {
+      let #(store, elements) =
+        list.fold(elements, #(store, []), fn(state, element) {
+          let #(store, acc) = state
+          let #(store, element) = resolve(store, element)
+          #(store, [element, ..acc])
+        })
+      #(store, TupleType(list.reverse(elements)))
+    }
+    ListType(element) -> {
+      let #(store, element) = resolve(store, element)
+      #(store, ListType(element))
+    }
+    ResultType(ok, error) -> {
+      let #(store, ok) = resolve(store, ok)
+      let #(store, error) = resolve(store, error)
+      #(store, ResultType(ok, error))
+    }
+    OptionType(inner) -> {
+      let #(store, inner) = resolve(store, inner)
+      #(store, OptionType(inner))
+    }
+    CustomType(module, name, parameters) -> {
+      let #(store, parameters) =
+        list.fold(parameters, #(store, []), fn(state, parameter) {
+          let #(store, acc) = state
+          let #(store, parameter) = resolve(store, parameter)
+          #(store, [parameter, ..acc])
+        })
+      #(store, CustomType(module, name, list.reverse(parameters)))
     }
     _ -> #(store, type_)
   }
@@ -105,6 +164,20 @@ pub fn fresh_var(store: TypeStore) -> #(TypeStore, Type) {
   fresh_type(store)
 }
 
+/// Create `count` fresh unbound inference variables.
+pub fn fresh_vars(store: TypeStore, count: Int) -> #(TypeStore, List(Type)) {
+  case count {
+    0 -> #(store, [])
+    _ ->
+      list.fold(list.range(1, count), #(store, []), fn(state, _) {
+        let #(store, acc) = state
+        let #(store, var) = fresh_var(store)
+        #(store, [var, ..acc])
+      })
+      |> fn(state) { #(state.0, list.reverse(state.1)) }
+  }
+}
+
 /// Replace every `GenericTypeVariable(name)` with a fresh `Var`. Repeated
 /// occurrences of the same name are replaced with the *same* variable, which
 /// preserves the sharing that gives polymorphism its meaning.
@@ -114,10 +187,10 @@ pub fn instantiate(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
 }
 
 /// Instantiate a callable type and return its parameters, labels, and return
-/// type. Only polymorphic callables (`GenericCallableType`) are instantiated,
-/// since their generic type variables are fresh at each call site. Plain
-/// `CallableType` carries the enclosing function's own (rigid) type parameters
-/// and is returned as-is.
+/// type. Any generic type variables are made fresh at each call site, whether
+/// the callable is explicitly polymorphic (`GenericCallableType`) or a plain
+/// `CallableType` that happens to carry type variables (e.g. a function-typed
+/// parameter or variant constructor).
 pub fn instantiate_callable(
   store: TypeStore,
   type_: Type,
@@ -135,12 +208,18 @@ pub fn instantiate_callable(
         _ -> #(store, [], dict.new(), NilType)
       }
     }
-    CallableType(parameters, labels, return) -> #(
-      store,
-      parameters,
-      labels,
-      return,
-    )
+    CallableType(..) -> {
+      let #(store, instantiated) = instantiate(store, type_)
+      case instantiated {
+        CallableType(parameters, labels, return) -> #(
+          store,
+          parameters,
+          labels,
+          return,
+        )
+        _ -> #(store, [], dict.new(), NilType)
+      }
+    }
     _ -> #(store, [], dict.new(), NilType)
   }
 }
@@ -300,15 +379,25 @@ pub fn unify(
   let #(store, left) = resolve(store, left)
   let #(store, right) = resolve(store, right)
 
+  echo "UNIFY " <> raw_show(left) <> " <-> " <> raw_show(right)
+
   case left, right {
+    Var(lid), Var(rid) if lid == rid -> Ok(store)
     Var(id), _ -> {
       case occurs_check(store, id, right) {
-        True ->
+        True -> {
+          echo "OCCURS id="
+            <> int.to_string(id)
+            <> " raw-left="
+            <> raw_show(Var(id))
+            <> " raw-right="
+            <> raw_show(right)
           Error(error.InvalidType(
             to_string(environment, Var(id)),
             to_string(environment, right),
             "type variable would be infinitely recursive",
           ))
+        }
         False ->
           Ok(TypeStore(..store, vars: dict.insert(store.vars, id, Link(right))))
       }
@@ -355,6 +444,8 @@ pub fn unify(
     -> unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
     GenericTypeVariable("todo"), _ -> Ok(store)
     _, GenericTypeVariable("todo") -> Ok(store)
+    InferredReturn, _ -> Ok(store)
+    _, InferredReturn -> Ok(store)
     GenericTypeVariable(ln), GenericTypeVariable(rn) -> {
       case ln == rn {
         True -> Ok(store)
@@ -386,29 +477,27 @@ fn unify_list_of_types(
 fn unify_callables(
   store: TypeStore,
   environment: Environment,
-  left: Type,
-  right: Type,
+  _left: Type,
+  _right: Type,
   left_parameters: List(Type),
-  left_labels: dict.Dict(String, Int),
+  _left_labels: dict.Dict(String, Int),
   left_return: Type,
   right_parameters: List(Type),
-  right_labels: dict.Dict(String, Int),
+  _right_labels: dict.Dict(String, Int),
   right_return: Type,
 ) -> Result(TypeStore, error.TypeCheckError) {
-  let label_keys = dict.keys(left_labels) |> list.sort(string.compare)
-  let right_label_keys = dict.keys(right_labels) |> list.sort(string.compare)
-  case label_keys == right_label_keys {
-    False -> Error(mismatch_error(environment, left, right))
-    True ->
-      list.zip(left_parameters, right_parameters)
-      |> list.try_fold(store, fn(store, pair) {
-        let #(l, r) = pair
-        unify(store, environment, l, r)
-      })
-      |> result.try(fn(store) {
-        unify(store, environment, left_return, right_return)
-      })
-  }
+  // Function types unify positionally. Argument labels are not part of the
+  // type: a labelled constructor (e.g. `Todo(location:, message:)`) may be
+  // passed where an unlabelled `fn(Span, Option(Expression)) -> Expression`
+  // is expected, matching the real Gleam typechecker.
+  list.zip(left_parameters, right_parameters)
+  |> list.try_fold(store, fn(store, pair) {
+    let #(l, r) = pair
+    unify(store, environment, l, r)
+  })
+  |> result.try(fn(store) {
+    unify(store, environment, left_return, right_return)
+  })
 }
 
 fn mismatch_error(
@@ -570,6 +659,10 @@ pub type Environment {
     public_custom_types: set.Set(String),
     // absolute path to whatever the relative name is in this env
     import_names: dict.Dict(String, String),
+    // imported module namespaces keyed by their local alias. Kept separate
+    // from `definitions` so a value (function, constant) with the same name
+    // as a module alias does not clobber the namespace.
+    module_imports: dict.Dict(String, Type),
     // other environments that could be imported from this one
     // (actually imported envs will be in definitions)
     module_environments: dict.Dict(String, Environment),
@@ -578,6 +671,37 @@ pub type Environment {
 
 pub type EnvState(a) {
   EnvState(environment: Environment, state: a)
+}
+
+pub fn raw_show(type_: Type) -> String {
+  case type_ {
+    Var(id) -> "V" <> int.to_string(id)
+    NilType -> "Nil"
+    IntType -> "Int"
+    FloatType -> "Float"
+    StringType -> "String"
+    BoolType -> "Bool"
+    BitArrayType -> "BitArray"
+    TupleType(e) -> "#(" <> raw_show_list(e) <> ")"
+    ListType(e) -> "List(" <> raw_show(e) <> ")"
+    ResultType(o, e) -> "Result(" <> raw_show(o) <> "," <> raw_show(e) <> ")"
+    OptionType(i) -> "Option(" <> raw_show(i) <> ")"
+    CustomType(m, n, p) -> m <> "." <> n <> "(" <> raw_show_list(p) <> ")"
+    CallableType(p, _, r) ->
+      "Callable(" <> raw_show_list(p) <> " -> " <> raw_show(r) <> ")"
+    GenericCallableType(p, _, r, _) ->
+      "GenCallable(" <> raw_show_list(p) <> " -> " <> raw_show(r) <> ")"
+    NamespaceType(_, _) -> "Namespace"
+    TypeAlias(_, aliased) -> "Alias(" <> raw_show(aliased) <> ")"
+    GenericTypeVariable(n) -> "G:" <> n
+    InferredReturn -> "InferredReturn"
+  }
+}
+
+pub fn raw_show_list(types_: List(Type)) -> String {
+  types_
+  |> list.map(raw_show)
+  |> string.join(", ")
 }
 
 pub type EnvStateResult(a) =
@@ -604,13 +728,80 @@ pub type EnvironmentFold =
 pub fn new_env(current_module: String) -> Environment {
   Environment(
     current_module:,
-    definitions: dict.new(),
+    definitions: prelude_definitions(),
     public_definitions: set.new(),
-    custom_types: dict.new(),
+    custom_types: prelude_custom_types(),
     public_custom_types: set.new(),
     import_names: dict.new(),
+    module_imports: dict.new(),
     module_environments: dict.new(),
   )
+}
+
+/// The prelude custom types that exist in every module's scope without an
+/// explicit definition, e.g. `UtfCodepoint`.
+fn prelude_custom_types() -> dict.Dict(String, Type) {
+  dict.from_list([
+    #("UtfCodepoint", CustomType("prelude", "UtfCodepoint", [])),
+    #("UtfCodepointLabel", CustomType("prelude", "UtfCodepointLabel", [])),
+  ])
+}
+
+/// The values made available in every module without an explicit import, mirroring
+/// the prelude that the Gleam compiler seeds into each module's scope. Only values
+/// are registered; prelude type names are handled specially in `type_`.
+fn prelude_definitions() -> dict.Dict(String, Type) {
+  // Sentinel matching `functions.dummy_function`, used as the `original_function`
+  // for generic callables. Constructed inline to avoid a circular import.
+  let dummy_function =
+    glance.Function(
+      glance.Span(-1, -1),
+      "",
+      glance.Private,
+      [],
+      option.None,
+      [],
+    )
+  let value = GenericTypeVariable("a")
+  let error = GenericTypeVariable("e")
+  let utf_codepoint = CustomType("prelude", "UtfCodepoint", [])
+  let utf_codepoint_label = CustomType("prelude", "UtfCodepointLabel", [])
+  dict.from_list([
+    #("True", BoolType),
+    #("False", BoolType),
+    #("Nil", NilType),
+    #(
+      "Ok",
+      GenericCallableType(
+        [value],
+        dict.new(),
+        ResultType(value, error),
+        dummy_function,
+      ),
+    ),
+    #(
+      "Error",
+      GenericCallableType(
+        [error],
+        dict.new(),
+        ResultType(value, error),
+        dummy_function,
+      ),
+    ),
+    #(
+      "UtfCodepoint",
+      GenericCallableType([IntType], dict.new(), utf_codepoint, dummy_function),
+    ),
+    #(
+      "UtfCodepointLabel",
+      GenericCallableType(
+        [StringType],
+        dict.new(),
+        utf_codepoint_label,
+        dummy_function,
+      ),
+    ),
+  ])
 }
 
 pub fn add_or_update_def_in_env(
@@ -677,6 +868,20 @@ pub fn add_or_update_custom_type_in_env(
   Environment(
     ..environment,
     custom_types: dict.insert(environment.custom_types, name, type_),
+  )
+}
+
+/// Register a module namespace under its local alias. Namespaces live in a
+/// separate dict from value definitions so a function or constant sharing the
+/// alias's name does not overwrite them.
+pub fn add_or_update_namespace_in_env(
+  environment: Environment,
+  name: String,
+  namespace: Type,
+) -> Environment {
+  Environment(
+    ..environment,
+    module_imports: dict.insert(environment.module_imports, name, namespace),
   )
 }
 
@@ -749,6 +954,26 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
     glance.NamedType(_, name, module, parameters) -> {
       use declared <- result.try(lookup_named_type(environment, module, name))
       case declared {
+        TypeAlias(alias_parameters, aliased) ->
+          case list.length(alias_parameters) == list.length(parameters) {
+            False ->
+              Error(error.InvalidType(
+                name,
+                to_string(environment, declared),
+                "wrong number of type parameters: expected "
+                  <> int.to_string(list.length(alias_parameters))
+                  <> ", got "
+                  <> int.to_string(list.length(parameters)),
+              ))
+            True -> {
+              use parameter_types <- result.try(
+                list.try_map(parameters, type_(environment, _)),
+              )
+              let substitutions =
+                dict.from_list(list.zip(alias_parameters, parameter_types))
+              Ok(substitute_type_variables(aliased, substitutions))
+            }
+          }
         CustomType(declared_module, declared_name, declared_parameters) ->
           case list.length(declared_parameters) == list.length(parameters) {
             False ->
@@ -792,6 +1017,59 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
   }
 }
 
+/// Substitute the given type variables (by `GenericTypeVariable` name) with the
+/// provided types throughout a type. Used to apply a type alias to its
+/// parameters.
+pub fn substitute_type_variables(
+  type_: Type,
+  substitutions: dict.Dict(String, Type),
+) -> Type {
+  case type_ {
+    GenericTypeVariable(name) -> {
+      case dict.get(substitutions, name) {
+        Ok(substitute) -> substitute
+        Error(_) -> type_
+      }
+    }
+    TupleType(elements) ->
+      TupleType(list.map(elements, substitute_type_variables(_, substitutions)))
+    ListType(element) ->
+      ListType(substitute_type_variables(element, substitutions))
+    ResultType(ok, error) ->
+      ResultType(
+        substitute_type_variables(ok, substitutions),
+        substitute_type_variables(error, substitutions),
+      )
+    OptionType(inner) ->
+      OptionType(substitute_type_variables(inner, substitutions))
+    CustomType(module, name, parameters) ->
+      CustomType(
+        module,
+        name,
+        list.map(parameters, substitute_type_variables(_, substitutions)),
+      )
+    CallableType(parameters, labels, return) ->
+      CallableType(
+        list.map(parameters, substitute_type_variables(_, substitutions)),
+        labels,
+        substitute_type_variables(return, substitutions),
+      )
+    GenericCallableType(parameters, labels, return, original) ->
+      GenericCallableType(
+        list.map(parameters, substitute_type_variables(_, substitutions)),
+        labels,
+        substitute_type_variables(return, substitutions),
+        original,
+      )
+    TypeAlias(alias_parameters, aliased) ->
+      TypeAlias(
+        alias_parameters,
+        substitute_type_variables(aliased, substitutions),
+      )
+    _ -> type_
+  }
+}
+
 /// Look up the type a name refers to, either directly in the environment or
 /// through an imported namespace.
 fn lookup_named_type(
@@ -802,7 +1080,7 @@ fn lookup_named_type(
   case module {
     option.None -> lookup_custom_type(environment, name)
     option.Some(module_name) -> {
-      case dict.get(environment.definitions, module_name) {
+      case dict.get(environment.module_imports, module_name) {
         Ok(NamespaceType(_, custom_types)) ->
           dict.get(custom_types, name)
           |> result.replace_error(error.InvalidFieldAccess(module_name, name))
@@ -851,6 +1129,7 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
       <> ") -> "
       <> to_string(environment, return)
     NamespaceType(..) -> "<Namespace>"
+    TypeAlias(_, aliased) -> to_string(environment, aliased)
     GenericTypeVariable(name) -> name
     Var(id) -> "var_" <> int.to_string(id)
     InferredReturn -> ""
@@ -921,6 +1200,7 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
         to_glance(environment, return),
       )
     NamespaceType(..) -> panic as "Cannot convert namespace to glance"
+    TypeAlias(_, aliased) -> to_glance(environment, aliased)
     GenericTypeVariable(name) -> glance.VariableType(unknown_span, name)
     Var(id) -> glance.VariableType(unknown_span, "var_" <> int.to_string(id))
     InferredReturn ->

@@ -1,5 +1,6 @@
 import glance
 import gleam/dict
+import gleam/io
 import gleam/list
 import gleam/option
 import gleam/result
@@ -94,15 +95,23 @@ pub fn module(
   use types.EnvState(environment, _) <- result.try(imports_result)
 
   use environment <- result.try(
+    glimpse_module.module.custom_types
+    |> list.try_fold(environment, fn(environment, glance_custom_type) {
+      custom_type_declaration(environment, glance_custom_type.definition)
+    }),
+  )
+
+  use environment <- result.try(
     glimpse_module.module.type_aliases
     |> list.map(fn(d) { d.definition })
+    |> list.reverse
     |> list.try_fold(environment, type_alias),
   )
 
   use environment <- result.try(
     glimpse_module.module.custom_types
     |> list.try_fold(environment, fn(environment, glance_custom_type) {
-      custom_type(environment, glance_custom_type.definition)
+      custom_type_constructors(environment, glance_custom_type.definition)
     }),
   )
 
@@ -156,6 +165,10 @@ pub fn module(
   Ok(#(new_glimpse_module, environment))
 }
 
+fn is_external(definition: glance.Definition(glance.Function)) -> Bool {
+  list.any(definition.attributes, fn(attribute) { attribute.name == "external" })
+}
+
 fn typecheck_function_bodies(
   environment: Environment,
   definitions: List(glance.Definition(glance.Function)),
@@ -165,10 +178,10 @@ fn typecheck_function_bodies(
   use functions_env_state <- result.try(
     definitions
     |> list.try_fold(types.EnvState(environment, []), fn(env_state, definition) {
-      use function_env_state <- result.try(function(
-        env_state.environment,
-        definition.definition,
-      ))
+      use function_env_state <- result.try(case is_external(definition) {
+        True -> Ok(types.EnvState(env_state.environment, definition.definition))
+        False -> function(env_state.environment, definition.definition)
+      })
       let updated_definition =
         glance.Definition(..definition, definition: function_env_state.state)
       Ok(
@@ -189,69 +202,85 @@ pub fn type_alias(
   environment: Environment,
   alias: glance.TypeAlias,
 ) -> EnvironmentResult {
-  use resolved <- result.try(types.type_(environment, alias.aliased))
-  let environment =
-    types.Environment(
-      ..environment,
-      custom_types: dict.insert(environment.custom_types, alias.name, resolved),
-    )
-  let environment = case alias.publicity {
-    glance.Public -> types.publish_custom_type_in_env(environment, alias.name)
-    glance.Private -> environment
+  case dict.has_key(environment.custom_types, alias.name) {
+    True -> Error(error.DuplicateCustomType(alias.name))
+    False -> {
+      use resolved <- result.try(types.type_(environment, alias.aliased))
+      let alias_type = types.TypeAlias(alias.parameters, resolved)
+      let environment =
+        types.Environment(
+          ..environment,
+          custom_types: dict.insert(
+            environment.custom_types,
+            alias.name,
+            alias_type,
+          ),
+        )
+      let environment = case alias.publicity {
+        glance.Public ->
+          types.publish_custom_type_in_env(environment, alias.name)
+        glance.Private -> environment
+      }
+      Ok(environment)
+    }
   }
-  Ok(environment)
 }
 
-/// Update the environment to include the custom type and all its constructors.
-pub fn custom_type(
+/// Register a custom type's name and type parameters in the environment.
+/// Constructors are registered separately (see `custom_type_constructors`) so
+/// that types referencing each other resolve regardless of declaration order.
+pub fn custom_type_declaration(
   environment: Environment,
   custom_type: glance.CustomType,
 ) -> EnvironmentResult {
-  case environment.custom_types |> dict.get(custom_type.name) {
-    Ok(_) -> Error(error.DuplicateCustomType(custom_type.name))
-    Error(_) -> {
-      // add to env first so variants can parse recursive types
+  case dict.has_key(environment.custom_types, custom_type.name) {
+    True -> Error(error.DuplicateCustomType(custom_type.name))
+    False -> {
       let environment =
         environment
         |> types.add_custom_type_to_env(
           custom_type.name,
           custom_type.parameters,
         )
-
       let environment = case custom_type.publicity {
         glance.Public ->
           types.publish_custom_type_in_env(environment, custom_type.name)
         glance.Private -> environment
       }
-
-      let environment_result =
-        list.fold_until(
-          custom_type.variants,
-          Ok(types.EnvState(environment, custom_type)),
-          functions.fold_variant_constructors_into_env,
-        )
-        |> result.map(types.extract_env)
-
-      use environment <- result.try(environment_result)
-
-      let environment = case custom_type.opaque_ {
-        True ->
-          list.fold(custom_type.variants, environment, fn(env, variant) {
-            types.Environment(
-              ..env,
-              public_definitions: set.delete(
-                env.public_definitions,
-                variant.name,
-              ),
-            )
-          })
-        False -> environment
-      }
-
       Ok(environment)
     }
   }
-  // TODO: Also add variants
+}
+
+/// Add all variant constructors of a custom type to the environment. Runs after
+/// every custom type in the module has been declared so forward references in
+/// variant fields resolve.
+pub fn custom_type_constructors(
+  environment: Environment,
+  custom_type: glance.CustomType,
+) -> EnvironmentResult {
+  let environment_result =
+    list.fold_until(
+      custom_type.variants,
+      Ok(types.EnvState(environment, custom_type)),
+      functions.fold_variant_constructors_into_env,
+    )
+    |> result.map(types.extract_env)
+
+  use environment <- result.try(environment_result)
+
+  let environment = case custom_type.opaque_ {
+    True ->
+      list.fold(custom_type.variants, environment, fn(env, variant) {
+        types.Environment(
+          ..env,
+          public_definitions: set.delete(env.public_definitions, variant.name),
+        )
+      })
+    False -> environment
+  }
+
+  Ok(environment)
 }
 
 /// Typecheck a module constant's value and register it in the environment.
@@ -303,6 +332,13 @@ pub fn function(
   function: glance.Function,
 ) -> types.EnvStateResult(glance.Function) {
   let store = types.new_type_store()
+
+  io.println(
+    "    typechecking function: "
+    <> environment.current_module
+    <> ":"
+    <> function.name,
+  )
 
   // Fold parameters into environment with fresh vars for unannotated private params
   use param_state <- result.try(
@@ -412,12 +448,17 @@ pub fn function(
         expected_type,
       ))
       case types.unify(store, param_state.environment, body_type, expected) {
-        Error(_) ->
+        Error(_) -> {
+          echo "RETURN-CHECK body="
+            <> types.to_string(param_state.environment, body_type)
+            <> " expected="
+            <> types.to_string(param_state.environment, expected)
           Error(error.InvalidReturnType(
             function.name,
             types.to_string(param_state.environment, body_type),
             types.to_string(param_state.environment, expected),
           ))
+        }
         Ok(_) -> Ok(types.EnvState(environment, function))
       }
     }
