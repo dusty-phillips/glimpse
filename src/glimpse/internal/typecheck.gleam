@@ -4,11 +4,14 @@ import gleam/int
 import gleam/list
 import gleam/option
 import gleam/result
+import gleam/set
+import gleam/string
 import glimpse/error
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/pattern
 import glimpse/internal/typecheck/types.{
   type Environment, type Type, type TypeResult, type TypeStateResult,
+  type TypeStore,
 }
 
 /// Typecheck a sequence of statements, threading the environment through each
@@ -379,18 +382,39 @@ pub fn expression(
       }
     }
 
-    glance.FnCapture(_, _label, function, _before, _after) ->
-      // A function capture is a partial application; the result is still a
-      // callable. We typecheck the target so errors surface, and produce a
-      // callable whose return we can't fully know without the full capture
-      // argument layout.
-      expression(environment, function)
-      |> result.try(fn(type_) {
-        case type_ {
-          types.CallableType(..) | types.GenericCallableType(..) -> Ok(type_)
-          _ -> Error(error.NotCallable(types.to_string(environment, type_)))
+    glance.FnCapture(_, label, function, arguments_before, arguments_after) -> {
+      use target_type <- result.try(expression(environment, function))
+
+      case target_type {
+        types.CallableType(..) | types.GenericCallableType(..) -> {
+          let #(store, parameters, labels, return) =
+            types.instantiate_callable(types.new_type_store(), target_type)
+
+          use typed_before <- result.try(
+            arguments_before
+            |> list.map(call_field(environment, _))
+            |> result.all,
+          )
+          use typed_after <- result.try(
+            arguments_after
+            |> list.map(call_field(environment, _))
+            |> result.all,
+          )
+
+          fn_capture(
+            environment,
+            store,
+            parameters,
+            labels,
+            return,
+            label,
+            typed_before,
+            typed_after,
+          )
         }
-      })
+        _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
+      }
+    }
   }
 }
 
@@ -710,6 +734,209 @@ pub fn call(
     }
     _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
+}
+
+type CaptureState {
+  CaptureState(
+    claimed: set.Set(Int),
+    /// (position, argument type) pairs, kept in reverse order
+    consumed: List(#(Int, Type)),
+    /// Next candidate position for an unlabelled argument
+    counter: Int,
+  )
+}
+
+/// Typecheck a function capture (`f(1, _)`). The target is instantiated, the
+/// provided arguments are unified against the parameter positions they consume,
+/// and the remaining positions become the parameters of the partial callable.
+fn fn_capture(
+  environment: Environment,
+  store: TypeStore,
+  parameters: List(Type),
+  labels: dict.Dict(String, Int),
+  return: Type,
+  hole_label: option.Option(String),
+  typed_before: List(glance.Field(Type)),
+  typed_after: List(glance.Field(Type)),
+) -> TypeResult {
+  let parameter_count = list.length(parameters)
+  let all_fields = list.append(typed_before, typed_after)
+  let provided_types = list.map(all_fields, field_type)
+  let too_many = too_many_arguments(environment, parameters, provided_types)
+
+  use before_state <- result.try(
+    list.try_fold(
+      typed_before,
+      CaptureState(set.new(), [], 0),
+      fn(state, field) {
+        capture_field(labels, parameter_count, too_many, state, field)
+      },
+    ),
+  )
+
+  let hole_position = case hole_label {
+    option.Some(label) ->
+      dict.get(labels, label)
+      |> result.map_error(fn(_) {
+        error.InvalidArgumentLabel(
+          "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+          label,
+        )
+      })
+    option.None ->
+      Ok(next_free_slot(before_state.claimed, before_state.counter))
+  }
+
+  use hole_position <- result.try(hole_position)
+
+  case hole_position >= parameter_count {
+    True -> Error(too_many)
+    False -> {
+      let with_hole =
+        CaptureState(
+          claimed: set.insert(before_state.claimed, hole_position),
+          consumed: before_state.consumed,
+          counter: before_state.counter,
+        )
+
+      use after_state <- result.try(
+        list.try_fold(typed_after, with_hole, fn(state, field) {
+          capture_field(labels, parameter_count, too_many, state, field)
+        }),
+      )
+
+      let consumed = list.reverse(after_state.consumed)
+
+      use store <- result.try(
+        list.try_fold(consumed, store, fn(store, pair) {
+          let #(position, arg_type) = pair
+          let param_type =
+            list.drop(parameters, up_to: position)
+            |> list.first
+            |> result.unwrap(types.GenericTypeVariable("todo"))
+          types.unify(store, environment, arg_type, param_type)
+        }),
+      )
+
+      let consumed_positions =
+        list.fold(consumed, set.new(), fn(positions, pair) {
+          let #(position, _) = pair
+          set.insert(positions, position)
+        })
+
+      let #(remaining_reversed, reindexed_labels) =
+        list.index_map(parameters, fn(param, index) { #(param, index) })
+        |> list.fold(#([], dict.new()), fn(state, pair) {
+          let #(reversed_params, new_labels) = state
+          let #(param, index) = pair
+          case set.contains(consumed_positions, index) {
+            True -> state
+            False -> {
+              let consumed_before =
+                set.fold(consumed_positions, 0, fn(count, position) {
+                  case position < index {
+                    True -> count + 1
+                    False -> count
+                  }
+                })
+              let new_position = index - consumed_before
+              let new_labels =
+                dict.fold(labels, new_labels, fn(acc, label, label_position) {
+                  case label_position == index {
+                    True -> dict.insert(acc, label, new_position)
+                    False -> acc
+                  }
+                })
+              #([param, ..reversed_params], new_labels)
+            }
+          }
+        })
+
+      let #(_, resolved_return) = types.resolve(store, return)
+      let partial =
+        types.CallableType(
+          list.reverse(remaining_reversed),
+          reindexed_labels,
+          resolved_return,
+        )
+      Ok(types.generalise(store, partial))
+    }
+  }
+}
+
+/// Assign a single capture argument to the parameter position it consumes,
+/// threading the walk state. The argument is appended to `consumed`; the
+/// position is marked claimed so later arguments and the hole can't reuse it.
+fn capture_field(
+  labels: dict.Dict(String, Int),
+  parameter_count: Int,
+  too_many: error.TypeCheckError,
+  state: CaptureState,
+  field: glance.Field(Type),
+) -> Result(CaptureState, error.TypeCheckError) {
+  case field {
+    glance.LabelledField(label, type_) ->
+      dict.get(labels, label)
+      |> result.map_error(fn(_) {
+        error.InvalidArgumentLabel(
+          "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+          label,
+        )
+      })
+      |> result.try(fn(position) {
+        case
+          position >= parameter_count || set.contains(state.claimed, position)
+        {
+          True -> Error(too_many)
+          False ->
+            Ok(CaptureState(
+              set.insert(state.claimed, position),
+              [#(position, type_), ..state.consumed],
+              state.counter,
+            ))
+        }
+      })
+    glance.UnlabelledField(type_) -> {
+      let position = next_free_slot(state.claimed, state.counter)
+      case position >= parameter_count {
+        True -> Error(too_many)
+        False ->
+          Ok(CaptureState(
+            set.insert(state.claimed, position),
+            [#(position, type_), ..state.consumed],
+            position + 1,
+          ))
+      }
+    }
+    glance.ShorthandField(label) -> Error(error.InvalidName(label))
+  }
+}
+
+/// Smallest position at or after `counter` not already claimed.
+fn next_free_slot(claimed: set.Set(Int), counter: Int) -> Int {
+  case set.contains(claimed, counter) {
+    True -> next_free_slot(claimed, counter + 1)
+    False -> counter
+  }
+}
+
+fn field_type(field: glance.Field(Type)) -> Type {
+  case field {
+    glance.LabelledField(_, type_) -> type_
+    glance.UnlabelledField(type_) -> type_
+    glance.ShorthandField(_) -> types.GenericTypeVariable("todo")
+  }
+}
+
+fn too_many_arguments(
+  environment: Environment,
+  parameters: List(Type),
+  provided: List(Type),
+) -> error.TypeCheckError {
+  error.InvalidArguments(
+    "(" <> types.list_to_string(parameters, environment) <> ")",
+    "(" <> types.list_to_string(provided, environment) <> ")",
+  )
 }
 
 pub fn call_field(
