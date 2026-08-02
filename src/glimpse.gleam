@@ -56,7 +56,10 @@ pub fn load_module(module: glance.Module, name: String) -> Module {
 /// are *not* present in the package, and return them as a list.
 /// 
 /// The dependencies will be a list of strings like `gleam/io` or `glance`
-pub fn filter_new_dependencies(module: Module, package: Package) -> List(String) {
+pub fn filter_new_dependencies(
+  module: Module,
+  package: Package,
+) -> List(String) {
   module.dependencies
   |> list.filter(fn(dep) { !dict.has_key(package.modules, dep) })
 }
