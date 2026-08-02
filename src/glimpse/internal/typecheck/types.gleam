@@ -1,5 +1,6 @@
 import glance
 import gleam/dict.{type Dict}
+import gleam/int
 import gleam/list
 import gleam/option
 import gleam/result
@@ -11,10 +12,9 @@ import glimpse/error
 const unknown_span = glance.Span(-1, -1)
 
 fn is_type_variable(name: String) -> Bool {
-  case string.first(name) {
-    Ok(first_char) -> string.lowercase(first_char) == first_char
-    Error(_) -> False
-  }
+  string.first(name)
+  |> result.map(fn(first_char) { string.lowercase(first_char) == first_char })
+  |> result.unwrap(False)
 }
 
 pub type Type {
@@ -23,6 +23,11 @@ pub type Type {
   FloatType
   StringType
   BoolType
+  BitArrayType
+  TupleType(elements: List(Type))
+  ListType(element: Type)
+  ResultType(ok: Type, error: Type)
+  OptionType(inner: Type)
   CustomType(module: String, name: String)
   CallableType(
     /// All parameters (labelled or otherwise)
@@ -46,7 +51,437 @@ pub type Type {
     custom_types: Dict(String, Type),
   )
   GenericTypeVariable(name: String)
+  /// An inference/instantiation variable created while checking a call. These
+  /// only exist transiently during call checking and are resolved or generalised
+  /// back to `GenericTypeVariable` before being stored.
+  Var(id: Int)
   InferredReturn
+}
+
+/// A type variable that may or may not have been unified with another type.
+pub type TypeVar {
+  Unbound
+  Link(Type)
+}
+
+/// Threads the state of inference variables created during call checking.
+/// Stores are local to a single call and are discarded afterwards.
+pub type TypeStore {
+  TypeStore(next_id: Int, vars: Dict(Int, TypeVar))
+}
+
+pub fn new_type_store() -> TypeStore {
+  TypeStore(0, dict.new())
+}
+
+/// Follow any `Link` chains on a type variable to its current binding. If the
+/// variable is unbound (or unknown) it is returned as-is.
+pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
+  case type_ {
+    Var(id) -> {
+      case dict.get(store.vars, id) {
+        Ok(Link(type_)) -> resolve(store, type_)
+        Ok(Unbound) | Error(_) -> #(store, Var(id))
+      }
+    }
+    _ -> #(store, type_)
+  }
+}
+
+/// Create a fresh unbound type variable.
+fn fresh_type(store: TypeStore) -> #(TypeStore, Type) {
+  #(
+    TypeStore(
+      store.next_id + 1,
+      dict.insert(store.vars, store.next_id, Unbound),
+    ),
+    Var(store.next_id),
+  )
+}
+
+/// Replace every `GenericTypeVariable(name)` with a fresh `Var`. Repeated
+/// occurrences of the same name are replaced with the *same* variable, which
+/// preserves the sharing that gives polymorphism its meaning.
+pub fn instantiate(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
+  let #(store, _subs, type_) = do_instantiate(store, dict.new(), type_)
+  #(store, type_)
+}
+
+/// Instantiate a callable type and return its parameters, labels, and return
+/// type. The given type is assumed to already be a callable; the `_` arm is
+/// unreachable since `instantiate` preserves the callable constructor.
+pub fn instantiate_callable(
+  store: TypeStore,
+  type_: Type,
+) -> #(TypeStore, List(Type), dict.Dict(String, Int), Type) {
+  let #(store, instantiated) = instantiate(store, type_)
+  case instantiated {
+    CallableType(parameters, labels, return) -> #(
+      store,
+      parameters,
+      labels,
+      return,
+    )
+    GenericCallableType(parameters, labels, return, _) -> #(
+      store,
+      parameters,
+      labels,
+      return,
+    )
+    _ -> #(store, [], dict.new(), NilType)
+  }
+}
+
+fn do_instantiate(
+  store: TypeStore,
+  substitutions: dict.Dict(String, Type),
+  type_: Type,
+) -> #(TypeStore, dict.Dict(String, Type), Type) {
+  case type_ {
+    GenericTypeVariable(name) -> {
+      case dict.get(substitutions, name) {
+        Ok(type_) -> #(store, substitutions, type_)
+        Error(_) -> {
+          let #(store, fresh) = fresh_type(store)
+          #(store, dict.insert(substitutions, name, fresh), fresh)
+        }
+      }
+    }
+    CallableType(parameters, labels, return) -> {
+      let #(store, substitutions, parameters) =
+        list.fold(parameters, #(store, substitutions, []), fn(state, parameter) {
+          let #(store, substitutions, acc) = state
+          let #(store, substitutions, parameter) =
+            do_instantiate(store, substitutions, parameter)
+          #(store, substitutions, [parameter, ..acc])
+        })
+      let #(store, substitutions, return) =
+        do_instantiate(store, substitutions, return)
+      #(
+        store,
+        substitutions,
+        CallableType(list.reverse(parameters), labels, return),
+      )
+    }
+    GenericCallableType(parameters, labels, return, original) -> {
+      let #(store, substitutions, parameters) =
+        list.fold(parameters, #(store, substitutions, []), fn(state, parameter) {
+          let #(store, substitutions, acc) = state
+          let #(store, substitutions, parameter) =
+            do_instantiate(store, substitutions, parameter)
+          #(store, substitutions, [parameter, ..acc])
+        })
+      let #(store, substitutions, return) =
+        do_instantiate(store, substitutions, return)
+      #(
+        store,
+        substitutions,
+        GenericCallableType(list.reverse(parameters), labels, return, original),
+      )
+    }
+    NamespaceType(definitions, custom_types) -> {
+      let #(store, substitutions, definitions) =
+        dict.fold(
+          definitions,
+          #(store, substitutions, dict.new()),
+          fn(state, key, value) {
+            let #(store, substitutions, acc) = state
+            let #(store, substitutions, value) =
+              do_instantiate(store, substitutions, value)
+            #(store, substitutions, dict.insert(acc, key, value))
+          },
+        )
+      let #(store, substitutions, custom_types) =
+        dict.fold(
+          custom_types,
+          #(store, substitutions, dict.new()),
+          fn(state, key, value) {
+            let #(store, substitutions, acc) = state
+            let #(store, substitutions, value) =
+              do_instantiate(store, substitutions, value)
+            #(store, substitutions, dict.insert(acc, key, value))
+          },
+        )
+      #(store, substitutions, NamespaceType(definitions, custom_types))
+    }
+    TupleType(elements) -> {
+      let #(store, substitutions, elements) =
+        list.fold(elements, #(store, substitutions, []), fn(state, element) {
+          let #(store, substitutions, acc) = state
+          let #(store, substitutions, element) =
+            do_instantiate(store, substitutions, element)
+          #(store, substitutions, [element, ..acc])
+        })
+      #(store, substitutions, TupleType(list.reverse(elements)))
+    }
+    ListType(element) -> {
+      let #(store, substitutions, element) =
+        do_instantiate(store, substitutions, element)
+      #(store, substitutions, ListType(element))
+    }
+    ResultType(ok, error) -> {
+      let #(store, substitutions, ok) = do_instantiate(store, substitutions, ok)
+      let #(store, substitutions, error) =
+        do_instantiate(store, substitutions, error)
+      #(store, substitutions, ResultType(ok, error))
+    }
+    OptionType(inner) -> {
+      let #(store, substitutions, inner) =
+        do_instantiate(store, substitutions, inner)
+      #(store, substitutions, OptionType(inner))
+    }
+    _ -> #(store, substitutions, type_)
+  }
+}
+
+/// Check whether the variable `id` occurs within `type_`. Used to prevent
+/// creating infinitely recursive types.
+fn occurs_check(store: TypeStore, id: Int, type_: Type) -> Bool {
+  case type_ {
+    Var(other_id) -> {
+      case dict.get(store.vars, other_id) {
+        Ok(Link(linked)) -> occurs_check(store, id, linked)
+        Ok(Unbound) | Error(_) -> other_id == id
+      }
+    }
+    CallableType(parameters, _labels, return) ->
+      list.any(parameters, occurs_check(store, id, _))
+      || occurs_check(store, id, return)
+    GenericCallableType(parameters, _labels, return, _) ->
+      list.any(parameters, occurs_check(store, id, _))
+      || occurs_check(store, id, return)
+    TupleType(elements) -> list.any(elements, occurs_check(store, id, _))
+    ListType(element) -> occurs_check(store, id, element)
+    ResultType(ok, error) ->
+      occurs_check(store, id, ok) || occurs_check(store, id, error)
+    OptionType(inner) -> occurs_check(store, id, inner)
+    _ -> False
+  }
+}
+
+/// Unify two types, binding variables in the store as necessary. Returns the
+/// store with any new bindings applied, or an error describing the mismatch.
+pub fn unify(
+  store: TypeStore,
+  environment: Environment,
+  left: Type,
+  right: Type,
+) -> Result(TypeStore, error.TypeCheckError) {
+  let #(store, left) = resolve(store, left)
+  let #(store, right) = resolve(store, right)
+
+  case left, right {
+    Var(id), _ -> {
+      case occurs_check(store, id, right) {
+        True ->
+          Error(error.InvalidType(
+            to_string(environment, Var(id)),
+            to_string(environment, right),
+            "type variable would be infinitely recursive",
+          ))
+        False ->
+          Ok(TypeStore(..store, vars: dict.insert(store.vars, id, Link(right))))
+      }
+    }
+    _, Var(id) -> {
+      case occurs_check(store, id, left) {
+        True ->
+          Error(error.InvalidType(
+            to_string(environment, left),
+            to_string(environment, Var(id)),
+            "type variable would be infinitely recursive",
+          ))
+        False ->
+          Ok(TypeStore(..store, vars: dict.insert(store.vars, id, Link(left))))
+      }
+    }
+    NilType, NilType
+    | IntType, IntType
+    | FloatType, FloatType
+    | StringType, StringType
+    | BoolType, BoolType
+    | BitArrayType, BitArrayType
+    -> Ok(store)
+    TupleType(le), TupleType(re) ->
+      unify_list_of_types(store, environment, le, re)
+    ListType(le), ListType(re) -> unify(store, environment, le, re)
+    ResultType(lo, le), ResultType(ro, re) -> {
+      use store <- result.try(unify(store, environment, lo, ro))
+      unify(store, environment, le, re)
+    }
+    OptionType(li), OptionType(ri) -> unify(store, environment, li, ri)
+    CustomType(lm, ln), CustomType(rm, rn) if lm == rm && ln == rn -> Ok(store)
+    CustomType(_, _), CustomType(_, _) -> {
+      Error(mismatch_error(environment, left, right))
+    }
+    CallableType(lp, ll, lr), CallableType(rp, rl, rr) ->
+      unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
+    GenericCallableType(lp, ll, lr, _), GenericCallableType(rp, rl, rr, _) ->
+      unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
+    GenericCallableType(lp, ll, lr, _), CallableType(rp, rl, rr)
+    | CallableType(lp, ll, lr), GenericCallableType(rp, rl, rr, _)
+    -> unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
+    GenericTypeVariable("todo"), _ -> Ok(store)
+    _, GenericTypeVariable("todo") -> Ok(store)
+    GenericTypeVariable(ln), GenericTypeVariable(rn) -> {
+      case ln == rn {
+        True -> Ok(store)
+        False -> Error(mismatch_error(environment, left, right))
+      }
+    }
+    _, _ -> Error(mismatch_error(environment, left, right))
+  }
+}
+
+fn unify_list_of_types(
+  store: TypeStore,
+  environment: Environment,
+  left: List(Type),
+  right: List(Type),
+) -> Result(TypeStore, error.TypeCheckError) {
+  case list.length(left) == list.length(right) {
+    False ->
+      Error(mismatch_error(environment, TupleType(left), TupleType(right)))
+    True ->
+      list.zip(left, right)
+      |> list.try_fold(store, fn(store, pair) {
+        let #(l, r) = pair
+        unify(store, environment, l, r)
+      })
+  }
+}
+
+fn unify_callables(
+  store: TypeStore,
+  environment: Environment,
+  left: Type,
+  right: Type,
+  left_parameters: List(Type),
+  left_labels: dict.Dict(String, Int),
+  left_return: Type,
+  right_parameters: List(Type),
+  right_labels: dict.Dict(String, Int),
+  right_return: Type,
+) -> Result(TypeStore, error.TypeCheckError) {
+  let label_keys = dict.keys(left_labels) |> list.sort(string.compare)
+  let right_label_keys = dict.keys(right_labels) |> list.sort(string.compare)
+  case label_keys == right_label_keys {
+    False -> Error(mismatch_error(environment, left, right))
+    True ->
+      list.zip(left_parameters, right_parameters)
+      |> list.try_fold(store, fn(store, pair) {
+        let #(l, r) = pair
+        unify(store, environment, l, r)
+      })
+      |> result.try(fn(store) {
+        unify(store, environment, left_return, right_return)
+      })
+  }
+}
+
+fn mismatch_error(
+  environment: Environment,
+  left: Type,
+  right: Type,
+) -> error.TypeCheckError {
+  error.InvalidType(
+    to_string(environment, left),
+    to_string(environment, right),
+    "in type mismatch",
+  )
+}
+
+/// Name an unbound variable by its order of discovery. Uses lowercase letters
+/// a-z, then falls back to a numeric suffix beyond that.
+fn generalise_name(index: Int) -> String {
+  let alphabet = "abcdefghijklmnopqrstuvwxyz"
+  case index < string.length(alphabet) {
+    True ->
+      alphabet
+      |> string.drop_start(index)
+      |> string.first
+      |> result.unwrap("")
+    False -> "var" <> int.to_string(index)
+  }
+}
+
+/// Replace any remaining unbound `Var` nodes in a type with
+/// `GenericTypeVariable` names. Unifies any linked vars through first.
+pub fn generalise(store: TypeStore, type_: Type) -> Type {
+  let #(_store, _names, type_) = do_generalise(store, dict.new(), type_)
+  type_
+}
+
+fn do_generalise(
+  store: TypeStore,
+  names: dict.Dict(Int, String),
+  type_: Type,
+) -> #(TypeStore, dict.Dict(Int, String), Type) {
+  case type_ {
+    Var(id) -> {
+      case dict.get(store.vars, id) {
+        Ok(Link(linked)) -> do_generalise(store, names, linked)
+        Ok(Unbound) | Error(_) -> {
+          case dict.get(names, id) {
+            Ok(name) -> #(store, names, GenericTypeVariable(name))
+            Error(_) -> {
+              let name = generalise_name(dict.size(names))
+              #(store, dict.insert(names, id, name), GenericTypeVariable(name))
+            }
+          }
+        }
+      }
+    }
+    CallableType(parameters, labels, return) -> {
+      let #(store, names, parameters) =
+        list.fold(parameters, #(store, names, []), fn(state, parameter) {
+          let #(store, names, acc) = state
+          let #(store, names, parameter) =
+            do_generalise(store, names, parameter)
+          #(store, names, [parameter, ..acc])
+        })
+      let #(store, names, return) = do_generalise(store, names, return)
+      #(store, names, CallableType(list.reverse(parameters), labels, return))
+    }
+    GenericCallableType(parameters, labels, return, original) -> {
+      let #(store, names, parameters) =
+        list.fold(parameters, #(store, names, []), fn(state, parameter) {
+          let #(store, names, acc) = state
+          let #(store, names, parameter) =
+            do_generalise(store, names, parameter)
+          #(store, names, [parameter, ..acc])
+        })
+      let #(store, names, return) = do_generalise(store, names, return)
+      #(
+        store,
+        names,
+        GenericCallableType(list.reverse(parameters), labels, return, original),
+      )
+    }
+    TupleType(elements) -> {
+      let #(store, names, elements) =
+        list.fold(elements, #(store, names, []), fn(state, element) {
+          let #(store, names, acc) = state
+          let #(store, names, element) = do_generalise(store, names, element)
+          #(store, names, [element, ..acc])
+        })
+      #(store, names, TupleType(list.reverse(elements)))
+    }
+    ListType(element) -> {
+      let #(store, names, element) = do_generalise(store, names, element)
+      #(store, names, ListType(element))
+    }
+    ResultType(ok, error) -> {
+      let #(store, names, ok) = do_generalise(store, names, ok)
+      let #(store, names, error) = do_generalise(store, names, error)
+      #(store, names, ResultType(ok, error))
+    }
+    OptionType(inner) -> {
+      let #(store, names, inner) = do_generalise(store, names, inner)
+      #(store, names, OptionType(inner))
+    }
+    _ -> #(store, names, type_)
+  }
 }
 
 pub type TypeResult =
@@ -118,7 +553,10 @@ pub fn add_or_update_def_in_env(
 
 /// publish a name that is already in the definitions so that it is
 /// visible to importing modules
-pub fn publish_def_in_env(environment: Environment, name: String) -> Environment {
+pub fn publish_def_in_env(
+  environment: Environment,
+  name: String,
+) -> Environment {
   Environment(
     ..environment,
     public_definitions: set.insert(environment.public_definitions, name),
@@ -136,9 +574,6 @@ pub fn publish_custom_type_in_env(
     public_custom_types: set.insert(environment.public_custom_types, name),
   )
 }
-
-/// Adds the custom_type to the environment, assuming that the current module
-//
 
 pub fn add_custom_type_to_env(
   environment: Environment,
@@ -177,7 +612,10 @@ pub fn lookup_variable_type(
   |> result.replace_error(error.InvalidName(name))
 }
 
-pub fn lookup_custom_type(environment: Environment, name: String) -> TypeResult {
+pub fn lookup_custom_type(
+  environment: Environment,
+  name: String,
+) -> TypeResult {
   dict.get(environment.custom_types, name)
   |> result.replace_error(error.UnknownCustomType(name))
 }
@@ -193,6 +631,29 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
     glance.NamedType(_, "Nil", option.None, []) -> Ok(NilType)
     glance.NamedType(_, "String", option.None, []) -> Ok(StringType)
     glance.NamedType(_, "Bool", option.None, []) -> Ok(BoolType)
+    glance.NamedType(_, "BitArray", option.None, []) -> Ok(BitArrayType)
+
+    glance.NamedType(_, "List", option.None, [element]) ->
+      type_(environment, element) |> result.map(ListType)
+    glance.NamedType(_, "Result", option.None, [ok, error]) -> {
+      use ok <- result.try(type_(environment, ok))
+      use error <- result.try(type_(environment, error))
+      Ok(ResultType(ok, error))
+    }
+    glance.NamedType(_, "Option", option.None, [inner]) ->
+      type_(environment, inner) |> result.map(OptionType)
+
+    glance.TupleType(_, elements) ->
+      list.try_map(elements, type_(environment, _))
+      |> result.map(TupleType)
+
+    glance.FunctionType(_, parameters, return) -> {
+      use parameters <- result.try(
+        list.try_map(parameters, type_(environment, _)),
+      )
+      use return <- result.try(type_(environment, return))
+      Ok(CallableType(parameters, dict.new(), return))
+    }
 
     // TODO: custom types with parameters need to be supported
     // TODO: not 100% certain all named types that are not covered
@@ -215,9 +676,10 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
         False -> lookup_variable_type(environment, name)
       }
     }
-    _ -> {
-      todo as "many glance types not processed yet"
-    }
+
+    glance.HoleType(_, _) ->
+      Error(error.InvalidType("hole", "a known type", "holes are not supported"))
+    glance.NamedType(_, name, _, _) -> Error(error.UnknownCustomType(name))
   }
 }
 
@@ -228,6 +690,16 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
     FloatType -> "Float"
     StringType -> "String"
     BoolType -> "Bool"
+    BitArrayType -> "BitArray"
+    TupleType(elements) -> "(" <> list_to_string(elements, environment) <> ")"
+    ListType(element) -> "List(" <> to_string(environment, element) <> ")"
+    ResultType(ok, error) ->
+      "Result("
+      <> to_string(environment, ok)
+      <> ", "
+      <> to_string(environment, error)
+      <> ")"
+    OptionType(inner) -> "Option(" <> to_string(environment, inner) <> ")"
     CustomType(module, name) -> module <> "." <> name
     CallableType(parameters, _labels, return) ->
       "fn ("
@@ -241,6 +713,7 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
       <> to_string(environment, return)
     NamespaceType(..) -> "<Namespace>"
     GenericTypeVariable(name) -> name
+    Var(id) -> "var_" <> int.to_string(id)
     InferredReturn -> ""
   }
 }
@@ -258,13 +731,35 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
     FloatType -> glance.NamedType(unknown_span, "Float", option.None, [])
     StringType -> glance.NamedType(unknown_span, "String", option.None, [])
     BoolType -> glance.NamedType(unknown_span, "Bool", option.None, [])
+    BitArrayType -> glance.NamedType(unknown_span, "BitArray", option.None, [])
+    TupleType(elements) ->
+      glance.TupleType(
+        unknown_span,
+        list.map(elements, to_glance(environment, _)),
+      )
+    ListType(element) ->
+      glance.NamedType(unknown_span, "List", option.None, [
+        to_glance(environment, element),
+      ])
+    ResultType(ok, error) ->
+      glance.NamedType(unknown_span, "Result", option.None, [
+        to_glance(environment, ok),
+        to_glance(environment, error),
+      ])
+    OptionType(inner) ->
+      glance.NamedType(unknown_span, "Option", option.None, [
+        to_glance(environment, inner),
+      ])
     CustomType(module, name) -> {
-      case dict.get(environment.import_names, module) {
-        Ok(_relative) if module == environment.current_module ->
-          glance.NamedType(unknown_span, name, option.None, [])
-        Ok(relative) ->
-          glance.NamedType(unknown_span, name, option.Some(relative), [])
-        Error(_) -> panic as "Custom type should always have a valid module"
+      case module == environment.current_module {
+        True -> glance.NamedType(unknown_span, name, option.None, [])
+        False -> {
+          case dict.get(environment.import_names, module) {
+            Ok(relative) ->
+              glance.NamedType(unknown_span, name, option.Some(relative), [])
+            Error(_) -> panic as "Custom type should always have a valid module"
+          }
+        }
       }
     }
     CallableType(parameters, _labels, return) ->
@@ -281,6 +776,7 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
       )
     NamespaceType(..) -> panic as "Cannot convert namespace to glance"
     GenericTypeVariable(name) -> glance.VariableType(unknown_span, name)
+    Var(id) -> glance.VariableType(unknown_span, "var_" <> int.to_string(id))
     InferredReturn ->
       panic as "InferredReturn should be replaced with actual type before conversion to glance"
   }
