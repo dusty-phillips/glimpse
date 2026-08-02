@@ -61,11 +61,33 @@ fn load_glimpse_package(
 
 ## Typechecking
 
-Typechecking is mostly not implemented yet and not available in the public
-release on hex. The entrypoints are in glimpse/typecheck. If you've loaded
-a glimpse module as above, you probably want `typecheck.package(glimpse_package)`. There are a couple other public functions in there
-for checking individual modules and parts of modules, but it is probable
-you want that one.
+Glimpse can typecheck a loaded package, both within and between modules. The
+entry point you'll usually want is `typecheck.package`, which sorts the modules
+by their dependencies and checks each in turn:
+
+```gleam
+pub fn package(
+  package: glimpse.Package,
+) -> Result(glimpse.Package, error.GlimpseError(a))
+```
+
+It returns the package with inferred types filled in. Lower-level entry points
+live in `glimpse/typecheck` for checking individual modules, constants, custom
+types, and functions.
+
+The typechecker covers expressions, statements, patterns, annotations, imports
+(including aliases and unqualified imports), module constants, custom types,
+function signatures and bodies, `use` syntax, and case expressions. Generic
+callables are instantiated at each call site, so polymorphic functions such as
+`fn identity(x: a) -> a { x }` check correctly.
+
+It is not yet a complete Gleam typechecker. Known gaps:
+
+- Parametric custom types (`type Box(a)`) are not supported: `List`, `Result`,
+  and `Option` are handled specially, but a user-defined type parameter in an
+  annotation currently errors.
+- Generic function inference is shallow: generic calls are checked for
+  consistency at each call site, but the most general type is not inferred.
 
 ## Future Ideas
 
