@@ -69,7 +69,11 @@ Use `echo` syntax instead of print statements:
 echo some_value
 ```
 
-Prints the value with file:line context to stderr.
+Prints the value with file:line context to stderr. Each `echo` emits the value
+and then a separate `file:line` marker line, so several `echo`s in a row
+interleave with location lines — build a single string (`echo "a=" <> a <> " b="
+<> b`) when you need adjacent values to read together. `echo` works on any
+value; for `Result`/`Error` debugging the constructor prints directly.
 
 ## Current status
 
