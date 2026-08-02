@@ -2,8 +2,10 @@ import glance
 import gleam/dict
 import gleam/list
 import gleam/option
+import gleam/result
 import gleam/set
 import gleam/string
+import glimpse/error
 import glimpse/internal/typecheck/types.{
   type EnvStateFold, type EnvStateResult, type Environment,
 }
@@ -17,46 +19,114 @@ pub fn fold_import_from_env(
 ) -> EnvStateFold(dict.Dict(String, Environment)) {
   case state {
     Error(error) -> list.Stop(Error(error))
-    Ok(types.EnvState(environment, module_envs)) ->
-      {
-        case import_ {
-          glance.Import(
-            _,
-            module,
-            alias: option.None,
-            unqualified_types: [],
-            unqualified_values: [],
-          ) -> {
-            case dict.get(module_envs, module) {
-              Error(_) ->
-                panic as "Missing modules should have been detected before now  "
-              Ok(module_env) -> {
-                let assert Ok(namespace) =
-                  string.split(module, "/") |> list.last
+    Ok(types.EnvState(environment, module_envs)) -> {
+      let glance.Import(_, module, alias, unqualified_types, unqualified_values) =
+        import_
 
-                types.add_or_update_def_in_env(
-                  environment,
-                  namespace,
-                  types.NamespaceType(
-                    module_env.definitions
-                      |> dict.filter(fn(key, _) {
-                        set.contains(module_env.public_definitions, key)
-                      }),
-                    module_env.custom_types
-                      |> dict.filter(fn(key, _) {
-                        set.contains(module_env.public_custom_types, key)
-                      }),
-                  ),
-                )
-                |> types.add_import_mapping_to_env(module, namespace)
-                |> types.EnvState(module_envs)
-                |> Ok
-              }
-            }
-          }
-          _ -> todo as "Complex imports not supported yet"
+      let namespace = case alias {
+        option.Some(glance.Named(name)) -> name
+        _ -> {
+          let assert Ok(namespace) = string.split(module, "/") |> list.last
+          namespace
         }
       }
-      |> list.Continue
+
+      let add_namespace = case alias {
+        option.Some(glance.Discarded(_)) -> False
+        _ -> True
+      }
+
+      let module_env = case dict.get(module_envs, module) {
+        Error(_) ->
+          panic as "Missing modules should have been detected before now"
+        Ok(module_env) -> module_env
+      }
+
+      let environment_result = {
+        use environment <- result.try(fold_values_into_env(
+          environment,
+          module_env,
+          unqualified_values,
+        ))
+        use environment <- result.try(fold_types_into_env(
+          environment,
+          module_env,
+          unqualified_types,
+        ))
+
+        let environment = case add_namespace {
+          True ->
+            types.add_or_update_def_in_env(
+              environment,
+              namespace,
+              types.NamespaceType(
+                module_env.definitions
+                  |> dict.filter(fn(key, _) {
+                    set.contains(module_env.public_definitions, key)
+                  }),
+                module_env.custom_types
+                  |> dict.filter(fn(key, _) {
+                    set.contains(module_env.public_custom_types, key)
+                  }),
+              ),
+            )
+          False -> environment
+        }
+
+        Ok(types.add_import_mapping_to_env(environment, module, namespace))
+      }
+
+      case environment_result {
+        Error(error) -> list.Stop(Error(error))
+        Ok(environment) ->
+          types.EnvState(environment, module_envs) |> Ok |> list.Continue
+      }
+    }
   }
+}
+
+fn fold_values_into_env(
+  environment: Environment,
+  module_env: Environment,
+  unqualified_values: List(glance.UnqualifiedImport),
+) -> error.TypeCheckResult(Environment) {
+  list.try_fold(
+    unqualified_values,
+    environment,
+    fn(environment, unqualified_import) {
+      let glance.UnqualifiedImport(name, import_alias) = unqualified_import
+      case set.contains(module_env.public_definitions, name) {
+        False -> Error(error.InvalidName(name))
+        True -> {
+          let scope_name = option.unwrap(import_alias, name)
+          case dict.get(module_env.definitions, name) {
+            Error(_) -> Error(error.InvalidName(name))
+            Ok(type_) ->
+              Ok(types.add_or_update_def_in_env(environment, scope_name, type_))
+          }
+        }
+      }
+    },
+  )
+}
+
+fn fold_types_into_env(
+  environment: Environment,
+  module_env: Environment,
+  unqualified_types: List(glance.UnqualifiedImport),
+) -> error.TypeCheckResult(Environment) {
+  list.try_fold(
+    unqualified_types,
+    environment,
+    fn(environment, unqualified_import) {
+      let glance.UnqualifiedImport(name, import_alias) = unqualified_import
+      case set.contains(module_env.public_custom_types, name) {
+        False -> Error(error.InvalidName(name))
+        True -> {
+          let scope_name = option.unwrap(import_alias, name)
+          Ok(types.add_custom_type_to_env(environment, scope_name))
+        }
+      }
+    },
+  )
 }
