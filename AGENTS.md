@@ -28,12 +28,13 @@ The library is filesystem-agnostic: external module loading happens through a lo
 ### Key modules
 
 - `src/glimpse.gleam` — main entry point with `load_package()` and core types
-- `src/glimpse/typecheck.gleam` — public typechecking API: `package()`, `module()`, `function()`
+- `src/glimpse/typecheck.gleam` — public typechecking API: `package()`, `module()`, `constant()`, `custom_type()`, `function()`
 - `src/glimpse/internal/typecheck/` — internal implementation:
-  - `types.gleam` — type system definitions and Environment management
-  - `functions.gleam` — function signature and parameter handling
+  - `types.gleam` — type system definitions, Environment management, and the type store used for unification, instantiation, and generalisation
+  - `functions.gleam` — function signature and parameter handling, variant constructor types
   - `imports.gleam` — import resolution and module environment merging
-  - `fields.gleam` — field access and record handling
+  - `pattern.gleam` — pattern typechecking
+- `src/glimpse/internal/typecheck.gleam` — expression, statement, call, and case typechecking
 - `src/glimpse/internal/import_dependencies.gleam` — dependency sorting and circular dependency detection
 
 ### Typechecking flow
@@ -41,10 +42,11 @@ The library is filesystem-agnostic: external module loading happens through a lo
 1. **Package-level**: `typecheck.package()` sorts dependencies and processes modules in order
 2. **Module-level**: `typecheck.module()` processes imports, custom types, function signatures, then function bodies
 3. **Function-level**: `typecheck.function()` handles parameters, type inference, and return type validation
+4. **Expression-level**: generic callables are instantiated to fresh variables at each call site, unified against the arguments, and the result is generalised back to named type variables
 
 ### Environment system
 
-An `Environment` type tracks: current module context, available definitions (functions, variables), custom types and their visibility, and import mappings / module environments.
+An `Environment` type tracks: current module context, available definitions (functions, variables), custom types and their visibility, and import mappings / module environments. A transient `TypeStore` threads the state of inference variables created while unifying a single call; it is discarded once the call's return type has been resolved.
 
 ## Testing structure
 
@@ -71,4 +73,7 @@ Prints the value with file:line context to stderr.
 
 ## Current status
 
-The typechecking system is partially implemented and not yet available in public releases. Main functionality: basic type inference, custom type handling, and function typechecking.
+The typechecker covers every expression, statement, and pattern variant in the
+glance AST, typechecks both within and between modules, and supports generics
+(parametric custom types and polymorphic functions) through instantiation at
+each call site. It is not yet available in public releases.
