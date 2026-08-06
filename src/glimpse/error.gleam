@@ -28,6 +28,8 @@ pub type TypeCheckError {
     expected: String,
   )
   UnknownCustomType(name: String)
+  /// Raised when type aliases reference each other in a cycle
+  RecursiveTypeAlias(name: String)
   NotCallable(got: String)
   InvalidArguments(expected: String, actual_arguments: String)
   InvalidArgumentLabel(expected: String, got: String)
