@@ -250,11 +250,7 @@ fn find_private_in_type(
 ) -> Result(String, Nil) {
   case type_ {
     glance.NamedType(_, name, module, parameters) ->
-      case
-        module == option.None
-        && dict.has_key(environment.custom_types, name)
-        && !set.contains(environment.public_custom_types, name)
-      {
+      case module == option.None && is_private_local_type(environment, name) {
         True -> Ok(name)
         False -> find_private_in_types(environment, parameters)
       }
@@ -266,6 +262,18 @@ fn find_private_in_type(
         Error(_) -> find_private_in_types(environment, parameters)
       }
     glance.VariableType(_, _) | glance.HoleType(_, _) -> Error(Nil)
+  }
+}
+
+/// A type reference is a private leak only if it names a custom type defined
+/// in the current module that has not been published. Prelude types and
+/// unqualified imports also live in `custom_types` but are defined elsewhere.
+fn is_private_local_type(environment: Environment, name: String) -> Bool {
+  case dict.get(environment.custom_types, name) {
+    Ok(types.CustomType(defining_module, _, _, _)) ->
+      defining_module == environment.current_module
+      && !set.contains(environment.public_custom_types, name)
+    _ -> False
   }
 }
 

@@ -28,6 +28,45 @@ fn helper() -> PrivateType {
   )
 }
 
+pub fn prelude_type_in_public_signature_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(erlang, \"a\", \"b\")
+  pub fn parse(string: String) -> Result(Float, Nil)",
+  )
+}
+
+pub fn imported_type_in_public_signature_is_fine_test() {
+  helpers.ok_package_check("main_module", fn(pkg) {
+    case pkg {
+      "main_module" ->
+        Ok(
+          "import other/package.{type Order}
+
+        @external(erlang, \"a\", \"b\")
+        pub fn compare(a: Int, b: Int) -> Order",
+        )
+      "other/package" ->
+        Ok(
+          "pub type Order {
+          Lesser
+          Equal
+          Greater
+        }",
+        )
+      _ -> panic as "only two modules in this test"
+    }
+  })
+}
+
+pub fn private_type_nested_in_public_signature_test() {
+  assert helpers.error_module_typecheck(
+      "@external(erlang, \"a\", \"b\")
+    type PrivateType
+    pub fn parse() -> Result(PrivateType, Nil)",
+    )
+    == error.PrivateTypeLeak("PrivateType")
+}
+
 pub fn todo_in_a_constant_test() {
   assert helpers.error_module_typecheck("pub const wibble = todo")
     == error.TodoInConstant
