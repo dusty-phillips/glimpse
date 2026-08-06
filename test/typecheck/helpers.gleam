@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/list
 import glimpse
 import glimpse/error
+import glimpse/internal/target
 import glimpse/internal/typecheck/types.{type Environment}
 import glimpse/typecheck
 
@@ -60,14 +61,22 @@ pub fn ok_module_typecheck(
 ) -> #(glimpse.Module, Environment) {
   let assert Ok(module) = glance.module(definition)
   let assert Ok(result) =
-    typecheck.module(glimpse.Module("main_module", module, []), dict.new())
+    typecheck.module(
+      glimpse.Module("main_module", module, []),
+      dict.new(),
+      target.Erlang,
+    )
   result
 }
 
 pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
   let assert Ok(module) = glance.module(definition)
   let assert Error(error) =
-    typecheck.module(glimpse.Module("main_module", module, []), dict.new())
+    typecheck.module(
+      glimpse.Module("main_module", module, []),
+      dict.new(),
+      target.Erlang,
+    )
   error
 }
 
@@ -76,6 +85,6 @@ pub fn ok_package_check(
   loader: fn(String) -> Result(String, Nil),
 ) -> glimpse.Package {
   let assert Ok(package) = glimpse.load_package(main_module, loader)
-  let assert Ok(result) = typecheck.package(package)
+  let assert Ok(result) = typecheck.package(package, target.Erlang)
   result
 }

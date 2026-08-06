@@ -63,7 +63,12 @@ pub fn recursive_generic_map_list_test() {
 
   assert parameters
     == [
-      types.ListType(types.GenericTypeVariable("a")),
+      types.CustomType(
+        "gleam",
+        "List",
+        [types.GenericTypeVariable("a")],
+        option.None,
+      ),
       types.CallableType(
         [types.GenericTypeVariable("a")],
         dict.new(),
@@ -71,7 +76,13 @@ pub fn recursive_generic_map_list_test() {
       ),
     ]
   assert labels == dict.new()
-  assert return == types.ListType(types.GenericTypeVariable("b"))
+  assert return
+    == types.CustomType(
+      "gleam",
+      "List",
+      [types.GenericTypeVariable("b")],
+      option.None,
+    )
 
   let assert [map_list_def] = module.module.functions
   let assert option.Some(glance.NamedType(
@@ -97,13 +108,18 @@ pub fn parametric_type_generic_test() {
   assert parameters == [types.GenericTypeVariable("a")]
   assert labels == dict.new()
   assert return
-    == types.CustomType("main_module", "Box", [types.GenericTypeVariable("a")])
+    == types.CustomType(
+      "main_module",
+      "Box",
+      [types.GenericTypeVariable("a")],
+      option.None,
+    )
 
   assert dict.get(env.definitions, "use_it")
     == Ok(types.CallableType(
       [types.IntType],
       dict.new(),
-      types.CustomType("main_module", "Box", [types.IntType]),
+      types.CustomType("main_module", "Box", [types.IntType], option.None),
     ))
 
   let assert [use_it_def, _] = module.module.functions

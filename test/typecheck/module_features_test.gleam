@@ -1,4 +1,6 @@
 import gleam/dict
+import gleam/option
+
 import gleam/list
 import gleam/set
 import glimpse/error
@@ -85,7 +87,7 @@ pub fn opaque_type_hides_constructor_test() {
     == Ok(types.CallableType(
       [types.IntType],
       dict.from_list([#("x", 0)]),
-      types.CustomType("main_module", "Secret", []),
+      types.CustomType("main_module", "Secret", [], option.Some(0)),
     ))
 }
 
@@ -108,7 +110,7 @@ pub fn opaque_constructor_usable_in_same_module_test() {
     == Ok(types.CallableType(
       [],
       dict.new(),
-      types.CustomType("main_module", "Secret", []),
+      types.CustomType("main_module", "Secret", [], option.None),
     ))
 }
 
@@ -179,7 +181,11 @@ pub fn generic_list_parameter_test() {
     )
 
   assert dict.get(env.definitions, "foo")
-    == Ok(types.CallableType([], dict.new(), types.ListType(types.IntType)))
+    == Ok(types.CallableType(
+      [],
+      dict.new(),
+      types.CustomType("gleam", "List", [types.IntType], option.None),
+    ))
 }
 
 pub fn todo_unifies_with_generic_return_test() {

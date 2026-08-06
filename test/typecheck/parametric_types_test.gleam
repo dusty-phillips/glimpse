@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/option
 import glimpse
 import glimpse/error
+import glimpse/internal/target
 import glimpse/internal/typecheck/types
 import glimpse/typecheck
 import typecheck/helpers
@@ -11,19 +12,27 @@ pub fn parametric_custom_type_def_test() {
   let env = "type Box(a) { Box(value: a) }" |> helpers.ok_custom_type
 
   assert dict.get(env.custom_types, "Box")
-    == Ok(
-      types.CustomType("main_module", "Box", [
+    == Ok(types.CustomType(
+      "main_module",
+      "Box",
+      [
         types.GenericTypeVariable("a"),
-      ]),
-    )
+      ],
+      option.None,
+    ))
 
   assert dict.get(env.definitions, "Box")
     == Ok(types.GenericCallableType(
       [types.GenericTypeVariable("a")],
       dict.from_list([#("value", 0)]),
-      types.CustomType("main_module", "Box", [
-        types.GenericTypeVariable("a"),
-      ]),
+      types.CustomType(
+        "main_module",
+        "Box",
+        [
+          types.GenericTypeVariable("a"),
+        ],
+        option.Some(0),
+      ),
       glance.Function(
         glance.Span(-1, -1),
         "",
@@ -80,7 +89,7 @@ pub fn parametric_pattern_resolves_field_type_test() {
 
   assert dict.get(env.definitions, "unbox")
     == Ok(types.CallableType(
-      [types.CustomType("main_module", "Box", [types.IntType])],
+      [types.CustomType("main_module", "Box", [types.IntType], option.None)],
       dict.new(),
       types.IntType,
     ))
@@ -197,11 +206,11 @@ pub fn parametric_unqualified_cross_module_test() {
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs)
+    |> typecheck.module(other_envs, target.Erlang)
 
   assert dict.get(main_env.definitions, "use_it")
     == Ok(types.CallableType(
-      [types.CustomType("main_module", "Box", [types.IntType])],
+      [types.CustomType("main_module", "Box", [types.IntType], option.None)],
       dict.new(),
       types.IntType,
     ))

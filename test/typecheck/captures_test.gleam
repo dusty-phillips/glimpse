@@ -1,4 +1,5 @@
 import gleam/dict
+import gleam/option
 import glimpse/error
 import glimpse/internal/typecheck/types
 import typecheck/helpers
@@ -124,4 +125,40 @@ pub fn capture_wrong_call_arg_type_test() {
     }",
     )
     == error.InvalidArguments("(Int)", "(String)")
+}
+
+pub fn capture_lambda_in_pipe_test() {
+  let #(_module, env) =
+    helpers.ok_module_typecheck(
+      "pub type Upload { Upload(file_name: String) }
+    fn fold(
+      items: List(#(String, Upload)),
+      acc: BitArray,
+      fun: fn(BitArray, #(String, Upload)) -> BitArray,
+    ) -> BitArray { acc }
+    fn build(files: List(#(String, Upload))) -> BitArray {
+      <<>> |> fold(files, _, fn(acc, file) {
+        <<acc:bits, file.0:utf8, file.1.file_name:utf8>>
+      })
+    }",
+    )
+
+  assert dict.get(env.definitions, "build")
+    == Ok(types.CallableType(
+      [
+        types.CustomType(
+          "gleam",
+          "List",
+          [
+            types.TupleType([
+              types.StringType,
+              types.CustomType("main_module", "Upload", [], option.None),
+            ]),
+          ],
+          option.None,
+        ),
+      ],
+      dict.new(),
+      types.BitArrayType,
+    ))
 }

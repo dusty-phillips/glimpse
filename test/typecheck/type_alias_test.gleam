@@ -1,4 +1,6 @@
 import gleam/dict
+import gleam/option
+
 import gleam/set
 import glimpse/error
 import glimpse/internal/typecheck/types
@@ -13,9 +15,9 @@ pub fn parameterized_alias_in_annotation_test() {
 
   assert dict.get(env.definitions, "f")
     == Ok(types.CallableType(
-      [types.ListType(types.IntType)],
+      [types.CustomType("gleam", "List", [types.IntType], option.None)],
       dict.new(),
-      types.ListType(types.IntType),
+      types.CustomType("gleam", "List", [types.IntType], option.None),
     ))
 }
 

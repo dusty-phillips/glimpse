@@ -177,7 +177,11 @@ pub fn parametric_record_update_wrong_field_type_test() {
     Box(..b, value: \"thirty\")
   }",
     )
-    == error.InvalidType("String", "Int", "in record update of field value")
+    == error.InvalidReturnType(
+      "update",
+      "main_module.Box(String)",
+      "main_module.Box(Int)",
+    )
 }
 
 pub fn assert_bool_returns_nil_test() {
@@ -400,6 +404,6 @@ pub fn zero_arg_variant_constructor_test() {
     == Ok(types.CallableType(
       [],
       dict.new(),
-      types.CustomType("main_module", "Foo", []),
+      types.CustomType("main_module", "Foo", [], option.None),
     ))
 }

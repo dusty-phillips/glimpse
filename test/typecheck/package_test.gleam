@@ -61,3 +61,34 @@ pub fn typecheck_call_to_dependent_module_package_test() {
     }
   })
 }
+
+/// A local variable that shadows a module alias must still let record access
+/// fall back to module access when the value has no such field. In
+/// `dict.insert(...)` the parameter `dict` shadows the imported `gleam/dict`
+/// module, but `Box` has no `insert` field so it must resolve to
+/// `other/package.insert`, not be treated as a field.
+pub fn module_shadowing_value_falls_back_to_module_test() {
+  helpers.ok_package_check("main_module", fn(pkg) {
+    case pkg {
+      "main_module" ->
+        Ok(
+          "import other/package as dict
+
+        pub fn main(dict: dict.Box, value: Int) -> Nil {
+          let _pair = dict.insert(dict, value)
+          Nil
+        }",
+        )
+      "other/package" ->
+        Ok(
+          "pub type Box {
+            Box(contents: Int)
+          }
+          pub fn insert(into box: Box, insert value: Int) -> Box {
+            Box(value)
+          }",
+        )
+      _ -> panic as "only two modules in this test"
+    }
+  })
+}
