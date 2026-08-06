@@ -289,15 +289,10 @@ pub fn case_tuple_pattern_test() {
 }
 
 pub fn case_list_pattern_test() {
-  let function_out =
-    helpers.ok_function_typecheck(
+  assert helpers.error_function_typecheck(
       "fn foo() -> Int { case [1, 2] { [a, ..rest] -> a } }",
     )
-
-  assert function_out.return
-    == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
-    )
+    == error.InexhaustivePattern("[]")
 }
 
 pub fn use_statement_test() {

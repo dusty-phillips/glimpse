@@ -1,4 +1,39 @@
+import glimpse/error
 import typecheck/helpers
+
+/// `use <-` binds one callback argument, so its pattern must be irrefutable.
+/// A refutable pattern crashes on the values it does not match; the official
+/// compiler reports it as an inexhaustive pattern.
+pub fn use_refutable_pattern_test() {
+  assert helpers.error_module_typecheck(
+      "fn apply_result(r: Result(Int, Nil), cb: fn(Result(Int, Nil)) -> Result(Int, Nil)) -> Result(Int, Nil) {
+        cb(r)
+      }
+    fn foo() {
+      use Ok(x) <- apply_result(Ok(1))
+      x
+    }",
+    )
+    == error.InexhaustivePattern("Error")
+}
+
+/// A variable or discard pattern binds any value, so it stays irrefutable.
+pub fn use_irrefutable_patterns_test() {
+  let #(_module, _env) =
+    helpers.ok_module_typecheck(
+      "fn apply_result(r: Result(Int, Nil), cb: fn(Result(Int, Nil)) -> Result(Int, Nil)) -> Result(Int, Nil) {
+        cb(r)
+      }
+    fn foo() {
+      use x <- apply_result(Ok(1))
+      x
+    }
+    fn bar() {
+      use _ <- apply_result(Ok(1))
+      Ok(0)
+    }",
+    )
+}
 
 /// The `use` statement desugars to `f(args, fn(..) { .. })`, so the enclosing
 /// block's type is the use function's return type, NOT the callback's return

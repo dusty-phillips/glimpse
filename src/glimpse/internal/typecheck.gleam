@@ -7,6 +7,7 @@ import gleam/result
 import gleam/set
 import gleam/string
 import glimpse/error
+import glimpse/internal/typecheck/exhaustive
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/pattern
 import glimpse/internal/typecheck/types.{
@@ -102,13 +103,12 @@ pub fn statement(
 
       case kind {
         glance.Let -> {
-          use #(store, env) <- result.try(pattern.typecheck_pattern(
-            environment,
-            store,
-            type_,
-            pat,
-          ))
-          Ok(#(store, env, type_))
+          pattern.typecheck_pattern(environment, store, type_, pat)
+          |> pattern_must_be_irrefutable(environment, type_, pat)
+          |> result.map(fn(state) {
+            let #(store, env) = state
+            #(store, env, type_)
+          })
         }
         glance.LetAssert(_) -> {
           use #(store, env) <- result.try(pattern.typecheck_pattern(
@@ -384,6 +384,11 @@ fn fold_use_patterns(
                     type_,
                     use_pattern.pattern,
                   )
+                  |> pattern_must_be_irrefutable(
+                    env,
+                    type_,
+                    use_pattern.pattern,
+                  )
                 option.Some(annotation) -> {
                   use #(store, annotated) <- result.try(types.type_with_store(
                     env,
@@ -402,6 +407,11 @@ fn fold_use_patterns(
                     annotated,
                     use_pattern.pattern,
                   )
+                  |> pattern_must_be_irrefutable(
+                    env,
+                    annotated,
+                    use_pattern.pattern,
+                  )
                 }
               }
             },
@@ -412,6 +422,26 @@ fn fold_use_patterns(
           })
       }
     }
+  }
+}
+
+/// `use <-` binds a single callback-argument value, so its pattern must be
+/// irrefutable; a refutable pattern (e.g. `use Ok(x) <- ..`) crashes on some
+/// values. Only reject when the pattern itself has already typechecked.
+fn pattern_must_be_irrefutable(
+  checked: error.TypeCheckResult(#(types.TypeStore, types.Environment)),
+  environment: types.Environment,
+  type_: types.Type,
+  pattern: glance.Pattern,
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
+  case checked {
+    Error(check_error) -> Error(check_error)
+    Ok(state) ->
+      case exhaustive.check(environment, [type_], [[pattern]]) {
+        option.Some(missing) ->
+          Error(error.InexhaustivePattern(string.join(missing, "\n")))
+        option.None -> Ok(state)
+      }
   }
 }
 
@@ -1250,52 +1280,86 @@ fn case_expression(
     })
 
   case clauses {
-    [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
+    [] ->
+      case exhaustive.check(environment, subject_types, []) {
+        option.Some(missing) ->
+          Error(error.InexhaustivePattern(string.join(missing, "\n")))
+        option.None -> Error(error.CaseClauseMismatch("no clauses", "any"))
+      }
     [_first_clause, ..] -> {
-      // Typecheck every clause body sequentially, threading the store so each
+      // Typecheck each clause body sequentially, threading the store so each
       // clause gets a distinct namespace of inference variables. Unifying the
       // bodies afterwards then cannot conflate vars that belong to different
       // clauses.
-      use #(store, clause_types) <- result.try(
-        list.try_fold(clauses, #(store, []), fn(state, clause) {
-          let #(store, reversed) = state
-          clause_body_type(
-            environment,
-            store,
-            subject_types,
-            subject_names,
-            clause,
-          )
-          |> result.map(fn(state) {
-            let #(store, type_) = state
-            #(store, [type_, ..reversed])
-          })
-        }),
-      )
-      let clause_types = list.reverse(clause_types)
+      let checked = {
+        use #(store, clause_types) <- result.try(
+          list.try_fold(clauses, #(store, []), fn(state, clause) {
+            let #(store, reversed) = state
+            clause_body_type(
+              environment,
+              store,
+              subject_types,
+              subject_names,
+              clause,
+            )
+            |> result.map(fn(state) {
+              let #(store, type_) = state
+              #(store, [type_, ..reversed])
+            })
+          }),
+        )
+        let clause_types = list.reverse(clause_types)
 
-      case clause_types {
-        [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
-        [first_body_type, ..remaining_types] ->
-          list.try_fold(remaining_types, store, fn(store, clause_type) {
-            types.unify(store, environment, first_body_type, clause_type)
-          })
-          |> result.map(fn(store) {
-            // Prefer a concrete clause type over the `todo`/`InferredReturn`
-            // wildcards, which unify with anything without pinning a type (e.g.
-            // `case .. { _ -> panic; _ -> value }` must infer the value's type).
-            let case_type =
-              [first_body_type, ..remaining_types]
-              |> list.find(fn(type_) {
-                case type_ {
-                  types.GenericTypeVariable("todo") | types.InferredReturn ->
-                    False
-                  _ -> True
-                }
-              })
-              |> result.unwrap(types.GenericTypeVariable("todo"))
-            #(store, case_type)
-          })
+        case clause_types {
+          [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
+          [first_body_type, ..remaining_types] ->
+            list.try_fold(remaining_types, store, fn(store, clause_type) {
+              types.unify(store, environment, first_body_type, clause_type)
+            })
+            |> result.map(fn(store) {
+              // Prefer a concrete clause type over the `todo`/`InferredReturn`
+              // wildcards, which unify with anything without pinning a type
+              // (e.g. `case .. { _ -> panic; _ -> value }` must infer the
+              // value's type).
+              let case_type =
+                [first_body_type, ..remaining_types]
+                |> list.find(fn(type_) {
+                  case type_ {
+                    types.GenericTypeVariable("todo") | types.InferredReturn ->
+                      False
+                    _ -> True
+                  }
+                })
+                |> result.unwrap(types.GenericTypeVariable("todo"))
+              #(store, case_type)
+            })
+        }
+      }
+
+      // The clause bodies have now typechecked; reject a case that does not
+      // cover every possible value of the subjects, matching the official
+      // compiler's inexhaustive pattern check. Each clause may have several
+      // or-alternatives; the case is exhaustive only when all alternatives
+      // together cover every value. A guarded clause only matches when its
+      // guard passes, so it never guarantees coverage on its own.
+      let alternatives =
+        clauses
+        |> list.filter(fn(clause) {
+          case clause.guard {
+            option.None -> True
+            option.Some(_) -> False
+          }
+        })
+        |> list.map(fn(clause) { clause.patterns })
+        |> list.flatten
+      case checked {
+        Error(check_error) -> Error(check_error)
+        Ok(case_state) ->
+          case exhaustive.check(environment, subject_types, alternatives) {
+            option.Some(missing) ->
+              Error(error.InexhaustivePattern(string.join(missing, "\n")))
+            option.None -> Ok(case_state)
+          }
       }
     }
   }

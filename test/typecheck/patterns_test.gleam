@@ -134,15 +134,10 @@ pub fn case_variant_scrutinee_mismatch_test() {
 }
 
 pub fn case_string_concat_pattern_test() {
-  let function_out =
-    helpers.ok_function_typecheck(
+  assert helpers.error_function_typecheck(
       "fn foo(x: String) -> String { case x { \"a\" <> rest -> rest } }",
     )
-
-  assert function_out.return
-    == option.Some(
-      glance.NamedType(glance.Span(21, 27), "String", option.None, []),
-    )
+    == error.InexhaustivePattern("_")
 }
 
 pub fn case_string_concat_pattern_mismatch_test() {
@@ -153,15 +148,10 @@ pub fn case_string_concat_pattern_mismatch_test() {
 }
 
 pub fn case_bit_string_pattern_test() {
-  let function_out =
-    helpers.ok_function_typecheck(
+  assert helpers.error_function_typecheck(
       "fn foo() -> Int { case <<1>> { <<n>> -> n } }",
     )
-
-  assert function_out.return
-    == option.Some(
-      glance.NamedType(glance.Span(12, 15), "Int", option.None, []),
-    )
+    == error.InexhaustivePattern("_")
 }
 
 pub fn case_bit_string_pattern_mismatch_test() {

@@ -50,6 +50,9 @@ pub type TypeCheckError {
   MissingParameterAnnotation(name: String)
   /// Raised when `use` syntax is used with an unsupported number of subjects
   InvalidUse(subject_count: Int)
+  /// Raised when a `case` (or `let`/`use`) pattern does not cover every
+  /// possible shape of its subject type.
+  InexhaustivePattern(description: String)
 }
 
 pub type TypeCheckResult(a) =
