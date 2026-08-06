@@ -8,6 +8,7 @@ import gleam/set
 import glimpse
 import glimpse/error
 import glimpse/internal/import_dependencies
+import glimpse/internal/target
 import glimpse/internal/typecheck as intern
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/imports
@@ -31,6 +32,7 @@ type PackageState {
 /// or anything in the AST fails to typecheck.
 pub fn package(
   package: glimpse.Package,
+  target: target.Target,
 ) -> Result(glimpse.Package, error.GlimpseError(a)) {
   let import_graph =
     dict.map_values(package.modules, fn(_, value) { value.dependencies })
@@ -54,7 +56,7 @@ pub fn package(
               ),
             )
             use #(new_module, module_env) <- result.try(
-              module(glimpse_module, module_envs)
+              module(glimpse_module, module_envs, target)
               |> result.map_error(error.TypeCheckError),
             )
 
@@ -81,8 +83,17 @@ pub fn package(
 pub fn module(
   glimpse_module: glimpse.Module,
   module_envs: dict.Dict(String, Environment),
+  target: target.Target,
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
   let environment = types.new_env(glimpse_module.name)
+
+  // Drop definitions that are not active for the build target before
+  // typechecking, mirroring the real compiler.
+  let glimpse_module =
+    glimpse.Module(
+      ..glimpse_module,
+      module: target.filter_for_target(glimpse_module.module, target),
+    )
 
   let imports_result =
     glimpse_module.module.imports
@@ -94,6 +105,12 @@ pub fn module(
 
   use types.EnvState(environment, _) <- result.try(imports_result)
 
+  // Keep the full set of dependency module environments so field access can
+  // resolve constructors of types from modules that were not explicitly
+  // imported (the real compiler reads them from its `importable_modules`).
+  let environment =
+    types.Environment(..environment, module_environments: module_envs)
+
   use environment <- result.try(
     glimpse_module.module.custom_types
     |> list.try_fold(environment, fn(environment, glance_custom_type) {
@@ -101,10 +118,12 @@ pub fn module(
     }),
   )
 
+  use sorted_aliases <- result.try(sort_type_aliases(
+    glimpse_module.module.type_aliases |> list.map(fn(d) { d.definition }),
+  ))
+
   use environment <- result.try(
-    glimpse_module.module.type_aliases
-    |> list.map(fn(d) { d.definition })
-    |> list.reverse
+    sorted_aliases
     |> list.try_fold(environment, type_alias),
   )
 
@@ -115,8 +134,19 @@ pub fn module(
     }),
   )
 
+  let function_signature_result =
+    glimpse_module.module.functions
+    |> list.map(fn(definition) { definition.definition })
+    |> list.fold_until(Ok(environment), functions.function_signature)
+
+  use environment <- result.try(function_signature_result)
+
   use constants_env_state <- result.try(
     glimpse_module.module.constants
+    // glance prepends constants, so they are in reverse source order. Fold in
+    // source order so earlier constants are in the environment when later
+    // constants' values reference them.
+    |> list.reverse
     |> list.try_fold(types.EnvState(environment, []), fn(env_state, definition) {
       use constant_env_state <- result.try(constant(
         env_state.environment,
@@ -131,26 +161,19 @@ pub fn module(
     }),
   )
 
-  let constants = list.reverse(constants_env_state.state)
+  let constants = constants_env_state.state
   let environment = constants_env_state.environment
-
-  let function_signature_result =
-    glimpse_module.module.functions
-    |> list.map(fn(definition) { definition.definition })
-    |> list.fold_until(Ok(environment), functions.function_signature)
-
-  use environment <- result.try(function_signature_result)
 
   // Typecheck all function bodies twice. The first pass infers the callee
   // signatures (callers may see placeholder signatures for functions they call).
   // The second pass re-typechecks every body against the now-final signatures,
   // so callers get correct inferred types.
   use #(environment, _) <- result.try(typecheck_function_bodies(
-    environment,
+    types.set_defer_unknown(environment, True),
     glimpse_module.module.functions,
   ))
   use #(environment, functions) <- result.try(typecheck_function_bodies(
-    environment,
+    types.set_defer_unknown(environment, False),
     glimpse_module.module.functions,
   ))
 
@@ -198,6 +221,88 @@ fn typecheck_function_bodies(
 
 /// Register a type alias so that using the alias name in an annotation resolves
 /// to the aliased type.
+/// Order a module's type aliases so that every alias is registered before any
+/// alias that references it, mirroring the real compiler's topological sort of
+/// alias dependencies. Aliases that reference each other in a cycle are an
+/// error.
+fn sort_type_aliases(
+  aliases: List(glance.TypeAlias),
+) -> error.TypeCheckResult(List(glance.TypeAlias)) {
+  let alias_names =
+    aliases |> list.map(fn(alias) { alias.name }) |> set.from_list
+  let with_deps =
+    list.map(aliases, fn(alias) {
+      #(alias, alias_type_dependencies(alias.aliased, alias_names))
+    })
+  sort_alias_dependencies(with_deps)
+}
+
+fn sort_alias_dependencies(
+  remaining: List(#(glance.TypeAlias, set.Set(String))),
+) -> error.TypeCheckResult(List(glance.TypeAlias)) {
+  let #(ready, rest) =
+    list.partition(remaining, fn(pair) {
+      let #(_, deps) = pair
+      set.size(deps) == 0
+    })
+  case ready {
+    [] ->
+      case remaining {
+        [] -> Ok([])
+        [#(alias, _), ..] -> Error(error.RecursiveTypeAlias(alias.name))
+      }
+    _ -> {
+      let ready_names =
+        ready
+        |> list.map(fn(pair) {
+          let #(alias, _) = pair
+          alias.name
+        })
+        |> set.from_list
+      let stripped =
+        list.map(rest, fn(pair) {
+          let #(alias, deps) = pair
+          #(alias, set.difference(deps, ready_names))
+        })
+      use rest_sorted <- result.try(sort_alias_dependencies(stripped))
+      let ready_sorted =
+        ready
+        |> list.map(fn(pair) {
+          let #(alias, _) = pair
+          alias
+        })
+      Ok(list.append(ready_sorted, rest_sorted))
+    }
+  }
+}
+
+/// Collect the set of same-module type alias names referenced by a type
+/// annotation. Only unqualified names can refer to a same-module alias.
+fn alias_type_dependencies(
+  type_: glance.Type,
+  known: set.Set(String),
+) -> set.Set(String) {
+  let parameter_deps = fn(types: List(glance.Type)) {
+    list.fold(types, set.new(), fn(acc, t) {
+      set.union(acc, alias_type_dependencies(t, known))
+    })
+  }
+  case type_ {
+    glance.NamedType(_, name, option.None, parameters) ->
+      case set.contains(known, name) {
+        True -> set.insert(parameter_deps(parameters), name)
+        False -> parameter_deps(parameters)
+      }
+    glance.NamedType(_, _, option.Some(_), parameters) ->
+      parameter_deps(parameters)
+    glance.TupleType(_, elements) -> parameter_deps(elements)
+    glance.FunctionType(_, parameters, return_) ->
+      parameter_deps(parameters)
+      |> set.union(alias_type_dependencies(return_, known))
+    glance.VariableType(_, _) | glance.HoleType(_, _) -> set.new()
+  }
+}
+
 pub fn type_alias(
   environment: Environment,
   alias: glance.TypeAlias,
@@ -260,10 +365,16 @@ pub fn custom_type_constructors(
   custom_type: glance.CustomType,
 ) -> EnvironmentResult {
   let environment_result =
-    list.fold_until(
+    list.index_fold(
       custom_type.variants,
       Ok(types.EnvState(environment, custom_type)),
-      functions.fold_variant_constructors_into_env,
+      fn(state, variant, index) {
+        case state {
+          Error(error) -> Error(error)
+          Ok(_) ->
+            functions.fold_variant_constructor_into_env(state, variant, index)
+        }
+      },
     )
     |> result.map(types.extract_env)
 
@@ -295,14 +406,15 @@ pub fn constant(
     constant.value,
   ))
 
-  let constant_type = case constant.annotation {
-    option.None -> Ok(value_type)
+  let constant_type_result = case constant.annotation {
+    option.None -> Ok(#(store, value_type))
     option.Some(annotation) ->
-      types.type_(environment, annotation)
-      |> result.try(fn(annotated) {
-        case annotated == value_type {
-          True -> Ok(annotated)
-          False ->
+      types.type_with_store(environment, store, annotation)
+      |> result.try(fn(state) {
+        let #(store, annotated) = state
+        case types.unify(store, environment, value_type, annotated) {
+          Ok(store) -> Ok(#(store, annotated))
+          Error(_) ->
             Error(error.InvalidAnnotation(
               types.to_string(environment, value_type),
               types.to_string(environment, annotated),
@@ -312,9 +424,10 @@ pub fn constant(
       })
   }
 
-  use type_ <- result.try(constant_type)
+  use #(store, type_) <- result.try(constant_type_result)
+  let #(_store, generalised) = types.resolve_and_generalise(store, type_)
   let environment =
-    types.add_or_update_def_in_env(environment, constant.name, type_)
+    types.add_or_update_def_in_env(environment, constant.name, generalised)
   let environment = case constant.publicity {
     glance.Public -> types.publish_def_in_env(environment, constant.name)
     glance.Private -> environment
@@ -345,9 +458,13 @@ pub fn function(
     list.fold_until(
       function.parameters
         |> list.index_map(fn(param, index) { #(index, param) }),
-      Ok(
-        functions.FunctionParamState(store, environment, function.publicity, []),
-      ),
+      Ok(functions.FunctionParamState(
+        store,
+        environment,
+        function.publicity,
+        [],
+        dict.new(),
+      )),
       fn(state, indexed_param) {
         let #(index, param) = indexed_param
         functions.fold_function_parameter_into_env(state, index, param)
@@ -376,87 +493,108 @@ pub fn function(
 
       let #(store, resolved_return) = types.resolve(store, body_type)
 
-      // Generalise all inferred params AND return type together for consistent naming
-      let param_types =
-        list.map(resolved_inferred, fn(item) {
-          let #(_, t) = item
-          t
-        })
-      let all_types = list.append(param_types, [resolved_return])
-      let generalised_all = types.generalise_multi(store, all_types)
+      // The body called a same-module function earlier in source order whose
+      // inferred return is still the `InferredReturn` placeholder during the
+      // first pass. Keep this function's placeholder signature; the second pass
+      // re-checks it against the callee's now-final return.
+      case resolved_return == types.InferredReturn {
+        True -> Ok(types.EnvState(environment, function))
 
-      // Split back into params and return
-      let generalised_params =
-        list.take(generalised_all, list.length(resolved_inferred))
-      let generalised_return =
-        list.last(generalised_all)
-        |> result.unwrap(types.NilType)
+        False -> {
+          // Generalise all inferred params AND return type together for consistent naming
+          let param_types =
+            list.map(resolved_inferred, fn(item) {
+              let #(_, t) = item
+              t
+            })
+          let all_types = list.append(param_types, [resolved_return])
+          let generalised_all = types.generalise_multi(store, all_types)
 
-      // Build resolved_inferred with generalised types
-      let resolved_inferred =
-        list.zip(resolved_inferred, generalised_params)
-        |> list.map(fn(pair) {
-          let #(#(index, _), gen_type) = pair
-          #(index, gen_type)
-        })
+          // Split back into params and return
+          let generalised_params =
+            list.take(generalised_all, list.length(resolved_inferred))
+          let generalised_return =
+            list.last(generalised_all)
+            |> result.unwrap(types.NilType)
 
-      // Build updated function with inferred parameter types
-      let build_updated_param = fn(param: glance.FunctionParameter, index: Int) -> glance.FunctionParameter {
-        let found =
-          list.filter(resolved_inferred, fn(item) {
-            case item {
-              #(i, _) -> i == index
+          // Build resolved_inferred with generalised types
+          let resolved_inferred =
+            list.zip(resolved_inferred, generalised_params)
+            |> list.map(fn(pair) {
+              let #(#(index, _), gen_type) = pair
+              #(index, gen_type)
+            })
+
+          // Build updated function with inferred parameter types
+          let build_updated_param = fn(
+            param: glance.FunctionParameter,
+            index: Int,
+          ) -> glance.FunctionParameter {
+            let found =
+              list.filter(resolved_inferred, fn(item) {
+                case item {
+                  #(i, _) -> i == index
+                }
+              })
+            case found {
+              [#(_, inferred_type), ..] ->
+                glance.FunctionParameter(
+                  ..param,
+                  // Only write the annotation back when the type can be
+                  // expressed in the module's own imports; otherwise leave the
+                  // param unannotated and let the next pass re-infer it.
+                  type_: case types.can_render(environment, inferred_type) {
+                    True ->
+                      option.Some(types.to_glance(environment, inferred_type))
+                    False -> option.None
+                  },
+                )
+              [] -> param
             }
-          })
-        case found {
-          [#(_, inferred_type), ..] ->
-            glance.FunctionParameter(
-              ..param,
-              type_: option.Some(types.to_glance(environment, inferred_type)),
+          }
+
+          let updated_parameters =
+            list.index_map(function.parameters, fn(param, index) {
+              build_updated_param(param, index)
+            })
+
+          let updated_function =
+            glance.Function(
+              ..function,
+              parameters: updated_parameters,
+              // Only write the inferred return back when the type can be
+              // expressed in the module's own imports; otherwise leave the
+              // original annotation (or none) in place.
+              return: case types.can_render(environment, generalised_return) {
+                True ->
+                  option.Some(types.to_glance(environment, generalised_return))
+                False -> function.return
+              },
             )
-          [] -> param
+
+          use updated_environment <- result.try(
+            functions.update_function_signature(environment, updated_function),
+          )
+
+          Ok(types.EnvState(updated_environment, updated_function))
         }
       }
-
-      let updated_parameters =
-        list.index_map(function.parameters, fn(param, index) {
-          case param {
-            glance.FunctionParameter(type_: option.None, ..) ->
-              build_updated_param(param, index)
-            _ -> param
-          }
-        })
-
-      let updated_function =
-        glance.Function(
-          ..function,
-          parameters: updated_parameters,
-          return: option.Some(types.to_glance(environment, generalised_return)),
-        )
-
-      use updated_environment <- result.try(functions.update_function_signature(
-        environment,
-        updated_function,
-      ))
-
-      Ok(types.EnvState(updated_environment, updated_function))
     }
     option.Some(expected_type) -> {
       // Explicit return annotation: check that body type matches
-      use expected <- result.try(types.type_(
+      use #(store, expected) <- result.try(types.type_with_store(
         param_state.environment,
+        store,
         expected_type,
       ))
       case types.unify(store, param_state.environment, body_type, expected) {
         Error(_) -> {
-          echo "RETURN-CHECK body="
-            <> types.to_string(param_state.environment, body_type)
-            <> " expected="
-            <> types.to_string(param_state.environment, expected)
+          let #(store, resolved_body) = types.resolve(store, body_type)
+          let #(_store, resolved_expected) = types.resolve(store, expected)
           Error(error.InvalidReturnType(
             function.name,
-            types.to_string(param_state.environment, body_type),
-            types.to_string(param_state.environment, expected),
+            types.to_string(param_state.environment, resolved_body),
+            types.to_string(param_state.environment, resolved_expected),
           ))
         }
         Ok(_) -> Ok(types.EnvState(environment, function))
