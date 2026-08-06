@@ -547,30 +547,15 @@ fn typecheck_with_expected(
         _ -> {
           case types.extend_tuple(store, tuple_type, index) {
             Ok(state) -> Ok(state)
-            Error(_) -> {
-              let #(store, elements) = fresh_tuple_elements(store, index + 1)
-              case
-                types.unify(
-                  store,
-                  environment,
-                  tuple_type,
-                  types.TupleType(elements),
-                )
-              {
-                Ok(store) -> {
-                  let element =
-                    list.drop(elements, up_to: index)
-                    |> list.first
-                    |> result.unwrap(types.GenericTypeVariable("todo"))
-                  Ok(#(store, element))
-                }
-                Error(_) ->
-                  Error(error.UnexpectedType(
-                    types.to_string(environment, tuple_type),
-                    "a tuple",
-                  ))
-              }
-            }
+            // The container is not a known tuple. The official compiler refuses
+            // to index into a type it knows nothing about rather than
+            // synthesising an arbitrary tuple arity, since the element at
+            // `index` cannot be given a type without that knowledge.
+            Error(_) ->
+              Error(error.UnexpectedType(
+                types.to_string(environment, tuple_type),
+                "a tuple with an element at index " <> int.to_string(index),
+              ))
           }
         }
       }
@@ -642,12 +627,23 @@ fn typecheck_with_expected(
       use #(store, _) <- result.try(
         list.try_fold(segments, #(store, Nil), fn(state, segment) {
           let #(store, _) = state
-          let #(value_expr, _options) = segment
-          expression(environment, store, value_expr)
-          |> result.map(fn(state) {
-            let #(store, _type) = state
-            #(store, Nil)
-          })
+          let #(value_expr, options) = segment
+          // The segment value type must be compatible with the options'
+          // type family, sizes must be positive Ints, and conflicting options
+          // are rejected.
+          use #(store, _) <- result.try(bit_string_segment_value(
+            environment,
+            store,
+            value_expr,
+            options,
+          ))
+          // Sizes in options (and their expressions) must each typecheck.
+          use store <- result.try(check_bit_string_sizes(
+            environment,
+            store,
+            options,
+          ))
+          Ok(#(store, Nil))
         }),
       )
       Ok(#(store, types.BitArrayType))
@@ -656,18 +652,19 @@ fn typecheck_with_expected(
     glance.Case(_, subjects, clauses) ->
       case_expression(environment, store, subjects, clauses)
 
-    glance.Echo(_, _expression, message) -> {
-      case message {
+    glance.Echo(_, echoed, message) -> {
+      // `echo` has the type of the printed expression, and both the printed
+      // expression and the optional message must themselves typecheck.
+      use #(store, echoed_type) <- result.try(case echoed {
         option.None -> Ok(#(store, types.NilType))
-        option.Some(message_expr) -> {
-          use #(store, _) <- result.try(expression(
-            environment,
-            store,
-            message_expr,
-          ))
-          Ok(#(store, types.NilType))
-        }
-      }
+        option.Some(expr) -> expression(environment, store, expr)
+      })
+      use #(store, _) <- result.try(case message {
+        option.None -> Ok(#(store, types.NilType))
+        option.Some(message_expr) ->
+          expression(environment, store, message_expr)
+      })
+      Ok(#(store, echoed_type))
     }
 
     glance.FnCapture(_, label, function, arguments_before, arguments_after) -> {
@@ -743,20 +740,6 @@ fn typecheck_with_expected(
         }
         _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
       }
-    }
-  }
-}
-
-fn fresh_tuple_elements(
-  store: TypeStore,
-  count: Int,
-) -> #(TypeStore, List(Type)) {
-  case count {
-    0 -> #(store, [])
-    _ -> {
-      let #(store, rest) = fresh_tuple_elements(store, count - 1)
-      let #(store, var_) = types.fresh_var(store)
-      #(store, [var_, ..rest])
     }
   }
 }
@@ -850,9 +833,33 @@ fn list_expression(
   }
 }
 
+/// Check that a function literal does not declare two parameters with the
+/// same name.
+fn check_duplicate_fn_parameter_names(
+  arguments: List(glance.FnParameter),
+) -> Result(Nil, error.TypeCheckError) {
+  let counts =
+    list.fold(arguments, dict.new(), fn(acc, param) {
+      case param {
+        glance.FnParameter(glance.Named(name), _) -> {
+          let count = dict.get(acc, name) |> result.unwrap(0)
+          dict.insert(acc, name, count + 1)
+        }
+        glance.FnParameter(glance.Discarded(_), _) -> acc
+      }
+    })
+  case
+    dict.filter(counts, fn(_name, count) { count > 1 })
+    |> dict.keys
+    |> list.first
+  {
+    Ok(name) -> Error(error.DuplicateArgumentName(name))
+    Error(_) -> Ok(Nil)
+  }
+}
+
 /// Typecheck a function literal. Parameters without annotations are inferred
 /// from their use within the body.
-///
 /// When an `expected` type is supplied (a callable type from the call site),
 /// unannotated parameters are bound to the corresponding expected parameter
 /// types *before* the body is checked. This is what lets a callback's body
@@ -870,6 +877,9 @@ fn fn_literal(
   body: List(glance.Statement),
   expected: option.Option(Type),
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  // The parameter names of a function literal must be distinct.
+  use _store <- result.try(check_duplicate_fn_parameter_names(arguments))
+
   use #(store, param_types) <- result.try(
     list.try_fold(arguments, #(store, []), fn(state, param) {
       let #(store, reversed) = state
@@ -1069,90 +1079,121 @@ fn field_access_type(
 
       use definitions <- result.try(definitions_result)
 
-      // Constructor names differ from the type name for multi-constructor
-      // types, so find the constructor whose return type is this custom type
-      // and which carries the label.
-      let constructor_result =
-        dict.fold(
-          definitions,
+      // Collect every variant constructor of this type. A field may only be
+      // accessed when it exists on *every* variant, and at the *same* position
+      // in each: otherwise there is no single accessor that works for the whole
+      // type. When the value has been refined to a single variant (via pattern
+      // matching) only that constructor is considered.
+      let #(store, constructors) =
+        dict.fold(definitions, #(store, []), fn(state, _ctor_name, def) {
+          let #(store, acc) = state
+          case def {
+            types.CallableType(..) | types.GenericCallableType(..) -> {
+              let #(store, parameters, labels, return) =
+                types.instantiate_callable(store, def)
+              let is_target = case return {
+                types.CustomType(return_module, return_name, _, return_variant) -> {
+                  // Only genuine variant constructors (registered with a
+                  // variant index) expose record fields. Plain functions
+                  // that happen to return this custom type are not fields.
+                  let is_constructor = case return_variant {
+                    option.Some(_) -> True
+                    option.None -> False
+                  }
+                  let variant_matches = case inferred_variant {
+                    option.None -> True
+                    option.Some(expected_index) ->
+                      return_variant == option.Some(expected_index)
+                  }
+                  is_constructor
+                  && return_module == module
+                  && return_name == name
+                  && variant_matches
+                }
+                _ -> False
+              }
+              case is_target {
+                True -> #(store, [#(parameters, labels, return), ..acc])
+                False -> #(store, acc)
+              }
+            }
+            _ -> #(store, acc)
+          }
+        })
+
+      case constructors {
+        [] ->
           Error(error.InvalidFieldAccess(
             types.to_string(environment, container_type),
             label,
-          )),
-          fn(acc, _ctor_name, def) {
-            case acc {
-              Ok(_) -> acc
-              Error(_) -> {
-                case def {
-                  types.CallableType(..) | types.GenericCallableType(..) -> {
-                    let #(store, parameters, labels, return) =
-                      types.instantiate_callable(store, def)
-                    let is_target = case return {
-                      types.CustomType(
-                        return_module,
-                        return_name,
-                        _,
-                        return_variant,
-                      ) -> {
-                        // Only genuine variant constructors (registered with a
-                        // variant index) expose record fields. Plain functions
-                        // that happen to return this custom type are not fields.
-                        let is_constructor = case return_variant {
-                          option.Some(_) -> True
-                          option.None -> False
-                        }
-                        let variant_matches = case inferred_variant {
-                          option.None -> True
-                          option.Some(expected_index) ->
-                            return_variant == option.Some(expected_index)
-                        }
-                        is_constructor
-                        && return_module == module
-                        && return_name == name
-                        && variant_matches
-                      }
-                      _ -> False
-                    }
-                    case is_target && dict.has_key(labels, label) {
-                      True -> Ok(#(store, parameters, labels, return))
-                      False -> acc
-                    }
+          ))
+        [#(parameters, labels, return_type)] ->
+          variant_field_type(
+            environment,
+            store,
+            container_type,
+            parameters,
+            labels,
+            return_type,
+            label,
+          )
+        _ ->
+          // Multiple variants: the label must be present on every variant and
+          // at the same position, or no single accessor exists.
+          case
+            list.all(constructors, fn(entry) {
+              let #(_, entry_labels, _) = entry
+              dict.has_key(entry_labels, label)
+            })
+          {
+            False ->
+              Error(error.MissingField(
+                types.to_string(environment, container_type)
+                <> " does not have field "
+                <> label
+                <> " on every variant",
+              ))
+            True -> {
+              let positions =
+                list.map(constructors, fn(entry) {
+                  let #(_, entry_labels, _) = entry
+                  dict.get(entry_labels, label)
+                  |> result.unwrap(-1)
+                })
+              case
+                list.all(positions, fn(position) {
+                  position == list.first(positions) |> result.unwrap(-1)
+                })
+              {
+                False ->
+                  Error(error.MissingField(
+                    types.to_string(environment, container_type)
+                    <> " has field "
+                    <> label
+                    <> " at different positions on its variants",
+                  ))
+                True ->
+                  case list.first(constructors) {
+                    Ok(#(parameters, labels, return_type)) ->
+                      variant_field_type(
+                        environment,
+                        store,
+                        container_type,
+                        parameters,
+                        labels,
+                        return_type,
+                        label,
+                      )
+                    Error(_) ->
+                      Error(error.InvalidFieldAccess(
+                        types.to_string(environment, container_type),
+                        label,
+                      ))
                   }
-                  _ -> acc
-                }
               }
             }
-          },
-        )
-
-      use constructor_data <- result.try(constructor_result)
-      let #(store, parameters, labels, return_type) = constructor_data
-
-      // Unify the container with the constructor's return type so the field
-      // type is expressed in terms of the container's actual type parameters
-      // (e.g. `key.function` on `Decoder(key)` yields `key`, not a fresh var).
-      use store <- result.try(types.unify(
-        store,
-        environment,
-        container_type,
-        return_type,
-      ))
-
-      dict.get(labels, label)
-      |> result.map(fn(position) {
-        let expected_type =
-          list.drop(parameters, up_to: position)
-          |> list.first
-          |> result.unwrap(types.GenericTypeVariable("todo"))
-        let #(_, expected_type) = types.resolve(store, expected_type)
-        #(store, expected_type)
-      })
-      |> result.map_error(fn(_) {
-        error.InvalidFieldAccess(
-          types.to_string(environment, container_type),
-          label,
-        )
-      })
+          }
+      }
     }
     _ ->
       Error(error.InvalidFieldAccess(
@@ -1160,6 +1201,42 @@ fn field_access_type(
         label,
       ))
   }
+}
+
+fn variant_field_type(
+  environment: Environment,
+  store: TypeStore,
+  container_type: types.Type,
+  parameters: List(types.Type),
+  labels: dict.Dict(String, Int),
+  return_type: types.Type,
+  label: String,
+) -> error.TypeCheckResult(#(TypeStore, types.Type)) {
+  // Unify the container with the constructor's return type so the field type
+  // is expressed in terms of the container's actual type parameters (e.g.
+  // `key.function` on `Decoder(key)` yields `key`, not a fresh var).
+  use store <- result.try(types.unify(
+    store,
+    environment,
+    container_type,
+    return_type,
+  ))
+
+  dict.get(labels, label)
+  |> result.map(fn(position) {
+    let expected_type =
+      list.drop(parameters, up_to: position)
+      |> list.first
+      |> result.unwrap(types.GenericTypeVariable("todo"))
+    let #(_, expected_type) = types.resolve(store, expected_type)
+    #(store, expected_type)
+  })
+  |> result.map_error(fn(_) {
+    error.InvalidFieldAccess(
+      types.to_string(environment, container_type),
+      label,
+    )
+  })
 }
 
 /// Typecheck a record update expression (`Type(..record, field: value)`).
@@ -1189,6 +1266,26 @@ fn record_update(
   }
 
   use constructor_type <- result.try(constructor_lookup)
+
+  // Updating the same field more than once is an error.
+  use _ <- result.try(check_update_no_duplicate_fields(environment, fields))
+
+  // The updated value's variant must be statically known and match the
+  // constructor. Reject updates on an open/multi-variant value, on a
+  // cross-variant update, on a type-parameter that would change, and on a
+  // type parameter shared with another field being left un-updated.
+  use _ <- result.try(check_update_variant_safety(
+    environment,
+    store,
+    constructor,
+    record_type,
+  ))
+  use _ <- result.try(check_update_linked_field(
+    environment,
+    constructor_type,
+    constructor,
+    fields,
+  ))
 
   case constructor_type {
     types.CallableType(..) | types.GenericCallableType(..) -> {
@@ -1248,6 +1345,333 @@ fn record_update(
     }
     _ ->
       Error(error.NotCallable(types.to_string(environment, constructor_type)))
+  }
+}
+
+/// A record update is unsafe if updating one field forces a type parameter to
+/// change while another field that shares the same type parameter is left
+/// un-updated. This mirrors the official compiler's "if the same type variable
+/// is used for multiple fields, all those fields need to be updated".
+fn check_update_linked_field(
+  environment: Environment,
+  constructor_type: Type,
+  constructor: String,
+  fields: List(glance.RecordUpdateField(glance.Expression)),
+) -> error.TypeCheckResult(Environment) {
+  let params_and_labels = case constructor_type {
+    types.CallableType(parameters, labels, _) -> #(parameters, labels)
+    types.GenericCallableType(parameters, labels, _, _) -> #(parameters, labels)
+    _ -> #([], dict.new())
+  }
+  let #(parameters, labels) = params_and_labels
+
+  let updated_positions =
+    fields
+    |> list.filter_map(fn(field) { dict.get(labels, field.label) })
+
+  // Map each generic type variable name to its number of positions and how many
+  // of those are updated. If a variable appears at several positions and the
+  // update touches only some of them, the others' types would change implicitly.
+  let unsafe =
+    parameters
+    |> list.index_map(fn(param, index) {
+      let updated = list.contains(updated_positions, index)
+      case param {
+        types.GenericTypeVariable(_) -> option.Some(#(param, updated))
+        _ -> option.None
+      }
+    })
+    // positions shared by more than one field: same generic name different
+    // positions
+    |> list.fold(dict.new(), fn(acc, entry) {
+      case entry {
+        option.None -> acc
+        option.Some(#(param, updated)) ->
+          dict.upsert(acc, param, fn(existing) {
+            let #(total, updated_total) = option.unwrap(existing, #(0, 0))
+            let updated_total = case updated {
+              True -> updated_total + 1
+              False -> updated_total
+            }
+            #(total + 1, updated_total)
+          })
+      }
+    })
+    |> dict.values
+    |> list.any(fn(pair) {
+      let #(total, updated_total) = pair
+      total > 1 && updated_total > 0 && updated_total < total
+    })
+
+  case unsafe {
+    True -> Error(error.UnsafeRecordUpdate(constructor))
+    False -> Ok(environment)
+  }
+}
+
+/// Duplicate field labels within a single record update are an error.
+fn check_update_no_duplicate_fields(
+  environment: Environment,
+  fields: List(glance.RecordUpdateField(glance.Expression)),
+) -> error.TypeCheckResult(Environment) {
+  let seen = set.new()
+  let relevant = fields |> list.map(fn(field) { field.label })
+  case
+    list.fold(relevant, #(seen, option.None), fn(state, label) {
+      let #(seen, found) = state
+      case found {
+        option.Some(_) -> state
+        option.None ->
+          case set.contains(seen, label) {
+            True -> #(seen, option.Some(label))
+            False -> #(set.insert(seen, label), option.None)
+          }
+      }
+    })
+  {
+    #(_, option.Some(label)) -> Error(error.DuplicateArgument(label))
+    #(_, option.None) -> Ok(environment)
+  }
+}
+
+/// A `..` record update is only safe when the spread value is statically known
+/// to be the same single variant being constructed. This rejects (a) updating
+/// a value whose type pins no variant because the type has several, (b)
+/// updating a value known to be a different variant, and (c) updating a type
+/// parameter on a polymorphic value.
+fn check_update_variant_safety(
+  environment: Environment,
+  store: TypeStore,
+  constructor: String,
+  record_type: Type,
+) -> error.TypeCheckResult(TypeStore) {
+  let #(store, resolved) = types.resolve(store, record_type)
+  case resolved {
+    types.CustomType(module, name, _parameters, inferred_variant) -> {
+      // How many variants the custom type has, and which variant the update's
+      // constructor targets.
+      let variant_count = custom_type_variant_count(environment, module, name)
+      let constructor_variant =
+        pattern.constructor_variant_index(
+          environment,
+          option.Some(module),
+          constructor,
+        )
+
+      case variant_count {
+        // A single-variant type is always safe to update.
+        1 -> Ok(store)
+        _ ->
+          case inferred_variant {
+            // Variant not pinned: we don't know which one we have.
+            option.None -> Error(error.UnsafeRecordUpdate(constructor))
+            option.Some(index) ->
+              case constructor_variant == option.Some(index) {
+                True -> Ok(store)
+                False -> Error(error.UnsafeRecordUpdate(constructor))
+              }
+          }
+      }
+    }
+    _ -> Ok(store)
+  }
+}
+
+/// Count how many variants a custom type (module, name) has by scanning the
+/// environment's stored values for constructors whose return type is that
+/// custom type with a pinned variant index. Not needed for correctness of
+/// single-variant logic; bounded length of a useful list of variants is grand.
+fn custom_type_variant_count(
+  environment: Environment,
+  module_name: String,
+  name: String,
+) -> Int {
+  let source = case module_name {
+    "." -> environment.current_module
+    other -> other
+  }
+  let our = fn(type_) -> option.Option(Int) {
+    case type_ {
+      types.CustomType(m, n, _, variant) if m == source && n == name -> variant
+      _ -> option.None
+    }
+  }
+  environment.definitions
+  |> dict.values
+  |> list.fold(set.new(), fn(seen, type_) {
+    let candidate = case type_ {
+      types.CallableType(_, _, return_) -> our(return_)
+      types.GenericCallableType(_, _, return_, _) -> our(return_)
+      _ -> option.None
+    }
+    case candidate {
+      option.Some(index) -> set.insert(seen, index)
+      option.None -> seen
+    }
+  })
+  |> set.size
+}
+
+/// Typecheck a single bit-string segment. The segment value's type must match
+/// the type family chosen by the options, and the segment's size/unit options
+/// must be valid positive sizes.
+fn bit_string_segment_value(
+  environment: Environment,
+  store: TypeStore,
+  value_expr: glance.Expression,
+  options: List(glance.BitStringSegmentOption(glance.Expression)),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, value_type) <- result.try(expression(
+    environment,
+    store,
+    value_expr,
+  ))
+  let expected_family = bit_string_segment_type(options)
+  types.unify(store, environment, value_type, expected_family)
+  |> result.map(fn(store) { #(store, value_type) })
+  |> result.map_error(fn(_) {
+    error.InvalidType(
+      types.to_string(environment, value_type),
+      types.to_string(environment, expected_family),
+      "in bit string segment",
+    )
+  })
+}
+
+/// Validate every size/unit option in a segment: size expressions must
+/// typecheck to Int, literal sizes and units must be positive, and options
+/// that conflict (e.g. two different sizes or units) are rejected.
+fn check_bit_string_sizes(
+  environment: Environment,
+  store: TypeStore,
+  options: List(glance.BitStringSegmentOption(glance.Expression)),
+) -> error.TypeCheckResult(TypeStore) {
+  use store <- result.try(check_option_conflicts(environment, store, options))
+  check_literal_sizes(environment, store, options)
+}
+
+/// Reject segments that declare mutually exclusive options: more than one
+/// size/unit, or a signedness/endianness clash. Returns the environment on
+/// success.
+fn check_option_conflicts(
+  _environment: Environment,
+  store: TypeStore,
+  options: List(glance.BitStringSegmentOption(glance.Expression)),
+) -> error.TypeCheckResult(TypeStore) {
+  let size_count =
+    list.count(options, fn(o) {
+      case o {
+        glance.SizeOption(_) | glance.SizeValueOption(_) -> True
+        _ -> False
+      }
+    })
+  let unit_count =
+    list.count(options, fn(o) {
+      case o {
+        glance.UnitOption(_) -> True
+        _ -> False
+      }
+    })
+  let conflict = size_count > 1 || unit_count > 1
+
+  case conflict {
+    True -> Error(error.InvalidBitStringSegment("size"))
+    False -> Ok(store)
+  }
+}
+
+/// Static literal sizes and units must be positive; size expressions must
+/// typecheck to Int.
+fn check_literal_sizes(
+  environment: Environment,
+  store: TypeStore,
+  options: List(glance.BitStringSegmentOption(glance.Expression)),
+) -> error.TypeCheckResult(TypeStore) {
+  list.try_fold(options, store, fn(store, option) {
+    case option {
+      glance.SizeOption(size) if size <= 0 ->
+        Error(error.InvalidBitStringSegment("size"))
+      glance.UnitOption(unit) if unit <= 0 ->
+        Error(error.InvalidBitStringSegment("unit"))
+      glance.SizeValueOption(size_expr) ->
+        check_size_expression(environment, store, size_expr)
+      _ -> Ok(store)
+    }
+  })
+}
+
+/// A size expression must typecheck and have type Int.
+fn check_size_expression(
+  environment: Environment,
+  store: TypeStore,
+  size_expr: glance.Expression,
+) -> error.TypeCheckResult(TypeStore) {
+  use #(store, size_type) <- result.try(expression(
+    environment,
+    store,
+    size_expr,
+  ))
+  types.unify(store, environment, size_type, types.IntType)
+  |> result.map(fn(store) { store })
+  |> result.map_error(fn(_) { error.InvalidBitStringSegment("size") })
+}
+
+fn matches_utf(
+  option: glance.BitStringSegmentOption(glance.Expression),
+) -> Bool {
+  case option {
+    glance.Utf8Option | glance.Utf16Option | glance.Utf32Option -> True
+    _ -> False
+  }
+}
+
+fn matches_codepoint(
+  option: glance.BitStringSegmentOption(glance.Expression),
+) -> Bool {
+  case option {
+    glance.Utf8CodepointOption
+    | glance.Utf16CodepointOption
+    | glance.Utf32CodepointOption -> True
+    _ -> False
+  }
+}
+
+fn matches_bytes(
+  option: glance.BitStringSegmentOption(glance.Expression),
+) -> Bool {
+  case option {
+    glance.BytesOption | glance.BitsOption -> True
+    _ -> False
+  }
+}
+
+fn matches_float(
+  option: glance.BitStringSegmentOption(glance.Expression),
+) -> Bool {
+  case option {
+    glance.FloatOption -> True
+    _ -> False
+  }
+}
+
+fn bit_string_segment_type(
+  options: List(glance.BitStringSegmentOption(glance.Expression)),
+) -> types.Type {
+  case list.any(options, fn(o) { matches_utf(o) }) {
+    True -> types.StringType
+    False ->
+      case list.any(options, fn(o) { matches_codepoint(o) }) {
+        True -> types.CustomType("prelude", "UtfCodepoint", [], option.None)
+        False ->
+          case list.any(options, fn(o) { matches_bytes(o) }) {
+            True -> types.BitArrayType
+            False ->
+              case list.any(options, fn(o) { matches_float(o) }) {
+                True -> types.FloatType
+                False -> types.IntType
+              }
+          }
+      }
   }
 }
 
@@ -1686,6 +2110,18 @@ fn align_argument_fields(
   position_labels: dict.Dict(String, Int),
   param_count: Int,
 ) -> error.TypeCheckResult(List(glance.Field(glance.Expression))) {
+  // A positional argument may not follow a labelled one in source order.
+  case positional_argument_after_labelled(fields) {
+    True -> Error(error.PositionalArgumentAfterLabelled)
+    False -> align_argument_fields_(fields, position_labels, param_count)
+  }
+}
+
+fn align_argument_fields_(
+  fields: List(glance.Field(glance.Expression)),
+  position_labels: dict.Dict(String, Int),
+  param_count: Int,
+) -> error.TypeCheckResult(List(glance.Field(glance.Expression))) {
   let #(positional, labelled) =
     list.fold(fields, #([], dict.new()), fn(state, field) {
       let #(positional, labelled) = state
@@ -1746,6 +2182,25 @@ fn align_argument_fields(
       },
     )
   Ok(list.reverse(acc))
+}
+
+/// Whether a list of argument fields contains a positional argument that
+/// appears after a labelled one, which the language forbids.
+fn positional_argument_after_labelled(
+  fields: List(glance.Field(glance.Expression)),
+) -> Bool {
+  let #(_seen_labelled, found) =
+    list.fold(fields, #(False, False), fn(state, field) {
+      let #(seen_labelled, found) = state
+      case field {
+        glance.LabelledField(_, _, _) | glance.ShorthandField(_, _) -> #(
+          True,
+          found,
+        )
+        glance.UnlabelledField(_) -> #(seen_labelled, found || seen_labelled)
+      }
+    })
+  found
 }
 
 type CaptureState {
@@ -2268,6 +2723,16 @@ fn pipe(
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
   use #(store, left_type) <- result.try(expression(environment, store, left))
   case right {
+    // `[1, 2, 3] |> echo` desugars to an `echo` with no value expression;
+    // it acts as the identity function, returning the piped value.
+    glance.Echo(_, option.None, message) -> {
+      use #(store, _) <- result.try(case message {
+        option.None -> Ok(#(store, left_type))
+        option.Some(message_expr) ->
+          expression(environment, store, message_expr)
+      })
+      Ok(#(store, left_type))
+    }
     glance.Call(_, target, arguments) -> {
       use #(store, glimpse_target) <- result.try(expression(
         environment,

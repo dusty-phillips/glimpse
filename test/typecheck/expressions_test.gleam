@@ -65,7 +65,22 @@ pub fn tuple_index_out_of_range_test() {
 
 pub fn tuple_index_on_non_tuple_test() {
   assert helpers.error_function_typecheck("fn foo(x: Int) -> Int { x.0 }")
-    == error.UnexpectedType("Int", "a tuple")
+    == error.UnexpectedType("Int", "a tuple with an element at index 0")
+}
+
+pub fn tuple_index_on_unknown_type_test() {
+  let got =
+    helpers.error_function_typecheck(
+      "fn foo() {
+    let z = todo
+    fn(x) { x.2 }(z)
+  }",
+    )
+  let message = case got {
+    error.UnexpectedType(_, message) -> message
+    _ -> "unexpected error"
+  }
+  assert "a tuple with an element at index 2" == message
 }
 
 pub fn list_infer_return_test() {

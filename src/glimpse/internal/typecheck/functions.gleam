@@ -157,22 +157,50 @@ fn fold_parameter_into_callable_inner(
       generic_var_counter,
     )) ->
       case param {
-        glance.FunctionParameter(type_: option.None, label: label, ..) -> {
-          let generic_name = "t" <> int.to_string(generic_var_counter)
-          let labels = case label {
-            option.None -> labels
-            option.Some(label) ->
-              dict.insert(labels, label, reversed_by_position |> list.length)
+        glance.FunctionParameter(type_: option.None, label: option.None, ..) ->
+          case dict.size(labels) == 0 {
+            False -> list.Stop(Error(error.UnlabelledArgumentAfterLabelled))
+            True ->
+              list.Continue(
+                Ok(CallableState(
+                  environment,
+                  [
+                    types.GenericTypeVariable(
+                      "t" <> int.to_string(generic_var_counter),
+                    ),
+                    ..reversed_by_position
+                  ],
+                  labels,
+                  generic_var_counter + 1,
+                )),
+              )
           }
-          list.Continue(
-            Ok(CallableState(
-              environment,
-              [types.GenericTypeVariable(generic_name), ..reversed_by_position],
-              labels,
-              generic_var_counter + 1,
-            )),
-          )
-        }
+        glance.FunctionParameter(
+          type_: option.None,
+          label: option.Some(label),
+          ..,
+        ) ->
+          case dict.has_key(labels, label) {
+            True -> list.Stop(Error(error.DuplicateArgumentName(label)))
+            False ->
+              list.Continue(
+                Ok(CallableState(
+                  environment,
+                  [
+                    types.GenericTypeVariable(
+                      "t" <> int.to_string(generic_var_counter),
+                    ),
+                    ..reversed_by_position
+                  ],
+                  dict.insert(
+                    labels,
+                    label,
+                    reversed_by_position |> list.length,
+                  ),
+                  generic_var_counter + 1,
+                )),
+              )
+          }
 
         glance.FunctionParameter(
           label: label,
@@ -183,25 +211,35 @@ fn fold_parameter_into_callable_inner(
             types.type_with_holes(environment, generic_var_counter, glance_type)
           {
             Error(error) -> list.Stop(Error(error))
-            Ok(#(next_hole, glimpse_type)) -> {
-              let labels = case label {
-                option.None -> labels
-                option.Some(label) ->
-                  dict.insert(
-                    labels,
-                    label,
-                    reversed_by_position |> list.length,
+            Ok(#(next_hole, glimpse_type)) ->
+              case label {
+                option.None ->
+                  list.Continue(
+                    Ok(CallableState(
+                      environment,
+                      [glimpse_type, ..reversed_by_position],
+                      labels,
+                      next_hole,
+                    )),
                   )
+                option.Some(label) ->
+                  case dict.has_key(labels, label) {
+                    True -> list.Stop(Error(error.DuplicateArgumentName(label)))
+                    False ->
+                      list.Continue(
+                        Ok(CallableState(
+                          environment,
+                          [glimpse_type, ..reversed_by_position],
+                          dict.insert(
+                            labels,
+                            label,
+                            reversed_by_position |> list.length,
+                          ),
+                          next_hole,
+                        )),
+                      )
+                  }
               }
-              list.Continue(
-                Ok(CallableState(
-                  environment,
-                  [glimpse_type, ..reversed_by_position],
-                  labels,
-                  next_hole,
-                )),
-              )
-            }
           }
       }
   }

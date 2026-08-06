@@ -1,6 +1,7 @@
 import glance
 import gleam/bit_array
 import gleam/dict
+import gleam/int
 import gleam/list
 import gleam/option.{type Option}
 import gleam/result
@@ -142,7 +143,7 @@ pub fn typecheck_pattern(
       }
     }
 
-    glance.PatternVariant(_, module, constructor, arguments, _with_spread) -> {
+    glance.PatternVariant(_, module, constructor, arguments, with_spread) -> {
       use callable <- result.try(lookup_constructor(
         environment,
         module,
@@ -158,23 +159,32 @@ pub fn typecheck_pattern(
             expected_type,
             constructor_return,
           ))
-          // Resolve the constructor parameters but do not generalise them: any
-          // still-unbound inference variable must remain free so the argument
-          // patterns can constrain it (e.g. `Error(Nil)` binding the payload to
-          // `Nil`). Polymorphism of bound variables is handled by `bind_variable`
-          // at the binding boundary.
-          let resolved_parameters =
-            list.map(parameters, fn(parameter) {
-              let #(_store, resolved) = types.resolve(store, parameter)
-              resolved
-            })
-          check_variant_arguments(
-            environment,
-            store,
-            arguments,
-            resolved_parameters,
-            position_labels,
-          )
+          // A `..` spread is only needed when it covers fields the pattern does
+          // not name. Listing every field *and* spreading is an error.
+          case
+            with_spread && list.length(arguments) == list.length(parameters)
+          {
+            True -> Error(error.UnnecessarySpread)
+            False -> {
+              // Resolve the constructor parameters but do not generalise them:
+              // any still-unbound inference variable must remain free so the
+              // argument patterns can constrain it (e.g. `Error(Nil)` binding
+              // the payload to `Nil`). Polymorphism of bound variables is
+              // handled by `bind_variable` at the binding boundary.
+              let resolved_parameters =
+                list.map(parameters, fn(parameter) {
+                  let #(_store, resolved) = types.resolve(store, parameter)
+                  resolved
+                })
+              check_variant_arguments(
+                environment,
+                store,
+                arguments,
+                resolved_parameters,
+                position_labels,
+              )
+            }
+          }
         }
         // Zero-field constructors (e.g. `True`, `Nil`, `None`) resolve directly
         // to their type rather than a callable.
@@ -289,6 +299,10 @@ fn check_segments(
   list.try_fold(segments, #(store, environment), fn(state, segment) {
     let #(store, env) = state
     let #(pattern, options) = segment
+    // Literal sizes and units must be positive.
+    use store <- result.try(check_pattern_size_options(store, options))
+    // A bit-string segment cannot assign a variable twice (`<<a as b>>`).
+    use store <- result.try(check_segment_assignment(store, pattern))
     case pattern {
       // A string literal in a bit string matches its UTF-8 bytes, one Int
       // segment per byte (e.g. `<<"+", rest:bytes>>` matches byte 0x2B).
@@ -542,6 +556,48 @@ fn bind_assignment_name(
     option.Some(glance.Named(bound_name)) ->
       bind_variable(environment, store, bound_name, types.StringType)
     option.Some(glance.Discarded(_)) -> Ok(#(store, environment))
+  }
+}
+
+/// Pattern bit-string segment options must use positive literal sizes and
+/// units. The `size(...)` form in a pattern is `SizeValueOption` carrying the
+/// `BitArraySize`; a literal negative size is caught here.
+/// A segment like `<<a as b>>` binds the name twice and is an error.
+fn check_segment_assignment(
+  store: types.TypeStore,
+  pattern: glance.Pattern,
+) -> error.TypeCheckResult(types.TypeStore) {
+  case pattern {
+    glance.PatternAssignment(_, _inner, _name) ->
+      Error(error.DoubleVariableAssignment)
+    _ -> Ok(store)
+  }
+}
+
+fn check_pattern_size_options(
+  store: types.TypeStore,
+  options: List(glance.BitStringSegmentOption(glance.BitArraySize)),
+) -> error.TypeCheckResult(types.TypeStore) {
+  list.try_fold(options, store, fn(store, option) {
+    case option {
+      glance.SizeValueOption(size) -> check_bit_array_size_positive(store, size)
+      _ -> Ok(store)
+    }
+  })
+}
+
+fn check_bit_array_size_positive(
+  store: types.TypeStore,
+  size: glance.BitArraySize,
+) -> error.TypeCheckResult(types.TypeStore) {
+  case size {
+    glance.BitArraySizeInt(_, value) ->
+      case int.parse(value) {
+        Ok(n) if n <= 0 -> Error(error.InvalidBitStringSegment("size"))
+        Ok(_) -> Ok(store)
+        Error(_) -> Ok(store)
+      }
+    _ -> Ok(store)
   }
 }
 

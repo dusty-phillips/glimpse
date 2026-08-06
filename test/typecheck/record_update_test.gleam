@@ -1,0 +1,58 @@
+import glimpse/error
+import typecheck/helpers
+
+pub fn updating_a_multi_variant_value_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Wibble {
+  Wibble(wibble: Int, wubble: Bool)
+  Wobble(wobble: Int, wubble: Bool)
+}
+pub fn wibble(value: Wibble) { Wibble(..value, wubble: True) }",
+    )
+    == error.UnsafeRecordUpdate("Wibble")
+}
+
+pub fn updating_a_single_variant_value_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Wibble { Wibble(wibble: Int, wubble: Bool) }
+pub fn wibble(value: Wibble) { Wibble(..value, wubble: True) }",
+  )
+}
+
+pub fn duplicate_field_in_update_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Wibble { Wibble(thing: Int, other: Int) }
+pub fn main() {
+  let wibble = Wibble(1, 2)
+  let wobble = Wibble(..wibble, thing: 1, thing: 2)
+  wobble
+}",
+    )
+    == error.DuplicateArgument("thing")
+}
+
+pub fn cross_variant_update_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Wibble {
+  A(a: Int, b: Int)
+  B(a: Int, b: Int)
+}
+pub fn b_to_a(value: Wibble) {
+  case value {
+    A(..) -> value
+    B(..) as b -> A(..b, a: 3)
+  }
+}",
+    )
+    == error.UnsafeRecordUpdate("A")
+}
+
+pub fn updating_a_type_parameter_across_variants_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Wibble(a) { Wibble(a: a, b: a) }
+pub fn b_to_a(value: Wibble(a)) -> Wibble(Int) {
+  Wibble(..value, a: 5)
+}",
+    )
+    == error.UnsafeRecordUpdate("Wibble")
+}

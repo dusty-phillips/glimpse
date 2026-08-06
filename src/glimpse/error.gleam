@@ -53,6 +53,39 @@ pub type TypeCheckError {
   /// Raised when a `case` (or `let`/`use`) pattern does not cover every
   /// possible shape of its subject type.
   InexhaustivePattern(description: String)
+  /// Raised when a bit-array segment mixes options from different families
+  /// (e.g. conflicting sizes, units, or signedness/endianness duplicates).
+  InvalidBitStringSegment(mismatch: String)
+  /// Raised when a `..` record update is unsafe because the spread value's
+  /// variant is open or its type parameters would change.
+  UnsafeRecordUpdate(name: String)
+  /// Raised when a record update lists a field more than once.
+  DuplicateArgument(field: String)
+  /// Raised when a field access is attempted on a label that is not present on
+  /// every variant (or is at a different position across variants).
+  MissingField(message: String)
+  /// Raised when an anonymous function declares two parameters with the same
+  /// name, or a signature declares the same label twice.
+  DuplicateArgumentName(name: String)
+  /// Raised when a signature places an unlabelled parameter after a labelled
+  /// one.
+  UnlabelledArgumentAfterLabelled
+  /// Raised when a function call passes a positional argument after a labelled
+  /// one.
+  PositionalArgumentAfterLabelled
+  /// Raised when a custom type defines two constructors with the same name.
+  DuplicateConstructor(name: String)
+  /// Raised when a private type (or value) appears in a public interface.
+  PrivateTypeLeak(name: String)
+  /// Raised when `todo` is used in a module constant value.
+  TodoInConstant
+  /// Raised when a type alias declares a type parameter it never uses.
+  UnusedTypeParameter(name: String)
+  /// Raised when a constructor pattern lists every field yet also uses `..`.
+  UnnecessarySpread
+  /// Raised when a bit-string pattern assigns a variable twice, e.g.
+  /// `<<a as b>>`.
+  DoubleVariableAssignment
 }
 
 pub type TypeCheckResult(a) =

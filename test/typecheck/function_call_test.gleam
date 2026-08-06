@@ -222,15 +222,25 @@ pub fn shorthand_field_variant_call_test() {
 }
 
 pub fn shorthand_field_mixed_with_regular_test() {
-  let #(module, _env) =
-    helpers.ok_module_typecheck(
+  let actual =
+    helpers.error_module_typecheck(
       "fn greet(first f: String, last l: String) -> String { \"Hello, \" <> f <> \" \" <> l }
     fn bar() -> String { 
       let first = \"John\"
       greet(first:, \"Doe\")
     } ",
     )
+  assert actual == error.PositionalArgumentAfterLabelled
+}
 
+pub fn labelled_fields_ordered_after_positional_test() {
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn greet(first: String, last l: String) -> String { l }
+    fn bar() -> String { 
+      greet(\"John\", last: \"Doe\")
+    } ",
+    )
   assert list.length(module.module.functions) == 2
 }
 

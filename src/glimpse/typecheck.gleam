@@ -1,6 +1,5 @@
 import glance
 import gleam/dict
-import gleam/io
 import gleam/list
 import gleam/option
 import gleam/result
@@ -134,6 +133,13 @@ pub fn module(
     }),
   )
 
+  use env_for_signatures <- result.try(
+    glimpse_module.module.functions
+    |> list.map(fn(definition) { definition.definition })
+    |> list.try_fold(environment, check_public_signature_leaks),
+  )
+  let environment = env_for_signatures
+
   let function_signature_result =
     glimpse_module.module.functions
     |> list.map(fn(definition) { definition.definition })
@@ -190,6 +196,90 @@ pub fn module(
 
 fn is_external(definition: glance.Definition(glance.Function)) -> Bool {
   list.any(definition.attributes, fn(attribute) { attribute.name == "external" })
+}
+
+/// A public function may not reference a private custom type in its signature.
+fn check_public_signature_leaks(
+  environment: Environment,
+  function: glance.Function,
+) -> Result(Environment, error.TypeCheckError) {
+  case function.publicity == glance.Public {
+    False -> Ok(environment)
+    True ->
+      case
+        find_private_type_in_types(environment, [
+          function.return,
+          ..find_params_types(function.parameters)
+        ])
+      {
+        Ok(leak) -> Error(error.PrivateTypeLeak(leak))
+        Error(_) -> Ok(environment)
+      }
+  }
+}
+
+fn find_params_types(
+  parameters: List(glance.FunctionParameter),
+) -> List(option.Option(glance.Type)) {
+  list.map(parameters, fn(param) { param.type_ })
+}
+
+/// Checks a list of optional types and returns Ok(name) if any references a
+/// private custom type of the current module.
+fn find_private_type_in_types(
+  environment: Environment,
+  given_types: List(option.Option(glance.Type)),
+) -> Result(String, Nil) {
+  list.fold(given_types, Error(Nil), fn(prev, t) {
+    case prev {
+      Ok(_) -> prev
+      Error(_) ->
+        case t {
+          option.None -> Error(Nil)
+          option.Some(t) -> find_private_in_type(environment, t)
+        }
+    }
+  })
+}
+
+/// Depth-first search for a private custom type reference within a single type
+/// annotation.
+fn find_private_in_type(
+  environment: Environment,
+  type_: glance.Type,
+) -> Result(String, Nil) {
+  case type_ {
+    glance.NamedType(_, name, module, parameters) ->
+      case
+        module == option.None
+        && dict.has_key(environment.custom_types, name)
+        && !set.contains(environment.public_custom_types, name)
+      {
+        True -> Ok(name)
+        False -> find_private_in_types(environment, parameters)
+      }
+    glance.TupleType(_, elements) ->
+      find_private_in_types(environment, elements)
+    glance.FunctionType(_, parameters, ret) ->
+      case find_private_in_type(environment, ret) {
+        Ok(found) -> Ok(found)
+        Error(_) -> find_private_in_types(environment, parameters)
+      }
+    glance.VariableType(_, _) | glance.HoleType(_, _) -> Error(Nil)
+  }
+}
+
+/// Like [find_private_type_in_types] but for non-optional types.
+fn find_private_in_types(
+  environment: Environment,
+  types: List(glance.Type),
+) -> Result(String, Nil) {
+  list.fold(types, Error(Nil), fn(prev, t) {
+    case prev {
+      Ok(_) -> prev
+      Error(_) -> find_private_in_type(environment, t)
+    }
+  })
 }
 
 fn typecheck_function_bodies(
@@ -307,27 +397,58 @@ pub fn type_alias(
   environment: Environment,
   alias: glance.TypeAlias,
 ) -> EnvironmentResult {
-  case dict.has_key(environment.custom_types, alias.name) {
-    True -> Error(error.DuplicateCustomType(alias.name))
-    False -> {
-      use resolved <- result.try(types.type_(environment, alias.aliased))
-      let alias_type = types.TypeAlias(alias.parameters, resolved)
-      let environment =
-        types.Environment(
-          ..environment,
-          custom_types: dict.insert(
-            environment.custom_types,
-            alias.name,
-            alias_type,
-          ),
-        )
-      let environment = case alias.publicity {
-        glance.Public ->
-          types.publish_custom_type_in_env(environment, alias.name)
-        glance.Private -> environment
+  // Every declared type parameter must be used in the aliased type.
+  case
+    alias.parameters
+    |> list.find(fn(parameter) {
+      !type_uses_type_variable(alias.aliased, parameter)
+    })
+  {
+    Ok(unused) -> Error(error.UnusedTypeParameter(unused))
+    Error(_) ->
+      case dict.has_key(environment.custom_types, alias.name) {
+        True -> Error(error.DuplicateCustomType(alias.name))
+        False -> {
+          use resolved <- result.try(types.type_(environment, alias.aliased))
+          let alias_type = types.TypeAlias(alias.parameters, resolved)
+          let environment =
+            types.Environment(
+              ..environment,
+              custom_types: dict.insert(
+                environment.custom_types,
+                alias.name,
+                alias_type,
+              ),
+            )
+          type_alias_publish(environment, alias)
+        }
       }
-      Ok(environment)
-    }
+  }
+}
+
+fn type_alias_publish(
+  environment: Environment,
+  alias: glance.TypeAlias,
+) -> EnvironmentResult {
+  let environment = case alias.publicity {
+    glance.Public -> types.publish_custom_type_in_env(environment, alias.name)
+    glance.Private -> environment
+  }
+  Ok(environment)
+}
+
+/// Whether a glance type annotation mentions a given type variable name.
+fn type_uses_type_variable(type_: glance.Type, name: String) -> Bool {
+  case type_ {
+    glance.NamedType(_, _, _, parameters) ->
+      list.any(parameters, type_uses_type_variable(_, name))
+    glance.TupleType(_, elements) ->
+      list.any(elements, fn(t) { type_uses_type_variable(t, name) })
+    glance.FunctionType(_, parameters, return_) ->
+      list.any(parameters, fn(t) { type_uses_type_variable(t, name) })
+      || type_uses_type_variable(return_, name)
+    glance.VariableType(_, variable) -> variable == name
+    glance.HoleType(_, _) -> False
   }
 }
 
@@ -364,6 +485,37 @@ pub fn custom_type_constructors(
   environment: Environment,
   custom_type: glance.CustomType,
 ) -> EnvironmentResult {
+  // Two variants may not share a constructor name.
+  let names = custom_type.variants |> list.map(fn(variant) { variant.name })
+  case list_has_duplicate(names) {
+    Ok(name) -> Error(error.DuplicateConstructor(name))
+    Error(_) -> custom_type_constructors_(environment, custom_type)
+  }
+}
+
+fn list_has_duplicate(names: List(String)) -> Result(String, Nil) {
+  let #(_seen, found) =
+    list.fold(names, #(set.new(), option.None), fn(state, name) {
+      let #(seen, found) = state
+      case found {
+        option.Some(_) -> state
+        option.None ->
+          case set.contains(seen, name) {
+            True -> #(seen, option.Some(name))
+            False -> #(set.insert(seen, name), option.None)
+          }
+      }
+    })
+  case found {
+    option.Some(name) -> Ok(name)
+    option.None -> Error(Nil)
+  }
+}
+
+fn custom_type_constructors_(
+  environment: Environment,
+  custom_type: glance.CustomType,
+) -> EnvironmentResult {
   let environment_result =
     list.index_fold(
       custom_type.variants,
@@ -396,6 +548,17 @@ pub fn custom_type_constructors(
 
 /// Typecheck a module constant's value and register it in the environment.
 pub fn constant(
+  environment: Environment,
+  constant: glance.Constant,
+) -> types.EnvStateResult(glance.Constant) {
+  // `todo` and `panic` expressions are not allowed in constants.
+  case constant_has_todo(constant.value) {
+    True -> Error(error.TodoInConstant)
+    False -> constant_(environment, constant)
+  }
+}
+
+fn constant_(
   environment: Environment,
   constant: glance.Constant,
 ) -> types.EnvStateResult(glance.Constant) {
@@ -435,6 +598,97 @@ pub fn constant(
   Ok(types.EnvState(environment, constant))
 }
 
+/// Whether an expression (recursively) contains a `todo`. Constants may not
+/// reference `todo`.
+fn constant_has_todo(expr: glance.Expression) -> Bool {
+  case expr {
+    glance.Todo(_, _) -> True
+    glance.Int(_, _)
+    | glance.Float(_, _)
+    | glance.String(_, _)
+    | glance.Variable(_, _)
+    | glance.Panic(_, _) -> False
+    glance.NegateInt(_, inner) -> constant_has_todo(inner)
+    glance.NegateBool(_, inner) -> constant_has_todo(inner)
+    glance.Block(_, statements) ->
+      list.any(statements, fn(statement) { statement_has_todo(statement) })
+    glance.Tuple(_, elements) -> list.any(elements, constant_has_todo)
+    glance.List(_, elements, rest) ->
+      list.any(elements, constant_has_todo)
+      || case rest {
+        option.Some(r) -> constant_has_todo(r)
+        option.None -> False
+      }
+    glance.Fn(_, _, _, body) ->
+      list.any(body, fn(statement) { statement_has_todo(statement) })
+    glance.RecordUpdate(_, _, _, record, fields) ->
+      constant_has_todo(record)
+      || list.any(fields, fn(field) {
+        case field {
+          glance.RecordUpdateField(_, option.Some(item)) ->
+            constant_has_todo(item)
+          glance.RecordUpdateField(_, option.None) -> False
+        }
+      })
+    glance.FieldAccess(_, container, _) -> constant_has_todo(container)
+    glance.Call(_, function, arguments) ->
+      constant_has_todo(function) || list.any(arguments, field_has_todo)
+    glance.TupleIndex(_, tuple, _) -> constant_has_todo(tuple)
+    glance.FnCapture(_, _, function, before, after) ->
+      constant_has_todo(function)
+      || list.any(before, field_has_todo)
+      || list.any(after, field_has_todo)
+    glance.BitString(_, segments) ->
+      list.any(segments, fn(pair) {
+        let #(value, options) = pair
+        constant_has_todo(value)
+        || list.any(options, fn(option) {
+          case option {
+            glance.SizeValueOption(inner) -> constant_has_todo(inner)
+            _ -> False
+          }
+        })
+      })
+    glance.Case(_, subjects, clauses) ->
+      list.any(subjects, constant_has_todo)
+      || list.any(clauses, fn(clause) {
+        constant_has_todo(clause.body)
+        || case clause.guard {
+          option.Some(guard) -> constant_has_todo(guard)
+          option.None -> False
+        }
+      })
+    glance.BinaryOperator(_, _, left, right) ->
+      constant_has_todo(left) || constant_has_todo(right)
+    glance.Echo(_, echoed, message) ->
+      case echoed {
+        option.Some(e) -> constant_has_todo(e)
+        option.None ->
+          case message {
+            option.Some(m) -> constant_has_todo(m)
+            option.None -> False
+          }
+      }
+  }
+}
+
+fn statement_has_todo(statement: glance.Statement) -> Bool {
+  case statement {
+    glance.Use(_, _, function) -> constant_has_todo(function)
+    glance.Assignment(_, _, _, _, value) -> constant_has_todo(value)
+    glance.Assert(_, expression_, _) -> constant_has_todo(expression_)
+    glance.Expression(expression_) -> constant_has_todo(expression_)
+  }
+}
+
+fn field_has_todo(field: glance.Field(glance.Expression)) -> Bool {
+  case field {
+    glance.UnlabelledField(expr) -> constant_has_todo(expr)
+    glance.LabelledField(_, _, expr) -> constant_has_todo(expr)
+    glance.ShorthandField(_, _) -> False
+  }
+}
+
 /// Takes a glance function as input and returns the same function, but
 /// with the inferred return type if the original function did not have
 /// a return type. Returns an error if anything in the function doesn't
@@ -445,13 +699,6 @@ pub fn function(
   function: glance.Function,
 ) -> types.EnvStateResult(glance.Function) {
   let store = types.new_type_store()
-
-  io.println(
-    "    typechecking function: "
-    <> environment.current_module
-    <> ":"
-    <> function.name,
-  )
 
   // Fold parameters into environment with fresh vars for unannotated private params
   use param_state <- result.try(
