@@ -1,6 +1,7 @@
 import glance
 import gleam/bit_array
 import gleam/dict
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{type Option}
@@ -14,6 +15,20 @@ import glimpse/internal/typecheck/types
 /// The type store is threaded so that unification during variant matching can
 /// constrain inference variables created elsewhere (e.g. unannotated function
 /// parameters).
+/// Whether a float literal's text denotes a representable value. The official
+/// compiler rejects literals outside the IEEE double range, e.g. `1.8e308`.
+pub fn float_is_in_range(value: String) -> Bool {
+  let normalized = string.replace(value, "_", "")
+  let normalized = case string.ends_with(normalized, ".") {
+    True -> normalized <> "0"
+    False -> normalized
+  }
+  case float.parse(normalized) {
+    Ok(_) -> True
+    Error(_) -> False
+  }
+}
+
 pub fn typecheck_pattern(
   environment: types.Environment,
   store: types.TypeStore,
@@ -38,16 +53,20 @@ pub fn typecheck_pattern(
       })
     }
 
-    glance.PatternFloat(_, _) -> {
-      types.unify(store, environment, expected_type, types.FloatType)
-      |> result.map(fn(store) { #(store, environment) })
-      |> result.map_error(fn(_) {
-        error.PatternMismatch(
-          "float pattern",
-          "Float",
-          types.to_string(environment, expected_type),
-        )
-      })
+    glance.PatternFloat(_, value) -> {
+      case float_is_in_range(value) {
+        False -> Error(error.FloatOutOfRange(value))
+        True ->
+          types.unify(store, environment, expected_type, types.FloatType)
+          |> result.map(fn(store) { #(store, environment) })
+          |> result.map_error(fn(_) {
+            error.PatternMismatch(
+              "float pattern",
+              "Float",
+              types.to_string(environment, expected_type),
+            )
+          })
+      }
     }
 
     glance.PatternString(_, _) -> {

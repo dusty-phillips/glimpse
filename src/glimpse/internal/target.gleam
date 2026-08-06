@@ -51,3 +51,37 @@ fn target_name(target: Target) -> String {
     Javascript -> "javascript"
   }
 }
+
+/// Whether a function definition is usable on the given target: pure Gleam
+/// functions and functions with a body run everywhere, while a body-less
+/// external function runs only on the targets its `@external` attributes name.
+pub fn function_supported(
+  target: Target,
+  definition: glance.Definition(glance.Function),
+) -> Bool {
+  let externals =
+    list.filter(definition.attributes, fn(attribute) {
+      attribute.name == "external"
+    })
+  case externals {
+    [] -> True
+    _ ->
+      case definition.definition.body {
+        [] ->
+          list.any(externals, fn(attribute) {
+            external_matches_target(target, attribute)
+          })
+        _ -> True
+      }
+  }
+}
+
+fn external_matches_target(
+  target: Target,
+  attribute: glance.Attribute,
+) -> Bool {
+  case attribute.arguments {
+    [glance.Variable(_, name), ..] -> name == target_name(target)
+    _ -> True
+  }
+}

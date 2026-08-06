@@ -17,6 +17,10 @@ pub type CallableState {
     labels: dict.Dict(String, Int),
     /// Counter for generating unique generic type variable names for unannotated params
     generic_var_counter: Int,
+    /// The name of the function whose signature is being built, used to keep
+    /// unannotated parameter variables distinct across functions so cross
+    /// function type constraints can be traced.
+    function_name: String,
   )
 }
 
@@ -26,8 +30,11 @@ pub type CallableStateResult =
 pub type CallableStateFold =
   error.TypeCheckFold(CallableState)
 
-pub fn empty_state(environment: Environment) -> CallableState {
-  CallableState(environment, [], dict.new(), 0)
+pub fn empty_state(
+  environment: Environment,
+  function_name: String,
+) -> CallableState {
+  CallableState(environment, [], dict.new(), 0, function_name)
 }
 
 pub fn has_generic_types(types: List(Type)) -> Bool {
@@ -74,7 +81,7 @@ pub fn update_function_signature(
   use param_state <- result.try(
     function.parameters
     |> list.fold_until(
-      Ok(empty_state(environment)),
+      Ok(empty_state(environment, function.name)),
       fold_parameter_into_callable(),
     ),
   )
@@ -155,6 +162,7 @@ fn fold_parameter_into_callable_inner(
       reversed_by_position,
       labels,
       generic_var_counter,
+      function_name,
     )) ->
       case param {
         glance.FunctionParameter(type_: option.None, label: option.None, ..) ->
@@ -166,12 +174,16 @@ fn fold_parameter_into_callable_inner(
                   environment,
                   [
                     types.GenericTypeVariable(
-                      "t" <> int.to_string(generic_var_counter),
+                      "t_"
+                      <> function_name
+                      <> "_"
+                      <> int.to_string(generic_var_counter),
                     ),
                     ..reversed_by_position
                   ],
                   labels,
                   generic_var_counter + 1,
+                  function_name,
                 )),
               )
           }
@@ -188,7 +200,10 @@ fn fold_parameter_into_callable_inner(
                   environment,
                   [
                     types.GenericTypeVariable(
-                      "t" <> int.to_string(generic_var_counter),
+                      "t_"
+                      <> function_name
+                      <> "_"
+                      <> int.to_string(generic_var_counter),
                     ),
                     ..reversed_by_position
                   ],
@@ -198,6 +213,7 @@ fn fold_parameter_into_callable_inner(
                     reversed_by_position |> list.length,
                   ),
                   generic_var_counter + 1,
+                  function_name,
                 )),
               )
           }
@@ -220,6 +236,7 @@ fn fold_parameter_into_callable_inner(
                       [glimpse_type, ..reversed_by_position],
                       labels,
                       next_hole,
+                      function_name,
                     )),
                   )
                 option.Some(label) ->
@@ -236,6 +253,7 @@ fn fold_parameter_into_callable_inner(
                             reversed_by_position |> list.length,
                           ),
                           next_hole,
+                          function_name,
                         )),
                       )
                   }
@@ -261,6 +279,9 @@ pub type FunctionParamState {
     /// parameters refers to the same variable, letting inference tie annotated
     /// parameters to the return type.
     generic_vars: dict.Dict(String, Type),
+    /// The function whose body is being checked, used to tie unannotated
+    /// parameter variables to the function's signature variables.
+    function_name: String,
   )
 }
 
@@ -277,10 +298,24 @@ pub fn fold_function_parameter_into_env(
 ) -> FunctionParamStateFold {
   case state {
     Error(_err) -> list.Stop(state)
-    Ok(FunctionParamState(store, environment, publicity, inferred, generic_vars)) ->
+    Ok(FunctionParamState(
+      store,
+      environment,
+      publicity,
+      inferred,
+      generic_vars,
+      function_name,
+    )) ->
       case param {
         glance.FunctionParameter(type_: option.None, name: name, ..) -> {
-          let #(store, type_) = types.fresh_var(store)
+          // The parameter is a fresh inference variable, tagged with the name
+          // of the signature's generic variable so cross-function constraints
+          // can be traced during the first pass.
+          let #(store, type_) =
+            types.fresh_var_with_source(
+              store,
+              signature_parameter_name(environment, function_name, index),
+            )
           let environment = case name {
             glance.Named(n) ->
               types.add_or_update_def_in_env(environment, n, type_)
@@ -293,6 +328,7 @@ pub fn fold_function_parameter_into_env(
               publicity,
               [#(index, type_), ..inferred],
               generic_vars,
+              function_name,
             )),
           )
         }
@@ -314,6 +350,7 @@ pub fn fold_function_parameter_into_env(
                   publicity,
                   [#(index, converted), ..inferred],
                   generic_vars,
+                  function_name,
                 )),
               )
             }
@@ -331,6 +368,7 @@ pub fn fold_function_parameter_into_env(
               publicity,
               inferred,
               generic_vars,
+              function_name,
             )),
           )
       }
@@ -417,7 +455,7 @@ pub fn fold_variant_constructor_into_env(
       use callable_state <- result.try(
         variant.fields
         |> list.fold_until(
-          Ok(empty_state(environment)),
+          Ok(empty_state(environment, glance_custom_type.name)),
           fold_variant_field_into_callable,
         ),
       )
@@ -486,6 +524,7 @@ fn fold_variant_field_into_callable(
       reversed_by_position,
       labels,
       generic_var_counter,
+      function_name,
     )) ->
       {
         case field {
@@ -496,6 +535,7 @@ fn fold_variant_field_into_callable(
               [glimpse_type, ..reversed_by_position],
               dict.insert(labels, label, reversed_by_position |> list.length),
               generic_var_counter,
+              function_name,
             ))
           }
 
@@ -506,10 +546,61 @@ fn fold_variant_field_into_callable(
               [glimpse_type, ..reversed_by_position],
               labels,
               generic_var_counter,
+              function_name,
             ))
           }
         }
       }
       |> list.Continue
+  }
+}
+
+/// The name of the `index`-th parameter of `function_name`'s signature. For
+/// unannotated parameters this is the signature's generic variable name, used
+/// to tag the body's inference variable so cross-function constraints can be
+/// traced. Falls back to the deterministic name when the signature is
+/// unavailable.
+fn signature_parameter_name(
+  environment: Environment,
+  function_name: String,
+  index: Int,
+) -> String {
+  let fallback = "t_" <> function_name <> "_" <> int.to_string(index)
+  case signature_parameter_type(environment, function_name, index) {
+    types.GenericTypeVariable(name) -> name
+    _ -> fallback
+  }
+}
+
+fn signature_parameter_type(
+  environment: Environment,
+  function_name: String,
+  index: Int,
+) -> Type {
+  let fallback =
+    types.GenericTypeVariable(
+      "t_" <> function_name <> "_" <> int.to_string(index),
+    )
+  case dict.get(environment.definitions, function_name) {
+    Ok(types.GenericCallableType(parameters, _, _, _)) ->
+      parameter_at_index(parameters, index, fallback)
+    Ok(types.CallableType(parameters, _, _)) ->
+      parameter_at_index(parameters, index, fallback)
+    _ -> fallback
+  }
+}
+
+fn parameter_at_index(
+  parameters: List(Type),
+  index: Int,
+  fallback: Type,
+) -> Type {
+  case parameters {
+    [] -> fallback
+    [head, ..rest] ->
+      case index {
+        0 -> head
+        _ -> parameter_at_index(rest, index - 1, fallback)
+      }
   }
 }

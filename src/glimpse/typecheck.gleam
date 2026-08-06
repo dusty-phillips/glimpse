@@ -94,6 +94,37 @@ pub fn module(
       module: target.filter_for_target(glimpse_module.module, target),
     )
 
+  // Function and constant names share one namespace; the official compiler
+  // rejects a module that defines the same name twice, in any combination.
+  let definitions =
+    glimpse_module.module.functions
+    |> list.map(fn(definition) { definition.definition.name })
+    |> list.append(
+      glimpse_module.module.constants
+      |> list.map(fn(definition) { definition.definition.name }),
+    )
+  use _ <- result.try(case list_has_duplicate(definitions) {
+    Ok(name) -> Error(error.DuplicateDefinition(name))
+    Error(_) -> Ok(Nil)
+  })
+
+  // A custom type annotated `@external` may not declare constructors.
+  use _ <- result.try(
+    list.try_fold(glimpse_module.module.custom_types, Nil, fn(_, definition) {
+      let glance_custom_type = definition.definition
+      case
+        list.any(definition.attributes, fn(attribute) {
+          attribute.name == "external"
+        })
+        && glance_custom_type.variants != []
+      {
+        True ->
+          Error(error.ExternalTypeWithConstructors(glance_custom_type.name))
+        False -> Ok(Nil)
+      }
+    }),
+  )
+
   let imports_result =
     glimpse_module.module.imports
     |> list.map(fn(definition) { definition.definition })
@@ -140,8 +171,25 @@ pub fn module(
   )
   let environment = env_for_signatures
 
+  // A public function implemented only for other targets cannot be imported
+  // on this one.
+  use _ <- result.try(
+    list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
+      case
+        definition.definition.publicity == glance.Public
+        && !target.function_supported(target, definition)
+      {
+        True -> Error(error.UnsupportedTarget(definition.definition.name))
+        False -> Ok(Nil)
+      }
+    }),
+  )
+
   let function_signature_result =
     glimpse_module.module.functions
+    |> list.filter(fn(definition) {
+      target.function_supported(target, definition)
+    })
     |> list.map(fn(definition) { definition.definition })
     |> list.fold_until(Ok(environment), functions.function_signature)
 
@@ -405,6 +453,10 @@ pub fn type_alias(
   environment: Environment,
   alias: glance.TypeAlias,
 ) -> EnvironmentResult {
+  use _ <- result.try(case list_has_duplicate(alias.parameters) {
+    Ok(name) -> Error(error.DuplicateTypeParameter(name))
+    Error(_) -> Ok(Nil)
+  })
   // Every declared type parameter must be used in the aliased type.
   case
     alias.parameters
@@ -470,6 +522,10 @@ pub fn custom_type_declaration(
   case dict.has_key(environment.custom_types, custom_type.name) {
     True -> Error(error.DuplicateCustomType(custom_type.name))
     False -> {
+      use _ <- result.try(case list_has_duplicate(custom_type.parameters) {
+        Ok(name) -> Error(error.DuplicateTypeParameter(name))
+        Error(_) -> Ok(Nil)
+      })
       let environment =
         environment
         |> types.add_custom_type_to_env(
@@ -495,10 +551,29 @@ pub fn custom_type_constructors(
 ) -> EnvironmentResult {
   // Two variants may not share a constructor name.
   let names = custom_type.variants |> list.map(fn(variant) { variant.name })
-  case list_has_duplicate(names) {
+  use _ <- result.try(case list_has_duplicate(names) {
     Ok(name) -> Error(error.DuplicateConstructor(name))
-    Error(_) -> custom_type_constructors_(environment, custom_type)
-  }
+    Error(_) -> Ok(Nil)
+  })
+  // A constructor may not declare the same label twice.
+  use _ <- result.try(
+    list.try_fold(custom_type.variants, Nil, fn(_, variant) {
+      let labels =
+        variant.fields
+        |> list.map(fn(field) {
+          case field {
+            glance.LabelledVariantField(_, label) -> label
+            glance.UnlabelledVariantField(_) -> ""
+          }
+        })
+        |> list.filter(fn(label) { label != "" })
+      case list_has_duplicate(labels) {
+        Ok(label) -> Error(error.DuplicateLabel(label))
+        Error(_) -> Ok(Nil)
+      }
+    }),
+  )
+  custom_type_constructors_(environment, custom_type)
 }
 
 fn list_has_duplicate(names: List(String)) -> Result(String, Nil) {
@@ -706,7 +781,7 @@ pub fn function(
   environment: Environment,
   function: glance.Function,
 ) -> types.EnvStateResult(glance.Function) {
-  let store = types.new_type_store()
+  let store = types.seed_generic_edges(types.new_type_store(), environment)
 
   // Fold parameters into environment with fresh vars for unannotated private params
   use param_state <- result.try(
@@ -719,6 +794,7 @@ pub fn function(
         function.publicity,
         [],
         dict.new(),
+        function.name,
       )),
       fn(state, indexed_param) {
         let #(index, param) = indexed_param
@@ -733,6 +809,7 @@ pub fn function(
     param_state.store,
     function.body,
   ))
+  let environment = types.flush_generic_edges(environment, store)
 
   case function.return {
     option.None -> {

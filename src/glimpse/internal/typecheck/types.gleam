@@ -95,11 +95,57 @@ pub type TypeVar {
 /// Threads the state of inference variables created during call checking.
 /// Stores are local to a single call and are discarded afterwards.
 pub type TypeStore {
-  TypeStore(next_id: Int, vars: Dict(Int, TypeVar))
+  TypeStore(
+    next_id: Int,
+    vars: Dict(Int, TypeVar),
+    /// The name of the generic variable a fresh inference variable was created
+    /// for. Unannotated function parameters get tagged with their signature's
+    /// generic variable name so cross-function constraints can be traced.
+    var_sources: Dict(Int, String),
+    /// Constraints between named generic variables recorded while checking
+    /// calls to same-module functions whose signatures are still placeholders.
+    /// `generic_edges[name]` lists the variables embedded inside `name`.
+    generic_edges: Dict(String, List(String)),
+  )
 }
 
 pub fn new_type_store() -> TypeStore {
-  TypeStore(0, dict.new())
+  TypeStore(0, dict.new(), dict.new(), dict.new())
+}
+
+/// Create a fresh unbound variable tagged with the generic variable name it
+/// stands for.
+pub fn fresh_var_with_source(
+  store: TypeStore,
+  source: String,
+) -> #(TypeStore, Type) {
+  let #(store, type_) = fresh_var(store)
+  let id = case type_ {
+    Var(id) -> id
+    _ -> -1
+  }
+  #(
+    TypeStore(..store, var_sources: dict.insert(store.var_sources, id, source)),
+    type_,
+  )
+}
+
+/// The generic variable name a type's inference variable was created for, if
+/// any, resolving through links.
+pub fn var_source(store: TypeStore, type_: Type) -> Option(String) {
+  case type_ {
+    Var(id) -> {
+      case dict.get(store.vars, id) {
+        Ok(Link(linked)) -> var_source(store, linked)
+        Ok(Unbound) | Error(_) ->
+          case dict.get(store.var_sources, id) {
+            Ok(name) -> option.Some(name)
+            Error(_) -> option.None
+          }
+      }
+    }
+    _ -> option.None
+  }
 }
 
 /// Follow any `Link` chains on a type variable to its current binding. If the
@@ -165,8 +211,9 @@ pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
 fn fresh_type(store: TypeStore) -> #(TypeStore, Type) {
   #(
     TypeStore(
-      store.next_id + 1,
-      dict.insert(store.vars, store.next_id, Unbound),
+      ..store,
+      next_id: store.next_id + 1,
+      vars: dict.insert(store.vars, store.next_id, Unbound),
     ),
     Var(store.next_id),
   )
@@ -686,6 +733,10 @@ pub type Environment {
     // lookups on such unknown types defer instead of erroring; the second pass
     // re-checks them against the final signatures.
     defer_unknown: Bool,
+    // Constraints between named generic variables, accumulated across the
+    // first function-body pass from calls to placeholder signatures. A cycle
+    // means a value's type is defined in terms of itself.
+    generic_edges: dict.Dict(String, List(String)),
   )
 }
 
@@ -753,6 +804,7 @@ pub fn new_env(current_module: String) -> Environment {
     module_imports: dict.new(),
     module_environments: dict.new(),
     defer_unknown: False,
+    generic_edges: dict.new(),
   )
 }
 
@@ -760,6 +812,101 @@ pub fn new_env(current_module: String) -> Environment {
 /// erroring. Set during the first function-body pass.
 pub fn set_defer_unknown(environment: Environment, defer: Bool) -> Environment {
   Environment(..environment, defer_unknown: defer)
+}
+
+/// Start a function body's store carrying the module's accumulated generic
+/// variable constraints, so edges recorded in earlier bodies are visible.
+pub fn seed_generic_edges(
+  store: TypeStore,
+  environment: Environment,
+) -> TypeStore {
+  TypeStore(..store, generic_edges: environment.generic_edges)
+}
+
+/// Merge a body's generic constraints back into the environment.
+pub fn flush_generic_edges(
+  environment: Environment,
+  store: TypeStore,
+) -> Environment {
+  Environment(..environment, generic_edges: store.generic_edges)
+}
+
+/// Record that the named generic variable `from` embeds the given variables,
+/// rejecting the constraint when it closes a cycle (the type is recursive).
+pub fn record_generic_edge(
+  store: TypeStore,
+  from: String,
+  embedded: List(String),
+) -> Result(TypeStore, error.TypeCheckError) {
+  let existing =
+    dict.get(store.generic_edges, from)
+    |> result.unwrap([])
+  let merged = list.unique(list.append(existing, embedded))
+  case list.any(merged, fn(name) { reaches(store.generic_edges, name, from) }) {
+    True -> Error(error.RecursiveType)
+    False ->
+      Ok(
+        TypeStore(
+          ..store,
+          generic_edges: dict.insert(store.generic_edges, from, merged),
+        ),
+      )
+  }
+}
+
+/// Whether `target` is reachable from `start` following the constraint edges.
+fn reaches(
+  edges: dict.Dict(String, List(String)),
+  start: String,
+  target: String,
+) -> Bool {
+  let next = dict.get(edges, start) |> result.unwrap([])
+  case list.contains(next, target) {
+    True -> True
+    False ->
+      list.any(next, fn(name) { name != start && reaches(edges, name, target) })
+  }
+}
+
+/// The named generic variables embedded in a type.
+pub fn named_vars_in(type_: Type) -> List(String) {
+  case type_ {
+    GenericTypeVariable(name) -> [name]
+    Var(_) -> []
+    CustomType(_, _, parameters, _) ->
+      parameters |> list.map(named_vars_in) |> list.flatten
+    TupleType(elements) -> elements |> list.map(named_vars_in) |> list.flatten
+    CallableType(parameters, _, return) ->
+      list.append(
+        parameters |> list.map(named_vars_in) |> list.flatten,
+        named_vars_in(return),
+      )
+    GenericCallableType(parameters, _, return, _) ->
+      list.append(
+        parameters |> list.map(named_vars_in) |> list.flatten,
+        named_vars_in(return),
+      )
+    TypeAlias(_, aliased) -> named_vars_in(aliased)
+    _ -> []
+  }
+}
+
+/// The named generic variables embedded in a type, including the names of
+/// inference variables that were created for a generic variable.
+pub fn named_vars_including_sources(
+  store: TypeStore,
+  type_: Type,
+) -> List(String) {
+  let direct = named_vars_in(type_)
+  let sourced = case type_ {
+    Var(id) ->
+      case dict.get(store.var_sources, id) {
+        Ok(name) -> [name]
+        Error(_) -> []
+      }
+    _ -> []
+  }
+  list.unique(list.append(direct, sourced))
 }
 
 /// The prelude custom types that exist in every module's scope without an
@@ -1021,6 +1168,21 @@ type HoleMode {
   NamedHole
 }
 
+/// Whether a type annotation like `Int()` was written with an empty argument
+/// list. `Int` and `Int()` parse to the same AST node, differing only in the
+/// span covering the trailing parentheses.
+fn type_used_as_constructor(
+  span: glance.Span,
+  module: option.Option(String),
+  name: String,
+) -> Bool {
+  let written = case module {
+    option.Some(module) -> module <> "." <> name
+    option.None -> name
+  }
+  span.end - span.start > string.length(written)
+}
+
 fn do_type_(
   environment: Environment,
   store: TypeStore,
@@ -1029,18 +1191,36 @@ fn do_type_(
   glance_type: glance.Type,
 ) -> Result(#(TypeStore, Int, Type), error.TypeCheckError) {
   case glance_type {
-    glance.NamedType(_, "Int", option.None, []) ->
-      Ok(#(store, next_hole, IntType))
-    glance.NamedType(_, "Float", option.None, []) ->
-      Ok(#(store, next_hole, FloatType))
-    glance.NamedType(_, "Nil", option.None, []) ->
-      Ok(#(store, next_hole, NilType))
-    glance.NamedType(_, "String", option.None, []) ->
-      Ok(#(store, next_hole, StringType))
-    glance.NamedType(_, "Bool", option.None, []) ->
-      Ok(#(store, next_hole, BoolType))
-    glance.NamedType(_, "BitArray", option.None, []) ->
-      Ok(#(store, next_hole, BitArrayType))
+    glance.NamedType(span, "Int", option.None, []) ->
+      case type_used_as_constructor(span, option.None, "Int") {
+        True -> Error(error.TypeUsedAsConstructor("Int"))
+        False -> Ok(#(store, next_hole, IntType))
+      }
+    glance.NamedType(span, "Float", option.None, []) ->
+      case type_used_as_constructor(span, option.None, "Float") {
+        True -> Error(error.TypeUsedAsConstructor("Float"))
+        False -> Ok(#(store, next_hole, FloatType))
+      }
+    glance.NamedType(span, "Nil", option.None, []) ->
+      case type_used_as_constructor(span, option.None, "Nil") {
+        True -> Error(error.TypeUsedAsConstructor("Nil"))
+        False -> Ok(#(store, next_hole, NilType))
+      }
+    glance.NamedType(span, "String", option.None, []) ->
+      case type_used_as_constructor(span, option.None, "String") {
+        True -> Error(error.TypeUsedAsConstructor("String"))
+        False -> Ok(#(store, next_hole, StringType))
+      }
+    glance.NamedType(span, "Bool", option.None, []) ->
+      case type_used_as_constructor(span, option.None, "Bool") {
+        True -> Error(error.TypeUsedAsConstructor("Bool"))
+        False -> Ok(#(store, next_hole, BoolType))
+      }
+    glance.NamedType(span, "BitArray", option.None, []) ->
+      case type_used_as_constructor(span, option.None, "BitArray") {
+        True -> Error(error.TypeUsedAsConstructor("BitArray"))
+        False -> Ok(#(store, next_hole, BitArrayType))
+      }
 
     glance.TupleType(_, elements) ->
       fold_type_parameters(environment, store, next_hole, mode, elements)
@@ -1067,7 +1247,7 @@ fn do_type_(
       Ok(#(store, next_hole, CallableType(parameters, dict.new(), return)))
     }
 
-    glance.NamedType(_, name, module, parameters) -> {
+    glance.NamedType(span, name, module, parameters) -> {
       use declared <- result.try(lookup_named_type(environment, module, name))
       case declared {
         TypeAlias(alias_parameters, aliased) ->
@@ -1135,7 +1315,13 @@ fn do_type_(
           }
         _ ->
           case parameters {
-            [] -> Ok(#(store, next_hole, declared))
+            [] ->
+              // `Int` and `Int()` parse to the same AST, distinguished only by
+              // the span covering the empty argument list.
+              case type_used_as_constructor(span, module, name) {
+                True -> Error(error.TypeUsedAsConstructor(name))
+                False -> Ok(#(store, next_hole, declared))
+              }
             _ ->
               Error(error.InvalidType(
                 name,

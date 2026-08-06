@@ -379,7 +379,7 @@ pub fn pipe_extra_args_test() {
       "fn add(a: Int, b: Int) -> Int { a + b }
     fn foo() -> Int { 1 |> add(2, 3) }",
     )
-    == error.InvalidArguments("(Int)", "(Int, Int)")
+    == error.InvalidArguments("()", "a piped value")
 }
 
 pub fn let_bound_used_test() {

@@ -36,54 +36,56 @@ pub fn fold_import_from_env(
         _ -> True
       }
 
-      let module_env = case dict.get(module_envs, module) {
-        Error(_) ->
-          panic as "Missing modules should have been detected before now"
-        Ok(module_env) -> module_env
-      }
+      case dict.get(module_envs, module) {
+        Error(_) -> list.Stop(Error(error.InvalidName(module)))
+        Ok(module_env) -> {
+          let environment_result = {
+            use environment <- result.try(fold_values_into_env(
+              environment,
+              module_env,
+              unqualified_values,
+            ))
+            use environment <- result.try(fold_types_into_env(
+              environment,
+              module_env,
+              unqualified_types,
+            ))
 
-      let environment_result = {
-        use environment <- result.try(fold_values_into_env(
-          environment,
-          module_env,
-          unqualified_values,
-        ))
-        use environment <- result.try(fold_types_into_env(
-          environment,
-          module_env,
-          unqualified_types,
-        ))
+            let namespace_type =
+              types.NamespaceType(
+                module_env.definitions
+                  |> dict.filter(fn(key, _) {
+                    set.contains(module_env.public_definitions, key)
+                  }),
+                module_env.custom_types
+                  |> dict.filter(fn(key, _) {
+                    set.contains(module_env.public_custom_types, key)
+                  }),
+              )
 
-        let namespace_type =
-          types.NamespaceType(
-            module_env.definitions
-              |> dict.filter(fn(key, _) {
-                set.contains(module_env.public_definitions, key)
-              }),
-            module_env.custom_types
-              |> dict.filter(fn(key, _) {
-                set.contains(module_env.public_custom_types, key)
-              }),
-          )
+            // The namespace lives only in `module_imports`, never in
+            // `definitions`, so an unqualified-imported value (e.g.
+            // `import element.{element}`) keeps resolving for bare calls while
+            // `element.element` falls back to module access.
+            let environment = case add_namespace {
+              True ->
+                environment
+                |> types.add_or_update_namespace_in_env(
+                  namespace,
+                  namespace_type,
+                )
+              False -> environment
+            }
 
-        // The namespace lives only in `module_imports`, never in `definitions`,
-        // so an unqualified-imported value (e.g. `import element.{element}`)
-        // keeps resolving for bare calls while `element.element` falls back to
-        // module access.
-        let environment = case add_namespace {
-          True ->
-            environment
-            |> types.add_or_update_namespace_in_env(namespace, namespace_type)
-          False -> environment
+            Ok(types.add_import_mapping_to_env(environment, module, namespace))
+          }
+
+          case environment_result {
+            Error(error) -> list.Stop(Error(error))
+            Ok(environment) ->
+              types.EnvState(environment, module_envs) |> Ok |> list.Continue
+          }
         }
-
-        Ok(types.add_import_mapping_to_env(environment, module, namespace))
-      }
-
-      case environment_result {
-        Error(error) -> list.Stop(Error(error))
-        Ok(environment) ->
-          types.EnvState(environment, module_envs) |> Ok |> list.Continue
       }
     }
   }

@@ -86,6 +86,38 @@ pub type TypeCheckError {
   /// Raised when a bit-string pattern assigns a variable twice, e.g.
   /// `<<a as b>>`.
   DoubleVariableAssignment
+  /// Raised when a module defines two functions, two constants, or a function
+  /// and a constant with the same name.
+  DuplicateDefinition(name: String)
+  /// Raised when a custom type or type alias declares the same type parameter
+  /// name twice.
+  DuplicateTypeParameter(name: String)
+  /// Raised when a constructor declares two fields with the same label.
+  DuplicateLabel(label: String)
+  /// Raised when a type that takes no parameters is written with an argument
+  /// list, e.g. `-> Int()`.
+  TypeUsedAsConstructor(type_name: String)
+  /// Raised when a custom type has an `@external` annotation yet declares
+  /// constructors.
+  ExternalTypeWithConstructors(type_name: String)
+  /// Raised when a case clause lists a different number of patterns than the
+  /// case has subjects.
+  IncorrectPatternCount(patterns: Int, subjects: Int)
+  /// Raised when a pattern binds the same variable twice, or when a variable
+  /// is bound to different positions by the alternatives of a clause.
+  DuplicatePatternVariable(name: String)
+  /// Raised when a variable bound by one or-alternative of a clause is not
+  /// bound by the other alternatives.
+  MissingPatternVariable(name: String)
+  /// Raised when a variable is bound by an or-alternative of a clause but not
+  /// by the alternative that came before it.
+  ExtraPatternVariable(name: String)
+  /// Raised when a value's type is defined in terms of itself.
+  RecursiveType
+  /// Raised when a float literal is too large to be represented.
+  FloatOutOfRange(value: String)
+  /// Raised when a value is only implemented for another build target.
+  UnsupportedTarget(name: String)
 }
 
 pub type TypeCheckResult(a) =

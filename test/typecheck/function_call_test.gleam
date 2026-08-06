@@ -116,14 +116,15 @@ pub fn simple_nil_variant_call_test() {
 }
 
 pub fn multi_nil_variant_call_test() {
-  helpers.ok_module_typecheck(
-    "pub type Foo {
+  assert helpers.error_module_typecheck(
+      "pub type Foo {
         Foo
         Bar
     }
     fn bar() -> Foo { Foo } 
     fn bar() -> Foo { Bar } ",
-  )
+    )
+    == error.DuplicateDefinition("bar")
 }
 
 pub fn single_param_variant_call_test() {

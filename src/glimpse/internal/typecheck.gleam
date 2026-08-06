@@ -103,6 +103,7 @@ pub fn statement(
 
       case kind {
         glance.Let -> {
+          use _ <- result.try(validate_let_pattern_variables(pat))
           pattern.typecheck_pattern(environment, store, type_, pat)
           |> pattern_must_be_irrefutable(environment, type_, pat)
           |> result.map(fn(state) {
@@ -110,7 +111,19 @@ pub fn statement(
             #(store, env, type_)
           })
         }
-        glance.LetAssert(_) -> {
+        glance.LetAssert(message) -> {
+          // The message is checked before the pattern binds its variables, so
+          // the pattern's bindings are not in scope inside it.
+          use store <- result.try(case message {
+            option.None -> Ok(store)
+            option.Some(message_expr) ->
+              expression(environment, store, message_expr)
+              |> result.try(fn(state) {
+                let #(store, message_type) = state
+                types.unify(store, environment, message_type, types.StringType)
+              })
+          })
+          use _ <- result.try(validate_let_pattern_variables(pat))
           use #(store, env) <- result.try(pattern.typecheck_pattern(
             environment,
             store,
@@ -470,7 +483,11 @@ fn typecheck_with_expected(
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
   case expr {
     glance.Int(_, _) -> Ok(#(store, types.IntType))
-    glance.Float(_, _) -> Ok(#(store, types.FloatType))
+    glance.Float(_, value) ->
+      case pattern.float_is_in_range(value) {
+        True -> Ok(#(store, types.FloatType))
+        False -> Error(error.FloatOutOfRange(value))
+      }
     glance.String(_, _) -> Ok(#(store, types.StringType))
     glance.Variable(_, "Nil") -> Ok(#(store, types.NilType))
     glance.Variable(_, "True") | glance.Variable(_, "False") ->
@@ -1703,6 +1720,12 @@ fn case_expression(
       }
     })
 
+  use _ <- result.try(
+    list.try_fold(clauses, Nil, fn(_, clause) {
+      validate_clause_patterns(clause, list.length(subjects))
+    }),
+  )
+
   case clauses {
     [] ->
       case exhaustive.check(environment, subject_types, []) {
@@ -1786,6 +1809,185 @@ fn case_expression(
           }
       }
     }
+  }
+}
+
+/// The variables bound by a pattern, each with the path (per-subject index
+/// followed by nested field indices) of the binding site. Used to validate
+/// duplicate and alternative-consistency rules for clause patterns.
+fn pattern_bound_variables(
+  prefix: List(Int),
+  pattern: glance.Pattern,
+) -> List(#(String, List(Int))) {
+  case pattern {
+    glance.PatternVariable(_, name) -> [#(name, prefix)]
+    glance.PatternDiscard(_, _) -> []
+    glance.PatternAssignment(_, inner, name) -> [
+      #(name, prefix),
+      ..pattern_bound_variables(prefix, inner)
+    ]
+    glance.PatternInt(_, _)
+    | glance.PatternFloat(_, _)
+    | glance.PatternString(_, _)
+    | glance.PatternBitString(_, _) -> []
+    glance.PatternConcatenate(_, _, prefix_name, rest_name) -> {
+      let prefix_vars = case prefix_name {
+        option.Some(glance.Named(name)) -> [#(name, prefix)]
+        option.Some(glance.Discarded(_)) | option.None -> []
+      }
+      let rest_vars = case rest_name {
+        glance.Named(name) -> [#(name, prefix)]
+        glance.Discarded(_) -> []
+      }
+      list.append(prefix_vars, rest_vars)
+    }
+    glance.PatternTuple(_, elements) ->
+      elements
+      |> list.index_map(fn(element, index) {
+        pattern_bound_variables([index, ..prefix], element)
+      })
+      |> list.flatten
+    glance.PatternList(_, elements, tail) -> {
+      let element_vars =
+        elements
+        |> list.index_map(fn(element, index) {
+          pattern_bound_variables([index, ..prefix], element)
+        })
+        |> list.flatten
+      let tail_vars = case tail {
+        option.Some(tail_pattern) ->
+          pattern_bound_variables([1, ..prefix], tail_pattern)
+        option.None -> []
+      }
+      list.append(element_vars, tail_vars)
+    }
+    glance.PatternVariant(_, _, _, arguments, _) ->
+      arguments
+      |> list.index_map(fn(field, index) {
+        case field {
+          glance.UnlabelledField(inner) ->
+            pattern_bound_variables([index, ..prefix], inner)
+          glance.LabelledField(_, _, inner) ->
+            pattern_bound_variables([index, ..prefix], inner)
+          glance.ShorthandField(label, _) -> [#(label, [index, ..prefix])]
+        }
+      })
+      |> list.flatten
+  }
+}
+
+/// Check that a clause's alternatives each have as many patterns as the case
+/// has subjects, that no alternative binds a variable twice, and that the
+/// alternatives bind the same variables at the same positions.
+fn validate_clause_patterns(
+  clause: glance.Clause,
+  subject_count: Int,
+) -> Result(Nil, error.TypeCheckError) {
+  case clause.patterns {
+    [] -> Ok(Nil)
+    [first, ..rest] -> {
+      use first_vars <- result.try(validate_alternative_patterns(
+        first,
+        subject_count,
+      ))
+      list.try_fold(rest, Nil, fn(_, alternative) {
+        use alternative_vars <- result.try(validate_alternative_patterns(
+          alternative,
+          subject_count,
+        ))
+        validate_alternative_consistency(first_vars, alternative_vars)
+      })
+    }
+  }
+}
+
+fn validate_alternative_patterns(
+  patterns: List(glance.Pattern),
+  subject_count: Int,
+) -> Result(List(#(String, List(Int))), error.TypeCheckError) {
+  case list.length(patterns) == subject_count {
+    False ->
+      Error(error.IncorrectPatternCount(list.length(patterns), subject_count))
+    True -> {
+      let variables =
+        patterns
+        |> list.index_map(fn(pattern, subject) {
+          pattern_bound_variables([subject], pattern)
+        })
+        |> list.flatten
+      list.try_fold(variables, [], fn(acc, variable) {
+        let #(name, path) = variable
+        case
+          list.any(acc, fn(seen) {
+            let #(seen_name, seen_path) = seen
+            name == seen_name && path != seen_path
+          })
+        {
+          True -> Error(error.DuplicatePatternVariable(name))
+          False -> Ok([variable, ..acc])
+        }
+      })
+    }
+  }
+}
+
+/// A variable bound by the alternatives of a clause must be bound by every
+/// alternative at the same position.
+fn validate_alternative_consistency(
+  first: List(#(String, List(Int))),
+  other: List(#(String, List(Int))),
+) -> Result(Nil, error.TypeCheckError) {
+  case first {
+    [] ->
+      case other {
+        [] -> Ok(Nil)
+        [#(name, _), ..] -> Error(error.ExtraPatternVariable(name))
+      }
+    [#(name, path), ..rest] -> {
+      case
+        list.find(other, fn(seen) {
+          let #(seen_name, _) = seen
+          seen_name == name
+        })
+      {
+        Error(_) -> Error(error.MissingPatternVariable(name))
+        Ok(#(_, other_path)) ->
+          case path == other_path {
+            True ->
+              validate_alternative_consistency(
+                rest,
+                list.filter(other, fn(seen) {
+                  let #(seen_name, _) = seen
+                  seen_name != name
+                }),
+              )
+            False -> Error(error.DuplicatePatternVariable(name))
+          }
+      }
+    }
+  }
+}
+
+/// A `let` (or `let assert`) pattern may not bind the same variable twice.
+fn validate_let_pattern_variables(
+  pattern: glance.Pattern,
+) -> Result(Nil, error.TypeCheckError) {
+  let variables = pattern_bound_variables([0], pattern)
+  case
+    list.any(variables, fn(variable) {
+      let #(name, path) = variable
+      list.any(variables, fn(other) {
+        let #(other_name, other_path) = other
+        other_name == name && other_path != path
+      })
+    })
+  {
+    True ->
+      case variables {
+        [#(name, _), ..] -> Error(error.DuplicatePatternVariable(name))
+        [] -> Ok(Nil)
+      }
+    False -> Ok(Nil)
   }
 }
 
@@ -1950,7 +2152,126 @@ pub fn call(
     labels,
   ))
 
+  // While a same-module callee's signature is still a placeholder, record how
+  // its generic parameters are constrained by the arguments, so a cycle across
+  // functions is reported as a recursive type.
+  use store <- result.try(case target {
+    glance.Variable(_, callee) ->
+      record_placeholder_constraints(environment, store, callee, arguments)
+    _ -> Ok(store)
+  })
+
   Ok(types.resolve(store, return))
+}
+
+/// While a same-module callee's signature is still a placeholder, record how
+/// its generic parameters are constrained by the arguments, so a cycle across
+/// functions is reported as a recursive type.
+fn record_placeholder_constraints(
+  environment: Environment,
+  store: TypeStore,
+  callee: String,
+  arguments: List(glance.Field(glance.Expression)),
+) -> Result(TypeStore, error.TypeCheckError) {
+  case dict.get(environment.definitions, callee) {
+    Ok(types.GenericCallableType(parameters, _, return_, _)) ->
+      case is_placeholder_return(return_) {
+        False -> Ok(store)
+        True ->
+          list.try_fold(
+            list.zip(
+              parameters,
+              list.map(arguments, fn(field) {
+                case field {
+                  glance.UnlabelledField(expr) -> expr
+                  glance.LabelledField(_, _, expr) -> expr
+                  glance.ShorthandField(_, _) ->
+                    glance.Int(glance.Span(-1, -1), "0")
+                }
+              }),
+            ),
+            store,
+            fn(store, pair) {
+              let #(parameter, argument) = pair
+              case parameter {
+                types.GenericTypeVariable(name) ->
+                  types.record_generic_edge(
+                    store,
+                    name,
+                    argument_named_vars(environment, store, argument),
+                  )
+                _ -> Ok(store)
+              }
+            },
+          )
+      }
+    _ -> Ok(store)
+  }
+}
+
+/// The named generic variables an argument expression can embed, from the
+/// bindings its sub-expressions resolve to. Only names that appear directly
+/// (variable lookups, constructor arguments, list/tuple elements) are counted;
+/// the argument is not typechecked here.
+fn argument_named_vars(
+  environment: Environment,
+  store: TypeStore,
+  argument: glance.Expression,
+) -> List(String) {
+  case argument {
+    glance.Variable(_, name) ->
+      case dict.get(environment.definitions, name) {
+        Ok(type_) -> types.named_vars_including_sources(store, type_)
+        Error(_) -> []
+      }
+    glance.List(_, elements, tail) ->
+      list.append(
+        elements
+          |> list.map(fn(element) {
+            argument_named_vars(environment, store, element)
+          })
+          |> list.flatten,
+        case tail {
+          option.Some(tail_expr) ->
+            argument_named_vars(environment, store, tail_expr)
+          option.None -> []
+        },
+      )
+    glance.Tuple(_, elements) ->
+      elements
+      |> list.map(fn(element) {
+        argument_named_vars(environment, store, element)
+      })
+      |> list.flatten
+    glance.Call(_, _, fields) ->
+      fields
+      |> list.map(fn(field) {
+        case field {
+          glance.UnlabelledField(expr) ->
+            argument_named_vars(environment, store, expr)
+          glance.LabelledField(_, _, expr) ->
+            argument_named_vars(environment, store, expr)
+          glance.ShorthandField(_, _) -> []
+        }
+      })
+      |> list.flatten
+    glance.BitString(_, segments) ->
+      segments
+      |> list.map(fn(segment) {
+        let #(value_expr, _options) = segment
+        argument_named_vars(environment, store, value_expr)
+      })
+      |> list.flatten
+    _ -> []
+  }
+}
+
+fn is_placeholder_return(type_: Type) -> Bool {
+  case type_ {
+    types.InferredReturn -> True
+    types.GenericTypeVariable("todo") -> True
+    _ -> False
+  }
 }
 
 /// Type-check call arguments against their parameter types.
@@ -2786,11 +3107,13 @@ fn pipe_value_into_callable(
     ),
   )
 
-  // The piped value occupies the first parameter position not already
-  // claimed by a labelled argument, matching how `value |> f(label: x)`
-  // desugars to `f(value, label: x)` and positional arguments fill the
-  // remaining slots in order.
-  let claimed_positions =
+  // The piped value occupies the first parameter position not claimed by a
+  // labelled argument, matching how `value |> f(label: x)` desugars to
+  // `f(value, label: x)`; the explicit positional arguments fill the free
+  // slots after it. When the pipe position and the positional arguments
+  // overflow the parameters, every slot is claimed and the piped value
+  // applies to the value the call returns.
+  let labelled_claimed =
     list.fold(arguments, set.new(), fn(acc, field) {
       case field {
         glance.LabelledField(label, _, _) | glance.ShorthandField(label, _) ->
@@ -2801,47 +3124,97 @@ fn pipe_value_into_callable(
         glance.UnlabelledField(_) -> acc
       }
     })
+  let positional_count =
+    list.count(arguments, fn(field) {
+      case field {
+        glance.UnlabelledField(_) -> True
+        _ -> False
+      }
+    })
   let piped_position =
     index_range(list.length(parameters) + 1)
-    |> list.find(fn(position) { !set.contains(claimed_positions, position) })
+    |> list.find(fn(position) { !set.contains(labelled_claimed, position) })
     |> result.unwrap(0)
 
-  case
-    list.drop(parameters, up_to: piped_position)
-    |> list.first
-  {
-    Error(_) -> Error(error.InvalidArguments("()", "a piped value"))
-    Ok(first_param) -> {
+  case piped_position + positional_count >= list.length(parameters) {
+    // Every parameter slot is already claimed by an explicit argument, so the
+    // call is complete and the piped value applies to the returned function.
+    True -> {
+      use #(store, _argument_types) <- result.try(check_arguments(
+        environment,
+        store,
+        arguments,
+        parameters,
+        labels,
+      ))
+      pipe_value_into_result(environment, store, left_type, return)
+    }
+    False -> {
+      case
+        list.drop(parameters, up_to: piped_position)
+        |> list.first
+      {
+        Error(_) -> Error(error.InvalidArguments("()", "a piped value"))
+        Ok(first_param) -> {
+          use store <- result.try(types.unify(
+            store,
+            environment,
+            left_type,
+            first_param,
+          ))
+
+          // Remove the piped parameter and re-index the remaining labels
+          // relative to the remaining parameters.
+          let #(before, after) = list.split(parameters, at: piped_position)
+          let remaining_parameters =
+            list.append(before, list.drop(after, up_to: 1))
+          let shifted_labels =
+            dict.fold(labels, dict.new(), fn(acc, label, position) {
+              case position {
+                _ if position == piped_position -> acc
+                _ if position > piped_position ->
+                  dict.insert(acc, label, position - 1)
+                _ -> dict.insert(acc, label, position)
+              }
+            })
+
+          use #(store, _argument_types) <- result.try(check_arguments(
+            environment,
+            store,
+            arguments,
+            remaining_parameters,
+            shifted_labels,
+          ))
+
+          Ok(types.resolve(store, return))
+        }
+      }
+    }
+  }
+}
+
+/// The call's arguments already fill every parameter, so the piped value is
+/// applied to the value the call returns, which must itself be a function.
+fn pipe_value_into_result(
+  environment: Environment,
+  store: TypeStore,
+  left_type: Type,
+  return: Type,
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use #(store, _target_arguments, parameters, _labels, result_return) <- result.try(
+    callable_parts(environment, store, return, 1)
+    |> result.map_error(fn(_) { error.InvalidArguments("()", "a piped value") }),
+  )
+  case parameters {
+    [] -> Error(error.InvalidArguments("()", "a piped value"))
+    [first_param, ..] -> {
       use store <- result.try(types.unify(
         store,
         environment,
         left_type,
         first_param,
       ))
-
-      // Remove the piped parameter and re-index the remaining labels relative
-      // to the remaining parameters.
-      let #(before, after) = list.split(parameters, at: piped_position)
-      let remaining_parameters = list.append(before, list.drop(after, up_to: 1))
-      let shifted_labels =
-        dict.fold(labels, dict.new(), fn(acc, label, position) {
-          case position {
-            _ if position == piped_position -> acc
-            _ if position > piped_position ->
-              dict.insert(acc, label, position - 1)
-            _ -> dict.insert(acc, label, position)
-          }
-        })
-
-      use #(store, _argument_types) <- result.try(check_arguments(
-        environment,
-        store,
-        arguments,
-        remaining_parameters,
-        shifted_labels,
-      ))
-
-      Ok(types.resolve(store, return))
+      Ok(types.resolve(store, result_return))
     }
   }
 }
