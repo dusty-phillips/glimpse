@@ -496,10 +496,13 @@ pub fn main() { one(1) }
 
 - Official: **Recursive type** (the mutual recursion forces `x = List(x)`).
 - glimpse: now reports **RecursiveType** via constraint edges traced between
-  functions' generic variables during the first pass. The self-application
-  case `let id = fn(x) { x(x) }` is rejected by both — glimpse with
-  `InvalidArguments`. Note: cycles through pattern-bound variables (e.g.
-  `f(xs) { case xs { [h, ..t] -> f(t) } }`) are not yet detected.
+  functions' generic variables during the first pass, including cycles that
+  run through pattern-bound variables (e.g.
+  `f(xs) { case xs { [h, ..t] -> [f(t)] } }`) by tagging placeholder call
+  returns. Well-typed self-recursion is still accepted (`f(x) { f(x) }`,
+  `f(xs) { f([xs]) }`, list sum/map). The self-application case
+  `let id = fn(x) { x(x) }` is rejected by both — glimpse with
+  `InvalidArguments`.
 
 ### 11.3 Type-level misc — **fixed**
 
@@ -600,6 +603,15 @@ Calling `typecheck.module` with an import that is not present in the
 dependency environment panics ("Missing modules should have been detected
 before now", `internal/typecheck/imports.gleam:41`) instead of returning an
 error.
+
+### 11.11 Import resolution — **fixed**
+
+Imports that collide on the same local module name (importing two modules that
+share a last path segment, or aliasing two imports to the same name) are now
+rejected with **DuplicateImport**. Importing a type-only name as a value (e.g.
+`import wibble.{X}` where `X` is a type alias) reports **InvalidName**;
+importing a constructor as a value stays fine. Private values and types of
+dependency modules are not importable.
 
 Interactions verified as already-correct in glimpse (not listed as bugs): guards
 (Int vs Float operators, non-Bool guard), all operator type mismatches
