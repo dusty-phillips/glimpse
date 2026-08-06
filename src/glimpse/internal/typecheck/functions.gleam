@@ -6,7 +6,7 @@ import gleam/option
 import gleam/result
 import glimpse/error
 import glimpse/internal/typecheck/types.{
-  type EnvStateFold, type EnvStateResult, type Environment, type EnvironmentFold,
+  type EnvStateResult, type Environment, type EnvironmentFold,
   type EnvironmentResult, type Type, type TypeStore,
 }
 
@@ -37,11 +37,9 @@ pub fn has_generic_types(types: List(Type)) -> Bool {
 pub fn is_generic_type(type_: Type) -> Bool {
   case type_ {
     types.GenericTypeVariable(_) -> True
-    types.CustomType(_, _, parameters) -> list.any(parameters, is_generic_type)
-    types.ListType(element) -> is_generic_type(element)
+    types.CustomType(_, _, parameters, _) ->
+      list.any(parameters, is_generic_type)
     types.TupleType(elements) -> list.any(elements, is_generic_type)
-    types.ResultType(ok, error) -> is_generic_type(ok) || is_generic_type(error)
-    types.OptionType(inner) -> is_generic_type(inner)
     types.CallableType(parameters, _, return) ->
       has_generic_types(parameters) || is_generic_type(return)
     types.GenericCallableType(parameters, _, return, _) ->
@@ -94,7 +92,15 @@ pub fn update_function_signature(
       }
     }
     option.Some(glance_return_type) ->
-      types.type_(environment, glance_return_type)
+      types.type_with_holes(
+        environment,
+        param_state.generic_var_counter,
+        glance_return_type,
+      )
+      |> result.map(fn(result) {
+        let #(_next_hole, type_) = result
+        type_
+      })
   }
 
   use return <- result.try(return_type)
@@ -151,8 +157,13 @@ fn fold_parameter_into_callable_inner(
       generic_var_counter,
     )) ->
       case param {
-        glance.FunctionParameter(type_: option.None, ..) -> {
+        glance.FunctionParameter(type_: option.None, label: label, ..) -> {
           let generic_name = "t" <> int.to_string(generic_var_counter)
+          let labels = case label {
+            option.None -> labels
+            option.Some(label) ->
+              dict.insert(labels, label, reversed_by_position |> list.length)
+          }
           list.Continue(
             Ok(CallableState(
               environment,
@@ -168,9 +179,11 @@ fn fold_parameter_into_callable_inner(
           type_: option.Some(glance_type),
           ..,
         ) ->
-          case types.type_(environment, glance_type) {
+          case
+            types.type_with_holes(environment, generic_var_counter, glance_type)
+          {
             Error(error) -> list.Stop(Error(error))
-            Ok(glimpse_type) -> {
+            Ok(#(next_hole, glimpse_type)) -> {
               let labels = case label {
                 option.None -> labels
                 option.Some(label) ->
@@ -185,7 +198,7 @@ fn fold_parameter_into_callable_inner(
                   environment,
                   [glimpse_type, ..reversed_by_position],
                   labels,
-                  generic_var_counter,
+                  next_hole,
                 )),
               )
             }
@@ -205,6 +218,11 @@ pub type FunctionParamState {
     publicity: glance.Publicity,
     /// (parameter index, fresh var type) for each parameter whose type was inferred
     inferred: List(#(Int, Type)),
+    /// Maps annotation type-variable names to the fresh inference variable they
+    /// were converted to. Kept across all parameters so the same name in two
+    /// parameters refers to the same variable, letting inference tie annotated
+    /// parameters to the return type.
+    generic_vars: dict.Dict(String, Type),
   )
 }
 
@@ -221,7 +239,7 @@ pub fn fold_function_parameter_into_env(
 ) -> FunctionParamStateFold {
   case state {
     Error(_err) -> list.Stop(state)
-    Ok(FunctionParamState(store, environment, publicity, inferred)) ->
+    Ok(FunctionParamState(store, environment, publicity, inferred, generic_vars)) ->
       case param {
         glance.FunctionParameter(type_: option.None, name: name, ..) -> {
           let #(store, type_) = types.fresh_var(store)
@@ -231,12 +249,13 @@ pub fn fold_function_parameter_into_env(
             glance.Discarded(_) -> environment
           }
           list.Continue(
-            Ok(
-              FunctionParamState(store, environment, publicity, [
-                #(index, type_),
-                ..inferred
-              ]),
-            ),
+            Ok(FunctionParamState(
+              store,
+              environment,
+              publicity,
+              [#(index, type_), ..inferred],
+              generic_vars,
+            )),
           )
         }
 
@@ -245,17 +264,21 @@ pub fn fold_function_parameter_into_env(
           type_: option.Some(glance_type),
           ..,
         ) ->
-          case types.type_(environment, glance_type) {
+          case types.type_with_store(environment, store, glance_type) {
             Error(error) -> list.Stop(Error(error))
-            Ok(check_type) ->
+            Ok(#(store, check_type)) -> {
+              let #(store, generic_vars, converted) =
+                freshen_generics(store, generic_vars, check_type)
               list.Continue(
                 Ok(FunctionParamState(
                   store,
-                  types.add_or_update_def_in_env(environment, name, check_type),
+                  types.add_or_update_def_in_env(environment, name, converted),
                   publicity,
-                  inferred,
+                  [#(index, converted), ..inferred],
+                  generic_vars,
                 )),
               )
+            }
           }
 
         glance.FunctionParameter(
@@ -264,73 +287,147 @@ pub fn fold_function_parameter_into_env(
           ..,
         ) ->
           list.Continue(
-            Ok(FunctionParamState(store, environment, publicity, inferred)),
+            Ok(FunctionParamState(
+              store,
+              environment,
+              publicity,
+              inferred,
+              generic_vars,
+            )),
           )
       }
   }
 }
 
-/// Ensure variant constructors are added as function types to the environment's
-/// definition.
-pub fn fold_variant_constructors_into_env(
-  state: EnvStateResult(glance.CustomType),
-  variant: glance.Variant,
-) -> EnvStateFold(glance.CustomType) {
-  case state {
-    Error(error) -> list.Stop(Error(error))
-    Ok(types.EnvState(environment, glance_custom_type)) ->
-      {
-        use callable_state <- result.try(
-          variant.fields
-          |> list.fold_until(
-            Ok(empty_state(environment)),
-            fold_variant_field_into_callable,
-          ),
-        )
-
-        // Build the constructor's return type through `type_` so that built-in
-        // generic types (List, Result, Option) use their dedicated
-        // representations, matching how annotations of the same name resolve.
-        let return_glance_type =
-          glance.NamedType(
-            glance.Span(-1, -1),
-            glance_custom_type.name,
-            option.None,
-            list.map(glance_custom_type.parameters, fn(parameter) {
-              glance.VariableType(glance.Span(-1, -1), parameter)
-            }),
-          )
-        use return_type <- result.try(types.type_(
-          environment,
-          return_glance_type,
-        ))
-        let constructor_type = case callable_state.reversed_by_position {
-          // Zero-argument constructors are values of the custom type itself,
-          // not functions, so store them as their plain return type. This
-          // keeps them distinguishable from zero-argument functions.
-          [] -> return_type
-          _ ->
-            to_callable_type_with_original(
-              callable_state,
-              return_type,
-              dummy_function(),
-            )
-        }
-
-        let environment =
-          environment
-          |> types.add_or_update_def_in_env(variant.name, constructor_type)
-
-        case glance_custom_type.publicity {
-          glance.Private -> Ok(types.EnvState(environment, glance_custom_type))
-          glance.Public ->
-            Ok(types.EnvState(
-              types.publish_def_in_env(environment, variant.name),
-              glance_custom_type,
-            ))
+/// Replace any `GenericTypeVariable` in a type with a fresh inference variable,
+/// reusing the same fresh variable for the same generic name. This keeps the
+/// type variables introduced by a function's annotations shared across all of
+/// the function's parameters, so inference can tie them to the return type.
+fn freshen_generics(
+  store: TypeStore,
+  generic_vars: dict.Dict(String, Type),
+  type_: Type,
+) -> #(TypeStore, dict.Dict(String, Type), Type) {
+  case type_ {
+    types.GenericTypeVariable(name) ->
+      case dict.get(generic_vars, name) {
+        Ok(existing) -> #(store, generic_vars, existing)
+        Error(_) -> {
+          let #(store, fresh) = types.fresh_var(store)
+          #(store, dict.insert(generic_vars, name, fresh), fresh)
         }
       }
-      |> list.Continue
+    types.CustomType(module, name, parameters, inferred_variant) -> {
+      let #(store, generic_vars, parameters) =
+        list.fold(parameters, #(store, generic_vars, []), fn(state, parameter) {
+          let #(store, generic_vars, acc) = state
+          let #(store, generic_vars, parameter) =
+            freshen_generics(store, generic_vars, parameter)
+          #(store, generic_vars, [parameter, ..acc])
+        })
+      #(
+        store,
+        generic_vars,
+        types.CustomType(
+          module,
+          name,
+          list.reverse(parameters),
+          inferred_variant,
+        ),
+      )
+    }
+    types.TupleType(elements) -> {
+      let #(store, generic_vars, elements) =
+        list.fold(elements, #(store, generic_vars, []), fn(state, element) {
+          let #(store, generic_vars, acc) = state
+          let #(store, generic_vars, element) =
+            freshen_generics(store, generic_vars, element)
+          #(store, generic_vars, [element, ..acc])
+        })
+      #(store, generic_vars, types.TupleType(list.reverse(elements)))
+    }
+    types.CallableType(parameters, labels, return) -> {
+      let #(store, generic_vars, parameters) =
+        list.fold(parameters, #(store, generic_vars, []), fn(state, parameter) {
+          let #(store, generic_vars, acc) = state
+          let #(store, generic_vars, parameter) =
+            freshen_generics(store, generic_vars, parameter)
+          #(store, generic_vars, [parameter, ..acc])
+        })
+      let #(store, generic_vars, return) =
+        freshen_generics(store, generic_vars, return)
+      #(
+        store,
+        generic_vars,
+        types.CallableType(list.reverse(parameters), labels, return),
+      )
+    }
+    _ -> #(store, generic_vars, type_)
+  }
+}
+
+/// Ensure variant constructors are added as function types to the environment's
+/// definition.
+pub fn fold_variant_constructor_into_env(
+  state: EnvStateResult(glance.CustomType),
+  variant: glance.Variant,
+  variant_index: Int,
+) -> EnvStateResult(glance.CustomType) {
+  case state {
+    Error(error) -> Error(error)
+    Ok(types.EnvState(environment, glance_custom_type)) -> {
+      use callable_state <- result.try(
+        variant.fields
+        |> list.fold_until(
+          Ok(empty_state(environment)),
+          fold_variant_field_into_callable,
+        ),
+      )
+
+      // Build the constructor's return type through `type_` so that built-in
+      // generic types (List, Result, Option) use their dedicated
+      // representations, matching how annotations of the same name resolve.
+      let return_glance_type =
+        glance.NamedType(
+          glance.Span(-1, -1),
+          glance_custom_type.name,
+          option.None,
+          list.map(glance_custom_type.parameters, fn(parameter) {
+            glance.VariableType(glance.Span(-1, -1), parameter)
+          }),
+        )
+      use return_type <- result.try(types.type_(environment, return_glance_type))
+      // Remember which variant this constructor builds so that field access
+      // on a value known (via pattern matching) to be this variant resolves
+      // the field's type from the correct constructor.
+      let return_type =
+        types.set_custom_type_variant(return_type, variant_index)
+      let constructor_type = case callable_state.reversed_by_position {
+        // Zero-argument constructors are values of the custom type itself,
+        // not functions, so store them as their plain return type. This
+        // keeps them distinguishable from zero-argument functions.
+        [] -> return_type
+        _ ->
+          to_callable_type_with_original(
+            callable_state,
+            return_type,
+            dummy_function(),
+          )
+      }
+
+      let environment =
+        environment
+        |> types.add_or_update_def_in_env(variant.name, constructor_type)
+
+      case glance_custom_type.publicity {
+        glance.Private -> Ok(types.EnvState(environment, glance_custom_type))
+        glance.Public ->
+          Ok(types.EnvState(
+            types.publish_def_in_env(environment, variant.name),
+            glance_custom_type,
+          ))
+      }
+    }
   }
 }
 

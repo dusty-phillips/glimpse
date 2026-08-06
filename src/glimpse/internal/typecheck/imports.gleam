@@ -66,10 +66,13 @@ pub fn fold_import_from_env(
               }),
           )
 
+        // The namespace lives only in `module_imports`, never in `definitions`,
+        // so an unqualified-imported value (e.g. `import element.{element}`)
+        // keeps resolving for bare calls while `element.element` falls back to
+        // module access.
         let environment = case add_namespace {
           True ->
             environment
-            |> types.add_or_update_def_in_env(namespace, namespace_type)
             |> types.add_or_update_namespace_in_env(namespace, namespace_type)
           False -> environment
         }
