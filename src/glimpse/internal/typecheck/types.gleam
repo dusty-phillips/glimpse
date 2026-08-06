@@ -1090,6 +1090,17 @@ pub fn add_import_mapping_to_env(
   )
 }
 
+/// The name a module is accessible under in this environment: the alias it
+/// was imported with (its `import_names` entry), or its own name when it was
+/// never imported.
+pub fn module_access_name(
+  environment: Environment,
+  module_name: String,
+) -> String {
+  dict.get(environment.import_names, module_name)
+  |> result.unwrap(module_name)
+}
+
 pub fn lookup_variable_type(
   environment: Environment,
   name: String,

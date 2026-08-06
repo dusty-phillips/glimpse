@@ -449,13 +449,33 @@ fn pattern_must_be_irrefutable(
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   case checked {
     Error(check_error) -> Error(check_error)
-    Ok(state) ->
-      case exhaustive.check(environment, [type_], [[pattern]]) {
+    Ok(state) -> {
+      let #(store, _environment) = state
+      case
+        exhaustive.check(environment, resolve_subjects(store, [type_]), [
+          [pattern],
+        ])
+      {
         option.Some(missing) ->
           Error(error.InexhaustivePattern(string.join(missing, "\n")))
         option.None -> Ok(state)
       }
+    }
   }
+}
+
+/// Resolve subject types against the current store so unbound inference
+/// variables that the clause patterns have since unified (e.g. an unannotated
+/// parameter matched against `[first, ..rest]`) are seen as their concrete
+/// shape by the exhaustiveness check.
+fn resolve_subjects(
+  store: types.TypeStore,
+  subject_types: List(types.Type),
+) -> List(types.Type) {
+  list.map(subject_types, fn(type_) {
+    let #(_store, resolved) = types.resolve(store, type_)
+    resolved
+  })
 }
 
 /// Typecheck an expression and return its type.
@@ -1505,15 +1525,25 @@ fn custom_type_variant_count(
 ) -> Int {
   let source = case module_name {
     "." -> environment.current_module
-    other -> other
+    other -> types.module_access_name(environment, other)
+  }
+  let definitions = case source == environment.current_module {
+    True -> environment.definitions
+    False ->
+      case dict.get(environment.module_imports, source) {
+        Ok(types.NamespaceType(defs, _custom_types)) -> defs
+        _ -> environment.definitions
+      }
   }
   let our = fn(type_) -> option.Option(Int) {
     case type_ {
-      types.CustomType(m, n, _, variant) if m == source && n == name -> variant
+      types.CustomType(m, n, _, variant)
+        if n == name && { m == module_name || m == source }
+      -> variant
       _ -> option.None
     }
   }
-  environment.definitions
+  definitions
   |> dict.values
   |> list.fold(set.new(), fn(seen, type_) {
     let candidate = case type_ {
@@ -1728,7 +1758,13 @@ fn case_expression(
 
   case clauses {
     [] ->
-      case exhaustive.check(environment, subject_types, []) {
+      case
+        exhaustive.check(
+          environment,
+          resolve_subjects(store, subject_types),
+          [],
+        )
+      {
         option.Some(missing) ->
           Error(error.InexhaustivePattern(string.join(missing, "\n")))
         option.None -> Error(error.CaseClauseMismatch("no clauses", "any"))
@@ -1801,12 +1837,20 @@ fn case_expression(
         |> list.flatten
       case checked {
         Error(check_error) -> Error(check_error)
-        Ok(case_state) ->
-          case exhaustive.check(environment, subject_types, alternatives) {
+        Ok(case_state) -> {
+          let #(store, _case_type) = case_state
+          case
+            exhaustive.check(
+              environment,
+              resolve_subjects(store, subject_types),
+              alternatives,
+            )
+          {
             option.Some(missing) ->
               Error(error.InexhaustivePattern(string.join(missing, "\n")))
             option.None -> Ok(case_state)
           }
+        }
       }
     }
   }

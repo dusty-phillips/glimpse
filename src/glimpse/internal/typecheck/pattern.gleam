@@ -391,11 +391,26 @@ fn lookup_constructor(
   case module {
     option.None -> types.lookup_variable_type(environment, constructor)
     option.Some(module_name) -> {
-      case dict.get(environment.module_imports, module_name) {
-        Ok(types.NamespaceType(definitions, _custom_types)) ->
-          dict.get(definitions, constructor)
+      let definitions = fn(alias: String) {
+        case dict.get(environment.module_imports, alias) {
+          Ok(types.NamespaceType(definitions, _custom_types)) ->
+            option.Some(definitions)
+          _ -> option.None
+        }
+      }
+      // The type's module field carries the full module name (e.g.
+      // `gleam/otp/actor`) while imports register namespaces under the alias
+      // used in source (`actor`), so resolve through `import_names`.
+      case
+        definitions(module_name)
+        |> option.or(
+          definitions(types.module_access_name(environment, module_name)),
+        )
+      {
+        option.Some(module_definitions) ->
+          dict.get(module_definitions, constructor)
           |> result.replace_error(error.InvalidName(constructor))
-        _ -> Error(error.InvalidName(constructor))
+        option.None -> Error(error.InvalidName(constructor))
       }
     }
   }

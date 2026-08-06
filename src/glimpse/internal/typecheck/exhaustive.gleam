@@ -5,6 +5,21 @@ import gleam/option
 import gleam/result
 import glimpse/internal/typecheck/types
 
+/// How many times a recursive type may expand into itself while computing a
+/// subject's mode. Deeper expansions of list tails and recursive custom type
+/// fields become `Infinite`, which keeps the mode finite while still allowing
+/// patterns like `[first, second]` to split the tail into `[]` and `[..]`.
+const mode_expansion_depth = 8
+
+fn seen_count(seen: List(String), name: String) -> Int {
+  list.fold(seen, 0, fn(count, item) {
+    case item == name {
+      True -> count + 1
+      False -> count
+    }
+  })
+}
+
 /// Decision-tree exhaustiveness checking, mirroring the algorithm the official
 /// Gleam compiler uses (`compiler-core/src/exhaustiveness.rs`), which is based
 /// on Luc Maranget's "Compiling Pattern Matching to good Decision Trees" and
@@ -130,13 +145,15 @@ fn mode_of_guarded(
     | types.FloatType
     | types.StringType
     | types.BitArrayType
-    | types.NilType
     | types.Var(..)
     | types.GenericTypeVariable(..)
     | types.InferredReturn
     | types.CallableType(..)
     | types.GenericCallableType(..)
     | types.NamespaceType(..) -> Infinite
+    // `Nil` is a custom type with a single constructor, so a `Nil` pattern
+    // covers every value of a `Nil`-typed subject.
+    types.NilType -> Finite([Field("Nil", [])])
     types.BoolType -> Finite([Field("True", []), Field("False", [])])
     types.TupleType(elements) ->
       Finite([
@@ -146,10 +163,17 @@ fn mode_of_guarded(
         ),
       ])
     types.CustomType("gleam", "List", [element], _) ->
-      Finite([
-        Field("[..]", [mode_of_guarded(environment, seen, element), Infinite]),
-        Field("[]", []),
-      ])
+      case seen_count(seen, "List") >= mode_expansion_depth {
+        True -> Infinite
+        False ->
+          Finite([
+            Field("[..]", [
+              mode_of_guarded(environment, seen, element),
+              mode_of_guarded(environment, ["List", ..seen], type_),
+            ]),
+            Field("[]", []),
+          ])
+      }
     // The prelude `Result` pre-registers no variant index on its constructors,
     // so build its `Ok`/`Error` fields from the concrete type arguments.
     types.CustomType("gleam", "Result", [ok_type, error_type], _) ->
@@ -157,8 +181,8 @@ fn mode_of_guarded(
         Field("Ok", [mode_of_guarded(environment, seen, ok_type)]),
         Field("Error", [mode_of_guarded(environment, seen, error_type)]),
       ])
-    types.CustomType(module, name, _, _) ->
-      case constructors(environment, seen, module, name) {
+    types.CustomType(module, name, parameters, _) ->
+      case constructors(environment, seen, module, name, parameters) {
         option.Some(fields) -> Finite(fields)
         option.None -> Infinite
       }
@@ -173,6 +197,21 @@ fn constructors(
   seen: List(String),
   module_name: String,
   name: String,
+  subject_parameters: List(types.Type),
+) -> option.Option(List(Field)) {
+  case seen_count(seen, name) >= mode_expansion_depth {
+    True -> option.None
+    False ->
+      constructors_(environment, seen, module_name, name, subject_parameters)
+  }
+}
+
+fn constructors_(
+  environment: types.Environment,
+  seen: List(String),
+  module_name: String,
+  name: String,
+  subject_parameters: List(types.Type),
 ) -> option.Option(List(Field)) {
   let source = case module_name {
     "." -> environment.current_module
@@ -180,11 +219,26 @@ fn constructors(
   }
   let definitions = case source == environment.current_module {
     True -> environment.definitions
-    False ->
-      case dict.get(environment.module_imports, source) {
-        Ok(types.NamespaceType(nested_defs, _)) -> nested_defs
-        _ -> environment.definitions
+    False -> {
+      let from_namespace = fn(alias: String) {
+        dict.get(environment.module_imports, alias)
+        |> result.map(fn(namespace) {
+          case namespace {
+            types.NamespaceType(nested_defs, _) -> nested_defs
+            _ -> dict.new()
+          }
+        })
       }
+      case from_namespace(source) {
+        Ok(nested_defs) -> nested_defs
+        Error(_) ->
+          // Namespaces are registered under their short alias (e.g. `order`
+          // for `import gleam/order`), so resolve the full module name carried
+          // by the custom type through the import mapping.
+          from_namespace(types.module_access_name(environment, source))
+          |> result.unwrap(environment.definitions)
+      }
+    }
   }
   // A definition is a variant constructor when its own return type is the
   // custom type; make this distinction by the presence of a variant index. A
@@ -204,31 +258,54 @@ fn constructors(
   }
   let by_index =
     dict.fold(definitions, dict.new(), fn(fields, def_name, def_type) {
-      let #(index, parameters) = case def_type {
-        types.CallableType(parameters, _, return_) ->
-          case variant_index_of(return_) {
-            option.Some(i) -> #(option.Some(i), parameters)
-            option.None -> #(option.None, [])
-          }
-        types.GenericCallableType(parameters, _, return_, _) ->
-          case variant_index_of(return_) {
-            option.Some(i) -> #(option.Some(i), parameters)
-            option.None -> #(option.None, [])
-          }
-        _ -> #(variant_index_of(def_type), [])
+      let #(index, parameters, return_) = case def_type {
+        types.CallableType(parameters, _, return_) -> #(
+          variant_index_of(return_),
+          parameters,
+          return_,
+        )
+        types.GenericCallableType(parameters, _, return_, _) -> #(
+          variant_index_of(return_),
+          parameters,
+          return_,
+        )
+        _ -> #(variant_index_of(def_type), [], def_type)
       }
       case index {
-        option.Some(variant) ->
+        option.Some(variant) -> {
+          // The definition's field types mention the type's formal parameters;
+          // substitute the subject's actual type arguments so e.g. an
+          // `Option(CaCert)` subject splits `Some` with the payload mode of
+          // `CaCert` rather than of the generic `a`.
+          let substitutions = case return_ {
+            types.CustomType(_, _, formal_params, _) ->
+              list.zip(formal_params, subject_parameters)
+              |> list.fold([], fn(acc, pair) {
+                let #(formal, actual) = pair
+                case formal {
+                  types.GenericTypeVariable(parameter_name) -> [
+                    #(parameter_name, actual),
+                    ..acc
+                  ]
+                  _ -> acc
+                }
+              })
+              |> dict.from_list
+            _ -> dict.new()
+          }
           dict.insert(
             fields,
             variant,
             Field(
               def_name,
               list.map(parameters, fn(param) {
+                let param =
+                  types.substitute_type_variables(param, substitutions)
                 mode_of_guarded(environment, [name, ..seen], param)
               }),
             ),
           )
+        }
         option.None -> fields
       }
     })

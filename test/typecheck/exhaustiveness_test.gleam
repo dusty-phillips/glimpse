@@ -62,3 +62,81 @@ pub fn irrefutable_let_patterns_are_accepted_test() {
     }",
   )
 }
+
+pub fn recursive_list_patterns_are_exhaustive_test() {
+  helpers.ok_module_typecheck(
+    "pub fn main(xs: List(Int)) -> Int {
+      case xs {
+        [] -> 0
+        [x] -> 1
+        [x, y, ..rest] -> 2
+      }
+    }",
+  )
+}
+
+pub fn list_case_missing_fixed_length_and_tail_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn main(xs: List(Int)) -> Int {
+        case xs { [x, y] -> 1 }
+      }",
+    )
+    == error.InexhaustivePattern("[]\n[]\n[..]")
+}
+
+pub fn list_case_missing_two_element_pattern_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn main(xs: List(Int)) -> Int {
+        case xs { [] -> 0 [x] -> 1 }
+      }",
+    )
+    == error.InexhaustivePattern("[..]")
+}
+
+pub fn recursive_custom_type_case_is_exhaustive_test() {
+  helpers.ok_module_typecheck(
+    "pub type Tree { Leaf(Int) Node(Tree, Tree) }
+pub fn main(t: Tree) -> Int {
+  case t {
+    Leaf(_) -> 0
+    Node(left, right) -> 1 + main(left) + main(right)
+  }
+}",
+  )
+}
+
+pub fn generic_type_payload_patterns_are_exhaustive_test() {
+  helpers.ok_module_typecheck(
+    "pub type CaCert {
+  CaCertFile(path: String)
+  CaCertData(certs: List(BitArray))
+}
+pub type Wrapper(a) {
+  Wrap(a)
+}
+pub fn main(wrapper: Wrapper(CaCert)) -> Int {
+  case wrapper {
+    Wrap(CaCertFile(path)) -> 1
+    Wrap(CaCertData(certs)) -> 2
+  }
+}",
+  )
+}
+
+pub fn generic_type_payload_missing_constructor_is_inexhaustive_test() {
+  assert helpers.error_module_typecheck(
+      "pub type CaCert {
+  CaCertFile(path: String)
+  CaCertData(certs: List(BitArray))
+}
+pub type Wrapper(a) {
+  Wrap(a)
+}
+pub fn main(wrapper: Wrapper(CaCert)) -> Int {
+  case wrapper {
+    Wrap(CaCertFile(path)) -> 1
+  }
+}",
+    )
+    == error.InexhaustivePattern("CaCertData")
+}
