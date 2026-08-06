@@ -130,21 +130,98 @@ pub fn fresh_var_with_source(
   )
 }
 
-/// The generic variable name a type's inference variable was created for, if
-/// any, resolving through links.
+/// The generic variable name a type's inference variable was created for. A
+/// variable's own tag wins over any tag reachable through links, so tags
+/// survive unification.
 pub fn var_source(store: TypeStore, type_: Type) -> Option(String) {
   case type_ {
     Var(id) -> {
-      case dict.get(store.vars, id) {
-        Ok(Link(linked)) -> var_source(store, linked)
-        Ok(Unbound) | Error(_) ->
-          case dict.get(store.var_sources, id) {
-            Ok(name) -> option.Some(name)
-            Error(_) -> option.None
+      case dict.get(store.var_sources, id) {
+        Ok(name) -> option.Some(name)
+        Error(_) ->
+          case dict.get(store.vars, id) {
+            Ok(Link(linked)) -> var_source(store, linked)
+            Ok(Unbound) | Error(_) -> option.None
           }
       }
     }
     _ -> option.None
+  }
+}
+
+/// Tag an inference variable with the generic variable name it stands for,
+/// returning the store with the tag recorded (and the type unchanged).
+pub fn tag_var_source(
+  store: TypeStore,
+  type_: Type,
+  source: String,
+) -> #(TypeStore, Type) {
+  case type_ {
+    Var(id) -> #(
+      TypeStore(
+        ..store,
+        var_sources: dict.insert(store.var_sources, id, source),
+      ),
+      type_,
+    )
+    _ -> #(store, type_)
+  }
+}
+
+/// Whether a var with the given source appears nested inside `type_` (inside a
+/// constructor, tuple, or function, but not as the type itself). A return type
+/// that embeds its own call's return inside a container is infinitely
+/// recursive (`[f(t)]`), while one that merely *is* the call's return is not
+/// (`f(x) { f(x) }`).
+pub fn nested_var_has_source(
+  store: TypeStore,
+  type_: Type,
+  source: String,
+) -> Bool {
+  case type_ {
+    Var(_) -> False
+    GenericTypeVariable(_)
+    | IntType
+    | FloatType
+    | StringType
+    | BoolType
+    | BitArrayType
+    | NilType
+    | InferredReturn -> False
+    CustomType(_, _, parameters, _) ->
+      list.any(parameters, var_has_source(store, _, source))
+    TupleType(elements) -> list.any(elements, var_has_source(store, _, source))
+    CallableType(parameters, _, return) ->
+      list.any(parameters, var_has_source(store, _, source))
+      || var_has_source(store, return, source)
+    GenericCallableType(parameters, _, return, _) ->
+      list.any(parameters, var_has_source(store, _, source))
+      || var_has_source(store, return, source)
+    TypeAlias(_, aliased) -> var_has_source(store, aliased, source)
+    NamespaceType(_, _) -> False
+  }
+}
+
+/// Whether a var with the given source appears anywhere in `type_`, including
+/// as the type itself.
+fn var_has_source(store: TypeStore, type_: Type, source: String) -> Bool {
+  case var_source(store, type_) {
+    option.Some(found) -> found == source
+    option.None ->
+      case type_ {
+        CustomType(_, _, parameters, _) ->
+          list.any(parameters, var_has_source(store, _, source))
+        TupleType(elements) ->
+          list.any(elements, var_has_source(store, _, source))
+        CallableType(parameters, _, return) ->
+          list.any(parameters, var_has_source(store, _, source))
+          || var_has_source(store, return, source)
+        GenericCallableType(parameters, _, return, _) ->
+          list.any(parameters, var_has_source(store, _, source))
+          || var_has_source(store, return, source)
+        TypeAlias(_, aliased) -> var_has_source(store, aliased, source)
+        _ -> False
+      }
   }
 }
 
@@ -842,7 +919,12 @@ pub fn record_generic_edge(
     dict.get(store.generic_edges, from)
     |> result.unwrap([])
   let merged = list.unique(list.append(existing, embedded))
-  case list.any(merged, fn(name) { reaches(store.generic_edges, name, from) }) {
+  case
+    list.any(merged, fn(name) {
+      // A variable embedding itself is trivial, not infinitely recursive.
+      name != from && reaches(store.generic_edges, name, from)
+    })
+  {
     True -> Error(error.RecursiveType)
     False ->
       Ok(

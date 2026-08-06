@@ -118,6 +118,8 @@ pub type TypeCheckError {
   FloatOutOfRange(value: String)
   /// Raised when a value is only implemented for another build target.
   UnsupportedTarget(name: String)
+  /// Raised when two imports resolve to the same local module name.
+  DuplicateImport(name: String)
 }
 
 pub type TypeCheckResult(a) =

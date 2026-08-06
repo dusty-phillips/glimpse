@@ -40,6 +40,15 @@ pub fn fold_import_from_env(
         Error(_) -> list.Stop(Error(error.InvalidName(module)))
         Ok(module_env) -> {
           let environment_result = {
+            use _ <- result.try(
+              case
+                add_namespace
+                && dict.has_key(environment.module_imports, namespace)
+              {
+                True -> Error(error.DuplicateImport(namespace))
+                False -> Ok(Nil)
+              },
+            )
             use environment <- result.try(fold_values_into_env(
               environment,
               module_env,

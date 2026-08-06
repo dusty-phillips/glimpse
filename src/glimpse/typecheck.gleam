@@ -4,6 +4,7 @@ import gleam/list
 import gleam/option
 import gleam/result
 import gleam/set
+import gleam/string
 import glimpse
 import glimpse/error
 import glimpse/internal/import_dependencies
@@ -809,127 +810,155 @@ pub fn function(
     param_state.store,
     function.body,
   ))
-  let environment = types.flush_generic_edges(environment, store)
+  // A return type that embeds a nested call to the function itself is
+  // infinitely recursive (e.g. `f(xs) { case xs { [h, ..t] -> [f(t)] } }`);
+  // a return that merely *is* a call to the function is fine.
+  case types.nested_var_has_source(store, body_type, "r_" <> function.name) {
+    True -> Error(error.RecursiveType)
+    False -> {
+      let environment = types.flush_generic_edges(environment, store)
 
-  case function.return {
-    option.None -> {
-      // No return annotation: infer return type and parameter types
-      // Resolve all inferred parameter types and the return type from the store
-      let #(store, resolved_inferred) =
-        list.fold(param_state.inferred, #(store, []), fn(state, item) {
-          let #(index, var_type) = item
-          let #(store, acc) = state
-          let #(store, resolved) = types.resolve(store, var_type)
-          #(store, [#(index, resolved), ..acc])
-        })
-
-      let #(store, resolved_return) = types.resolve(store, body_type)
-
-      // The body called a same-module function earlier in source order whose
-      // inferred return is still the `InferredReturn` placeholder during the
-      // first pass. Keep this function's placeholder signature; the second pass
-      // re-checks it against the callee's now-final return.
-      case resolved_return == types.InferredReturn {
-        True -> Ok(types.EnvState(environment, function))
-
-        False -> {
-          // Generalise all inferred params AND return type together for consistent naming
-          let param_types =
-            list.map(resolved_inferred, fn(item) {
-              let #(_, t) = item
-              t
-            })
-          let all_types = list.append(param_types, [resolved_return])
-          let generalised_all = types.generalise_multi(store, all_types)
-
-          // Split back into params and return
-          let generalised_params =
-            list.take(generalised_all, list.length(resolved_inferred))
-          let generalised_return =
-            list.last(generalised_all)
-            |> result.unwrap(types.NilType)
-
-          // Build resolved_inferred with generalised types
-          let resolved_inferred =
-            list.zip(resolved_inferred, generalised_params)
-            |> list.map(fn(pair) {
-              let #(#(index, _), gen_type) = pair
-              #(index, gen_type)
+      case function.return {
+        option.None -> {
+          // No return annotation: infer return type and parameter types
+          // Resolve all inferred parameter types and the return type from the store
+          let #(store, resolved_inferred) =
+            list.fold(param_state.inferred, #(store, []), fn(state, item) {
+              let #(index, var_type) = item
+              let #(store, acc) = state
+              let #(store, resolved) = types.resolve(store, var_type)
+              #(store, [#(index, resolved), ..acc])
             })
 
-          // Build updated function with inferred parameter types
-          let build_updated_param = fn(
-            param: glance.FunctionParameter,
-            index: Int,
-          ) -> glance.FunctionParameter {
-            let found =
-              list.filter(resolved_inferred, fn(item) {
-                case item {
-                  #(i, _) -> i == index
+          let #(store, resolved_return) = types.resolve(store, body_type)
+
+          // The body called a same-module function earlier in source order whose
+          // inferred return is still the `InferredReturn` placeholder during the
+          // first pass, or returned the tagged `r_`-variable of a placeholder
+          // call. Keep this function's placeholder signature; the second pass
+          // re-checks it against the callee's now-final return.
+          let placeholder_return =
+            resolved_return == types.InferredReturn
+            || case types.var_source(store, resolved_return) {
+              option.Some(name) -> string.starts_with(name, "r_")
+              option.None -> False
+            }
+          case placeholder_return {
+            True -> Ok(types.EnvState(environment, function))
+
+            False -> {
+              // Generalise all inferred params AND return type together for consistent naming
+              let param_types =
+                list.map(resolved_inferred, fn(item) {
+                  let #(_, t) = item
+                  t
+                })
+              let all_types = list.append(param_types, [resolved_return])
+              let generalised_all = types.generalise_multi(store, all_types)
+
+              // Split back into params and return
+              let generalised_params =
+                list.take(generalised_all, list.length(resolved_inferred))
+              let generalised_return =
+                list.last(generalised_all)
+                |> result.unwrap(types.NilType)
+
+              // Build resolved_inferred with generalised types
+              let resolved_inferred =
+                list.zip(resolved_inferred, generalised_params)
+                |> list.map(fn(pair) {
+                  let #(#(index, _), gen_type) = pair
+                  #(index, gen_type)
+                })
+
+              // Build updated function with inferred parameter types
+              let build_updated_param = fn(
+                param: glance.FunctionParameter,
+                index: Int,
+              ) -> glance.FunctionParameter {
+                let found =
+                  list.filter(resolved_inferred, fn(item) {
+                    case item {
+                      #(i, _) -> i == index
+                    }
+                  })
+                case found {
+                  [#(_, inferred_type), ..] ->
+                    glance.FunctionParameter(
+                      ..param,
+                      // Only write the annotation back when the type can be
+                      // expressed in the module's own imports; otherwise leave the
+                      // param unannotated and let the next pass re-infer it.
+                      type_: case types.can_render(environment, inferred_type) {
+                        True ->
+                          option.Some(types.to_glance(
+                            environment,
+                            inferred_type,
+                          ))
+                        False -> option.None
+                      },
+                    )
+                  [] -> param
                 }
-              })
-            case found {
-              [#(_, inferred_type), ..] ->
-                glance.FunctionParameter(
-                  ..param,
-                  // Only write the annotation back when the type can be
+              }
+
+              let updated_parameters =
+                list.index_map(function.parameters, fn(param, index) {
+                  build_updated_param(param, index)
+                })
+
+              let updated_function =
+                glance.Function(
+                  ..function,
+                  parameters: updated_parameters,
+                  // Only write the inferred return back when the type can be
                   // expressed in the module's own imports; otherwise leave the
-                  // param unannotated and let the next pass re-infer it.
-                  type_: case types.can_render(environment, inferred_type) {
+                  // original annotation (or none) in place.
+                  return: case
+                    types.can_render(environment, generalised_return)
+                  {
                     True ->
-                      option.Some(types.to_glance(environment, inferred_type))
-                    False -> option.None
+                      option.Some(types.to_glance(
+                        environment,
+                        generalised_return,
+                      ))
+                    False -> function.return
                   },
                 )
-              [] -> param
+
+              use updated_environment <- result.try(
+                functions.update_function_signature(
+                  environment,
+                  updated_function,
+                ),
+              )
+
+              Ok(types.EnvState(updated_environment, updated_function))
             }
           }
-
-          let updated_parameters =
-            list.index_map(function.parameters, fn(param, index) {
-              build_updated_param(param, index)
-            })
-
-          let updated_function =
-            glance.Function(
-              ..function,
-              parameters: updated_parameters,
-              // Only write the inferred return back when the type can be
-              // expressed in the module's own imports; otherwise leave the
-              // original annotation (or none) in place.
-              return: case types.can_render(environment, generalised_return) {
-                True ->
-                  option.Some(types.to_glance(environment, generalised_return))
-                False -> function.return
-              },
-            )
-
-          use updated_environment <- result.try(
-            functions.update_function_signature(environment, updated_function),
-          )
-
-          Ok(types.EnvState(updated_environment, updated_function))
         }
-      }
-    }
-    option.Some(expected_type) -> {
-      // Explicit return annotation: check that body type matches
-      use #(store, expected) <- result.try(types.type_with_store(
-        param_state.environment,
-        store,
-        expected_type,
-      ))
-      case types.unify(store, param_state.environment, body_type, expected) {
-        Error(_) -> {
-          let #(store, resolved_body) = types.resolve(store, body_type)
-          let #(_store, resolved_expected) = types.resolve(store, expected)
-          Error(error.InvalidReturnType(
-            function.name,
-            types.to_string(param_state.environment, resolved_body),
-            types.to_string(param_state.environment, resolved_expected),
+        option.Some(expected_type) -> {
+          // Explicit return annotation: check that body type matches
+          use #(store, expected) <- result.try(types.type_with_store(
+            param_state.environment,
+            store,
+            expected_type,
           ))
+          case
+            types.unify(store, param_state.environment, body_type, expected)
+          {
+            Error(_) -> {
+              let #(store, resolved_body) = types.resolve(store, body_type)
+              let #(_store, resolved_expected) = types.resolve(store, expected)
+              Error(error.InvalidReturnType(
+                function.name,
+                types.to_string(param_state.environment, resolved_body),
+                types.to_string(param_state.environment, resolved_expected),
+              ))
+            }
+            Ok(_) -> Ok(types.EnvState(environment, function))
+          }
         }
-        Ok(_) -> Ok(types.EnvState(environment, function))
       }
     }
   }

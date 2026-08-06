@@ -804,7 +804,10 @@ fn list_expression(
   let element_type_result = case elements {
     [] -> {
       case rest {
-        option.None -> Ok(#(store, types.GenericTypeVariable("todo")))
+        option.None -> {
+          let #(store, element) = types.fresh_var(store)
+          Ok(#(store, element))
+        }
         option.Some(_) ->
           Error(error.InvalidType("unknown", "List", "empty list with rest"))
       }
@@ -2198,11 +2201,23 @@ pub fn call(
 
   // While a same-module callee's signature is still a placeholder, record how
   // its generic parameters are constrained by the arguments, so a cycle across
-  // functions is reported as a recursive type.
-  use store <- result.try(case target {
-    glance.Variable(_, callee) ->
-      record_placeholder_constraints(environment, store, callee, arguments)
-    _ -> Ok(store)
+  // functions is reported as a recursive type. The call's return is replaced
+  // with a fresh variable tagged with the callee's return name, so a caller
+  // whose own return embeds it is detected as infinitely recursive.
+  use #(store, return) <- result.try(case target {
+    glance.Variable(_, callee) -> {
+      let constraints = {
+        record_placeholder_constraints(environment, store, callee, arguments)
+      }
+      constraints
+      |> result.map(fn(store) {
+        case placeholder_callee(environment, callee) {
+          True -> types.fresh_var_with_source(store, "r_" <> callee)
+          False -> #(store, return)
+        }
+      })
+    }
+    _ -> Ok(#(store, return))
   })
 
   Ok(types.resolve(store, return))
@@ -2307,6 +2322,14 @@ fn argument_named_vars(
       })
       |> list.flatten
     _ -> []
+  }
+}
+
+fn placeholder_callee(environment: Environment, callee: String) -> Bool {
+  case dict.get(environment.definitions, callee) {
+    Ok(types.GenericCallableType(_, _, return_, _)) ->
+      is_placeholder_return(return_)
+    _ -> False
   }
 }
 
