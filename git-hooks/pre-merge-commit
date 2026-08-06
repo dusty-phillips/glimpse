@@ -1,0 +1,4 @@
+#!/bin/sh
+# Reject merge commits: keep history linear (rebase or fast-forward instead).
+echo "Merge commits are banned in this repository. Rebase or fast-forward instead." >&2
+exit 1

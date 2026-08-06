@@ -1,0 +1,7 @@
+#!/bin/sh
+# Reject merge commit messages (belt and braces alongside pre-merge-commit).
+if grep -qE '^Merge (branch|remote-tracking branch|tag)' "$1"; then
+  echo "Merge commits are banned in this repository. Rebase or fast-forward instead." >&2
+  exit 1
+fi
+exit 0
