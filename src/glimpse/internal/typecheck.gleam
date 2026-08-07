@@ -1187,7 +1187,7 @@ fn field_access_type(
   container_type: types.Type,
   label: String,
 ) -> error.TypeCheckResult(#(TypeStore, types.Type)) {
-  let #(store, container_type) = types.resolve(store, container_type)
+  let #(store, container_type) = types.resolve_keep_rigid(store, container_type)
   case container_type {
     types.CustomType(module, name, _parameters, inferred_variant) -> {
       let definitions_result = case module == environment.current_module {
@@ -1355,7 +1355,7 @@ fn variant_field_type(
       list.drop(parameters, up_to: position)
       |> list.first
       |> result.unwrap(types.GenericTypeVariable("todo"))
-    let #(_, expected_type) = types.resolve(store, expected_type)
+    let #(_, expected_type) = types.resolve_keep_rigid(store, expected_type)
     #(store, expected_type)
   })
   |> result.map_error(fn(_) {

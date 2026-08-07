@@ -1,3 +1,4 @@
+import glimpse/error
 import typecheck/helpers
 
 /// Field access on a multi-constructor custom type where the constructor names
@@ -59,8 +60,11 @@ pub fn generic_field_access_concrete_container_test() {
 /// parameters into one. Accessing `.function` on `Decoder(key)` and
 /// `Decoder(value)` keeps `key` and `value` distinct.
 pub fn generic_field_access_distinct_params_test() {
-  let #(_module, _env) =
-    helpers.ok_module_typecheck(
+  // `key_decoder.function` is expressed in terms of the *rigid* `key`, so
+  // `#(#(key, key), errors)` conflates `key` with `value` and is rejected,
+  // exactly as real Gleam does.
+  let assert error.InvalidReturnType("pair", _, _) =
+    helpers.error_module_typecheck(
       "pub type Decoder(a) { Decoder(function: fn(Int) -> #(a, String)) }
     pub fn pair(
       key_decoder: Decoder(key),

@@ -296,6 +296,61 @@ pub fn record_update_shorthand_with_generic_value_is_fine_test() {
   )
 }
 
+pub fn field_access_value_in_error_slot_is_rejected_test() {
+  // `maybe_invalid_data` is bound by destructuring `decoder.function(input)`,
+  // whose type is expressed in terms of the rigid `t` of `decoder`. Placing it
+  // in `Error(...)` (the `List(DecodeError)` slot) is rejected.
+  let _ =
+    helpers.error_module_typecheck(
+      "pub type DecodeError {
+      DecodeError
+    }
+
+    pub type Decoder(t) {
+      Decoder(function: fn(Int) -> #(t, List(DecodeError)))
+    }
+
+    pub fn run(input: Int, decoder: Decoder(t)) -> Result(t, List(DecodeError)) {
+      let #(maybe_invalid_data, errors) = decoder.function(input)
+      case errors {
+        [] -> Error(maybe_invalid_data)
+        [_, ..] -> Error(errors)
+      }
+    }",
+    )
+}
+
+pub fn generic_helper_return_in_error_slot_is_rejected_test() {
+  // `max_loop(rest, compare, first)` returns the callee's generic `a`, which
+  // the arguments pin to the caller's rigid `a`; `Error(...)` therefore puts
+  // the rigid `a` in the `Nil` slot.
+  let _ =
+    helpers.error_module_typecheck(
+      "import gleam/order
+
+    fn max_loop(
+      list: List(a),
+      compare: fn(a, a) -> order.Order,
+      max: a,
+    ) -> a {
+      case list {
+        [] -> max
+        [first, ..rest] -> max_loop(rest, compare, first)
+      }
+    }
+
+    pub fn max(
+      list: List(a),
+      compare: fn(a, a) -> order.Order,
+    ) -> Result(a, Nil) {
+      case list {
+        [] -> Error(Nil)
+        [first, ..rest] -> Error(max_loop(rest, compare, first))
+      }
+    }",
+    )
+}
+
 pub fn capture_branches_with_different_generic_names_unify_test() {
   // Each `case` branch is a capture of a polymorphic function. Generalising
   // the two captures can name their type variables differently (one is pinned
