@@ -154,7 +154,7 @@ fn scan_project_dir(
             io.println_error(
               "  Parse error in " <> path <> ": " <> string.inspect(parse_error),
             )
-            Ok(acc)
+            Error("parse error in " <> path)
           }
         }
       }
