@@ -284,6 +284,154 @@ pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
   }
 }
 
+/// Resolve a type while leaving any *rigid* type variables (the `rigid:`-tagged
+/// vars created for a function's declared type parameters) in place. Ordinary
+/// `resolve` collapses a rigid var through its link to the named generic, which
+/// lets later `instantiate` calls mistake it for an instantiable generic and
+/// weaken the rigid check. Unification and binding paths use this variant so
+/// the rigid var's identity survives.
+pub fn resolve_keep_rigid(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
+  case type_ {
+    Var(id) -> {
+      case dict.get(store.var_sources, id) {
+        Ok(source) ->
+          case string.starts_with(source, "rigid:") {
+            True -> #(store, Var(id))
+            False -> follow_rigid(store, id)
+          }
+        Error(_) -> follow_rigid(store, id)
+      }
+    }
+    CallableType(parameters, labels, return) -> {
+      let #(store, parameters) =
+        list.fold(parameters, #(store, []), fn(state, parameter) {
+          let #(store, acc) = state
+          let #(store, parameter) = resolve_keep_rigid(store, parameter)
+          #(store, [parameter, ..acc])
+        })
+      let #(store, return) = resolve_keep_rigid(store, return)
+      #(store, CallableType(list.reverse(parameters), labels, return))
+    }
+    GenericCallableType(parameters, labels, return, original) -> {
+      let #(store, parameters) =
+        list.fold(parameters, #(store, []), fn(state, parameter) {
+          let #(store, acc) = state
+          let #(store, parameter) = resolve_keep_rigid(store, parameter)
+          #(store, [parameter, ..acc])
+        })
+      let #(store, return) = resolve_keep_rigid(store, return)
+      #(
+        store,
+        GenericCallableType(list.reverse(parameters), labels, return, original),
+      )
+    }
+    TupleType(elements) -> {
+      let #(store, elements) =
+        list.fold(elements, #(store, []), fn(state, element) {
+          let #(store, acc) = state
+          let #(store, element) = resolve_keep_rigid(store, element)
+          #(store, [element, ..acc])
+        })
+      #(store, TupleType(list.reverse(elements)))
+    }
+    CustomType(module, name, parameters, inferred_variant) -> {
+      let #(store, parameters) =
+        list.fold(parameters, #(store, []), fn(state, parameter) {
+          let #(store, acc) = state
+          let #(store, parameter) = resolve_keep_rigid(store, parameter)
+          #(store, [parameter, ..acc])
+        })
+      #(
+        store,
+        CustomType(module, name, list.reverse(parameters), inferred_variant),
+      )
+    }
+    _ -> #(store, type_)
+  }
+}
+
+/// Follow a var's link, stopping at any rigid var reached along the way. A
+/// non-rigid var linked to a rigid var resolves to the rigid var itself, not to
+/// the named generic it is pinned to.
+fn follow_rigid(store: TypeStore, id: Int) -> #(TypeStore, Type) {
+  case dict.get(store.vars, id) {
+    Ok(Link(linked)) -> resolve_keep_rigid(store, linked)
+    Ok(Unbound) | Error(_) -> #(store, Var(id))
+  }
+}
+
+/// Whether the type itself is a rigid type variable (tagged `rigid:`), as
+/// opposed to merely containing one. Flexible vars linked to a rigid var also
+/// report rigid through `var_source`'s link-following.
+pub fn is_rigid_var(store: TypeStore, type_: Type) -> Bool {
+  case var_source(store, type_) {
+    option.Some(source) -> string.starts_with(source, "rigid:")
+    option.None -> False
+  }
+}
+
+/// The declared type parameter name a rigid var stands for (the `rigid:`
+/// prefix stripped from its source tag).
+pub fn rigid_var_name(store: TypeStore, type_: Type) -> String {
+  case var_source(store, type_) {
+    option.Some(source) ->
+      case string.starts_with(source, "rigid:") {
+        True -> string.drop_start(source, up_to: 6)
+        False -> ""
+      }
+    option.None -> ""
+  }
+}
+
+/// Unify a rigid type variable against another type. A rigid var can only
+/// unify with its own named generic, another var of the same rigid name, or a
+/// flexible var that adopts the rigid identity. It can never unify with a
+/// concrete or composite type, nor with a different rigid param.
+fn unify_rigid(
+  store: TypeStore,
+  environment: Environment,
+  left: Type,
+  right: Type,
+) -> Result(TypeStore, error.TypeCheckError) {
+  // One side is a rigid var; normalise so `left` is that side. The rigid var
+  // may also be reached through a flexible var linked to it.
+  case rigid_var_name(store, left) {
+    "" ->
+      case rigid_var_name(store, right) {
+        "" -> Error(mismatch_error(environment, left, right))
+        _ -> unify_rigid(store, environment, right, left)
+      }
+    name ->
+      case right {
+        Var(other_id) ->
+          case is_rigid_var(store, Var(other_id)) {
+            True ->
+              case rigid_var_name(store, Var(other_id)) == name {
+                True -> Ok(store)
+                False -> Error(mismatch_error(environment, left, right))
+              }
+            False ->
+              Ok(
+                TypeStore(
+                  ..store,
+                  vars: dict.insert(store.vars, other_id, Link(left)),
+                ),
+              )
+          }
+        GenericTypeVariable("todo") -> Ok(store)
+        InferredReturn -> Ok(store)
+        GenericTypeVariable(other_name) ->
+          case other_name == name {
+            True -> Ok(store)
+            False -> {
+              Error(mismatch_error(environment, left, right))
+            }
+          }
+        _ -> Error(mismatch_error(environment, left, right))
+      }
+  }
+}
+
 /// Create a fresh unbound type variable.
 fn fresh_type(store: TypeStore) -> #(TypeStore, Type) {
   #(
@@ -365,7 +513,7 @@ pub fn extend_tuple(
 ) -> Result(#(TypeStore, Type), Nil) {
   case type_ {
     Var(id) -> {
-      let #(store, resolved) = resolve(store, Var(id))
+      let #(store, resolved) = resolve_keep_rigid(store, Var(id))
       case resolved {
         TupleType(elements) -> {
           case list.drop(elements, up_to: index) |> list.first {
@@ -574,33 +722,51 @@ pub fn unify(
   left: Type,
   right: Type,
 ) -> Result(TypeStore, error.TypeCheckError) {
-  let #(store, left) = resolve(store, left)
-  let #(store, right) = resolve(store, right)
+  let #(store, left) = resolve_keep_rigid(store, left)
+  let #(store, right) = resolve_keep_rigid(store, right)
 
   case left, right {
     Var(lid), Var(rid) if lid == rid -> Ok(store)
     Var(id), _ -> {
-      case occurs_check(store, id, right) {
-        True ->
-          Error(error.InvalidType(
-            to_string(environment, Var(id)),
-            to_string(environment, right),
-            "type variable would be infinitely recursive",
-          ))
+      case is_rigid_var(store, Var(id)) {
+        True -> unify_rigid(store, environment, Var(id), right)
         False ->
-          Ok(TypeStore(..store, vars: dict.insert(store.vars, id, Link(right))))
+          case occurs_check(store, id, right) {
+            True ->
+              Error(error.InvalidType(
+                to_string(environment, Var(id)),
+                to_string(environment, right),
+                "type variable would be infinitely recursive",
+              ))
+            False ->
+              Ok(
+                TypeStore(
+                  ..store,
+                  vars: dict.insert(store.vars, id, Link(right)),
+                ),
+              )
+          }
       }
     }
     _, Var(id) -> {
-      case occurs_check(store, id, left) {
-        True ->
-          Error(error.InvalidType(
-            to_string(environment, left),
-            to_string(environment, Var(id)),
-            "type variable would be infinitely recursive",
-          ))
+      case is_rigid_var(store, Var(id)) {
+        True -> unify_rigid(store, environment, left, Var(id))
         False ->
-          Ok(TypeStore(..store, vars: dict.insert(store.vars, id, Link(left))))
+          case occurs_check(store, id, left) {
+            True ->
+              Error(error.InvalidType(
+                to_string(environment, left),
+                to_string(environment, Var(id)),
+                "type variable would be infinitely recursive",
+              ))
+            False ->
+              Ok(
+                TypeStore(
+                  ..store,
+                  vars: dict.insert(store.vars, id, Link(left)),
+                ),
+              )
+          }
       }
     }
     NilType, NilType
@@ -620,13 +786,14 @@ pub fn unify(
     CustomType(_, _, _, _), CustomType(_, _, _, _) -> {
       Error(mismatch_error(environment, left, right))
     }
-    CallableType(lp, ll, lr), CallableType(rp, rl, rr) ->
-      unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
-    GenericCallableType(lp, ll, lr, _), GenericCallableType(rp, rl, rr, _) ->
-      unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
-    GenericCallableType(lp, ll, lr, _), CallableType(rp, rl, rr)
-    | CallableType(lp, ll, lr), GenericCallableType(rp, rl, rr, _)
-    -> unify_callables(store, environment, left, right, lp, ll, lr, rp, rl, rr)
+    CallableType(..), CallableType(..) ->
+      unify_callable_types(store, environment, left, right)
+    CallableType(..), GenericCallableType(..) ->
+      unify_callable_types(store, environment, left, right)
+    GenericCallableType(..), CallableType(..) ->
+      unify_callable_types(store, environment, left, right)
+    GenericCallableType(..), GenericCallableType(..) ->
+      unify_callable_types(store, environment, left, right)
     GenericTypeVariable("todo"), _ -> Ok(store)
     _, GenericTypeVariable("todo") -> Ok(store)
     InferredReturn, _ -> Ok(store)
@@ -634,7 +801,9 @@ pub fn unify(
     GenericTypeVariable(ln), GenericTypeVariable(rn) -> {
       case ln == rn {
         True -> Ok(store)
-        False -> Error(mismatch_error(environment, left, right))
+        False -> {
+          Error(mismatch_error(environment, left, right))
+        }
       }
     }
     _, _ -> Error(mismatch_error(environment, left, right))
@@ -656,6 +825,43 @@ fn unify_list_of_types(
         let #(l, r) = pair
         unify(store, environment, l, r)
       })
+  }
+}
+
+fn unify_callable_types(
+  store: TypeStore,
+  environment: Environment,
+  left: Type,
+  right: Type,
+) -> Result(TypeStore, error.TypeCheckError) {
+  // Callable types unify after instantiating both sides: a generalised callable
+  // (e.g. a function capture whose type variables were named at
+  // generalisation) must not be compared by generic-name equality, which would
+  // reject two polymorphic functions whose variables happened to get different
+  // names. Instantiating gives each side fresh variables that unify
+  // structurally, matching the HM treatment of two quantified types. Rigid type
+  // variables pass through instantiation untouched.
+  let #(store, instantiated_left) = instantiate(store, left)
+  let #(store, instantiated_right) = instantiate(store, right)
+  case instantiated_left, instantiated_right {
+    CallableType(lp, ll, lr), CallableType(rp, rl, rr)
+    | GenericCallableType(lp, ll, lr, _), GenericCallableType(rp, rl, rr, _)
+    | GenericCallableType(lp, ll, lr, _), CallableType(rp, rl, rr)
+    | CallableType(lp, ll, lr), GenericCallableType(rp, rl, rr, _)
+    ->
+      unify_callables(
+        store,
+        environment,
+        instantiated_left,
+        instantiated_right,
+        lp,
+        ll,
+        lr,
+        rp,
+        rl,
+        rr,
+      )
+    _, _ -> Error(mismatch_error(environment, left, right))
   }
 }
 

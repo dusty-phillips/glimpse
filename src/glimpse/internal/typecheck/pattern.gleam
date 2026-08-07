@@ -195,7 +195,8 @@ pub fn typecheck_pattern(
               // handled by `bind_variable` at the binding boundary.
               let resolved_parameters =
                 list.map(parameters, fn(parameter) {
-                  let #(_store, resolved) = types.resolve(store, parameter)
+                  let #(_store, resolved) =
+                    types.resolve_keep_rigid(store, parameter)
                   resolved
                 })
               check_variant_arguments(

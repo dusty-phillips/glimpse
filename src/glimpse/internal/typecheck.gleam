@@ -1451,6 +1451,11 @@ fn record_update(
               types.lookup_variable_type(env, field.label)
               |> result.replace_error(error.InvalidName(field.label))
               |> result.try(fn(var_type) {
+                // A generalised binding (e.g. `let handlers = do_remove_event(..)`)
+                // is polymorphic; instantiating at the use site lets its named
+                // generics unify with the concrete field type instead of
+                // comparing them by name.
+                let #(store, var_type) = types.instantiate(store, var_type)
                 types.unify(store, env, var_type, expected_type)
                 |> result.map(fn(store) { #(store, env) })
                 |> result.map_error(fn(_) {
@@ -2608,7 +2613,8 @@ fn check_arguments(
           fn(state, pair) {
             let #(store, reversed) = state
             let #(param, field) = pair
-            let #(store, resolved_param) = types.resolve(store, param)
+            let #(store, resolved_param) =
+              types.resolve_keep_rigid(store, param)
             use #(store, arg_type) <- result.try(field_expression_type(
               environment,
               store,
@@ -2646,9 +2652,6 @@ fn check_arguments(
   }
 }
 
-/// Type-check a single argument field, optionally against an expected type.
-/// Only anonymous function literal arguments make use of the expected type
-/// (see `fn_literal`); other argument shapes are typechecked without one.
 fn field_expression_type(
   environment: Environment,
   store: TypeStore,
@@ -2909,25 +2912,25 @@ fn fn_capture(
           ),
         )
 
-      Ok(
-        #(store, case generalised {
-          types.CallableType(parameters, labels, return) ->
-            case
-              functions.has_generic_types(parameters)
-              || functions.is_generic_type(return)
-            {
-              True ->
-                types.GenericCallableType(
-                  parameters,
-                  labels,
-                  return,
-                  functions.dummy_function(),
-                )
-              False -> generalised
-            }
-          other -> other
-        }),
-      )
+      let capture_type = case generalised {
+        types.CallableType(parameters, labels, return) ->
+          case
+            functions.has_generic_types(parameters)
+            || functions.is_generic_type(return)
+          {
+            True ->
+              types.GenericCallableType(
+                parameters,
+                labels,
+                return,
+                functions.dummy_function(),
+              )
+            False -> generalised
+          }
+        other -> other
+      }
+
+      Ok(#(store, capture_type))
     }
   }
 }

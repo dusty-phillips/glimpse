@@ -243,3 +243,97 @@ pub fn lambda_annotated_param_generic_use_is_fine_test() {
     }",
   )
 }
+
+pub fn pattern_bound_value_in_error_slot_is_rejected_test() {
+  // `value` is bound from the `Some(value)` pattern, so its type is the rigid
+  // `a`. Placing it in `Error(...)` forces `a = e`, which is not allowed for
+  // distinct type parameters. A pattern-bound value must keep the rigid
+  // identity of the parameter it came from instead of being re-instantiated.
+  let _ =
+    helpers.error_module_typecheck(
+      "pub type Choice(a) {
+      Picked(a)
+      Empty
+    }
+
+    pub fn to_result(choice: Choice(a), e: e) -> Result(a, e) {
+      case choice {
+        Picked(value) -> Error(value)
+        Empty -> Error(e)
+      }
+    }",
+    )
+}
+
+pub fn tuple_index_on_rigid_in_unannotated_lambda_is_rejected_test() {
+  // The lambda parameters are bound to `#(String, t)` from the expected
+  // callable type, so `a.1` is the rigid `t`. Comparing it as a String is not
+  // allowed even though the lambda parameters carry no annotations.
+  let _ =
+    helpers.error_module_typecheck(
+      "pub fn sort_keys(pairs: List(#(String, t))) -> List(String) {
+      list.sort(pairs, fn(a, b) { string.compare(a.1, b.1) })
+      |> list.map(fn(pair) { pair.0 })
+    }",
+    )
+}
+
+pub fn record_update_shorthand_with_generic_value_is_fine_test() {
+  // `contents` is generalised to `List(a)` by its binding; the record update
+  // must instantiate it against the concrete `List(message)` field type rather
+  // than comparing generic names.
+  helpers.ok_module_typecheck(
+    "pub type Box(message) {
+      Box(contents: List(message))
+    }
+
+    fn empty() -> List(a) { [] }
+
+    pub fn replace(box: Box(message)) -> Box(message) {
+      let contents = empty()
+      Box(..box, contents:)
+    }",
+  )
+}
+
+pub fn capture_branches_with_different_generic_names_unify_test() {
+  // Each `case` branch is a capture of a polymorphic function. Generalising
+  // the two captures can name their type variables differently (one is pinned
+  // to a rigid parameter by its argument, the other is not); unifying them
+  // must instantiate both sides rather than compare names.
+  let _ =
+    helpers.ok_module_typecheck(
+      "pub type Message(child_argument, child_data) {
+      Message(child_argument, child_data)
+    }
+
+    pub type Name(a) { Name(a) }
+
+    pub type Supervisor(child_argument, child_data) {
+      NamedSupervisor(name: Name(Message(child_argument, child_data)))
+      PidSupervisor(pid: Int)
+    }
+
+    fn start_name(
+      name: Name(Message(child_argument, child_data)),
+      argument: List(child_argument),
+    ) -> List(child_data) {
+      []
+    }
+
+    fn start_pid(pid: Int, argument: List(child_argument)) -> List(child_data) {
+      []
+    }
+
+    pub fn start(
+      supervisor: Supervisor(child_argument, child_data),
+      argument: List(child_argument),
+    ) -> List(child_data) {
+      let start = case supervisor {
+        NamedSupervisor(name:) -> start_name(name, _)
+        PidSupervisor(pid:) -> start_pid(pid, _)
+      }
+      start(argument)
+    }",
+    )
+}
