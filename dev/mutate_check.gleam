@@ -257,7 +257,7 @@ fn worker_dir(root: String, i: Int) -> String {
 /// Run one mutant in a worker: write the mutant into the worker's copy, run
 /// the real and glimpse checks in *that* copy, and restore the worker's source.
 fn check_one_worker(
-  worker_i: Int,
+  _worker_i: Int,
   worker_root: String,
   src: String,
   original: String,
@@ -270,7 +270,12 @@ fn check_one_worker(
     Error(_) ->
       case glimpse_check(worker_root) {
         True -> {
-          write("/tmp/false-" <> int.to_string(worker_i) <> ".gleam", mut.1)
+          let record = "FALSE-NEG :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
+          let _ =
+            simplifile.append(
+              to: "/tmp/mutcheck/falsenegs.txt",
+              contents: record,
+            )
           "FALSE-NEG :: " <> mut.0
         }
         False -> "ok :: " <> mut.0
