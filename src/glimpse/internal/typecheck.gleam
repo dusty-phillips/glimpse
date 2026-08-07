@@ -7,6 +7,7 @@ import gleam/result
 import gleam/set
 import gleam/string
 import glimpse/error
+import glimpse/internal/typecheck/bit_string_segment
 import glimpse/internal/typecheck/exhaustive
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/pattern
@@ -1673,7 +1674,7 @@ fn bit_string_segment_value(
     store,
     value_expr,
   ))
-  let expected_family = case bit_string_segment_type(options) {
+  let expected_family = case bit_string_segment.segment_type(options) {
     types.IntType ->
       case value_expr {
         glance.String(_, _) -> types.StringType
@@ -1769,65 +1770,6 @@ fn check_size_expression(
   types.unify(store, environment, size_type, types.IntType)
   |> result.map(fn(store) { store })
   |> result.map_error(fn(_) { error.InvalidBitStringSegment("size") })
-}
-
-fn matches_utf(
-  option: glance.BitStringSegmentOption(glance.Expression),
-) -> Bool {
-  case option {
-    glance.Utf8Option | glance.Utf16Option | glance.Utf32Option -> True
-    _ -> False
-  }
-}
-
-fn matches_codepoint(
-  option: glance.BitStringSegmentOption(glance.Expression),
-) -> Bool {
-  case option {
-    glance.Utf8CodepointOption
-    | glance.Utf16CodepointOption
-    | glance.Utf32CodepointOption -> True
-    _ -> False
-  }
-}
-
-fn matches_bytes(
-  option: glance.BitStringSegmentOption(glance.Expression),
-) -> Bool {
-  case option {
-    glance.BytesOption | glance.BitsOption -> True
-    _ -> False
-  }
-}
-
-fn matches_float(
-  option: glance.BitStringSegmentOption(glance.Expression),
-) -> Bool {
-  case option {
-    glance.FloatOption -> True
-    _ -> False
-  }
-}
-
-fn bit_string_segment_type(
-  options: List(glance.BitStringSegmentOption(glance.Expression)),
-) -> types.Type {
-  case list.any(options, fn(o) { matches_utf(o) }) {
-    True -> types.StringType
-    False ->
-      case list.any(options, fn(o) { matches_codepoint(o) }) {
-        True -> types.CustomType("prelude", "UtfCodepoint", [], option.None)
-        False ->
-          case list.any(options, fn(o) { matches_bytes(o) }) {
-            True -> types.BitArrayType
-            False ->
-              case list.any(options, fn(o) { matches_float(o) }) {
-                True -> types.FloatType
-                False -> types.IntType
-              }
-          }
-      }
-  }
 }
 
 /// Typecheck a case expression. Each clause's patterns must match the subject

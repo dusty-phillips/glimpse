@@ -1,5 +1,4 @@
 import glance
-import gleam/bit_array
 import gleam/dict
 import gleam/float
 import gleam/int
@@ -8,6 +7,7 @@ import gleam/option.{type Option}
 import gleam/result
 import gleam/string
 import glimpse/error
+import glimpse/internal/typecheck/bit_string_segment
 import glimpse/internal/typecheck/types
 
 /// Check that a pattern is compatible with the expected type, returning the
@@ -348,22 +348,21 @@ fn check_segments(
     case pattern {
       // A string literal in a bit string matches its UTF-8 bytes, one Int
       // segment per byte (e.g. `<<"+", rest:bytes>>` matches byte 0x2B).
-      glance.PatternString(_, value) -> {
-        case list.any(options, is_utf_option) {
+      glance.PatternString(_, _value) -> {
+        case list.any(options, bit_string_segment.is_utf_option) {
           True -> typecheck_pattern(env, store, types.StringType, pattern)
-          False -> {
-            let byte_count = bit_array.byte_size(bit_array.from_string(value))
-            list.repeat(types.IntType, byte_count)
-            |> list.try_fold(#(store, env), fn(state, byte_type) {
-              let #(store, env) = state
-              types.unify(store, env, byte_type, byte_type)
-              |> result.map(fn(store) { #(store, env) })
-            })
-          }
+          // Without a utf option the literal's bytes are fixed, so there is
+          // nothing to constrain against the expected type.
+          False -> Ok(#(store, env))
         }
       }
       _ ->
-        typecheck_pattern(env, store, bit_string_segment_type(options), pattern)
+        typecheck_pattern(
+          env,
+          store,
+          bit_string_segment.segment_type(options),
+          pattern,
+        )
     }
   })
 }
@@ -655,64 +654,5 @@ fn check_bit_array_size_positive(
         Error(_) -> Ok(store)
       }
     _ -> Ok(store)
-  }
-}
-
-fn bit_string_segment_type(
-  options: List(glance.BitStringSegmentOption(glance.BitArraySize)),
-) -> types.Type {
-  case list.any(options, is_utf_option) {
-    True -> types.StringType
-    False ->
-      case list.any(options, is_codepoint_option) {
-        True -> types.CustomType("prelude", "UtfCodepoint", [], option.None)
-        False ->
-          case list.any(options, is_bit_option) {
-            True -> types.BitArrayType
-            False ->
-              case list.any(options, is_float_option) {
-                True -> types.FloatType
-                False -> types.IntType
-              }
-          }
-      }
-  }
-}
-
-fn is_utf_option(
-  option: glance.BitStringSegmentOption(glance.BitArraySize),
-) -> Bool {
-  case option {
-    glance.Utf8Option | glance.Utf16Option | glance.Utf32Option -> True
-    _ -> False
-  }
-}
-
-fn is_codepoint_option(
-  option: glance.BitStringSegmentOption(glance.BitArraySize),
-) -> Bool {
-  case option {
-    glance.Utf8CodepointOption
-    | glance.Utf16CodepointOption
-    | glance.Utf32CodepointOption -> True
-    _ -> False
-  }
-}
-
-fn is_bit_option(
-  option: glance.BitStringSegmentOption(glance.BitArraySize),
-) -> Bool {
-  case option {
-    glance.BytesOption | glance.BitsOption -> True
-    _ -> False
-  }
-}
-
-fn is_float_option(
-  option: glance.BitStringSegmentOption(glance.BitArraySize),
-) -> Bool {
-  case option {
-    glance.FloatOption -> True
-    _ -> False
   }
 }
