@@ -698,6 +698,43 @@ pub fn generalise_multi(store: TypeStore, types_: List(Type)) -> List(Type) {
   types_
 }
 
+/// Rename the generic variables of a generalised signature that originate from
+/// *unannotated* parameters to the deterministic `t_<function>_<index>` names.
+/// The signature pass registers unannotated parameters under those names, so
+/// keeping them stable across re-registration lets cross-function constraint
+/// recording compare callee parameter names with the argument-side names.
+/// Annotated parameters keep their own names.
+pub fn rename_parameter_generics(
+  function_name: String,
+  unannotated: List(Bool),
+  generalised: List(Type),
+) -> List(Type) {
+  let substitutions =
+    list.zip(unannotated, generalised)
+    |> list.index_map(fn(pair, index) { #(index, pair) })
+    |> list.fold(dict.new(), fn(substitutions, item) {
+      let #(index, #(is_unannotated, type_)) = item
+      case is_unannotated {
+        True ->
+          case type_ {
+            GenericTypeVariable(name) ->
+              dict.insert(
+                substitutions,
+                name,
+                GenericTypeVariable(
+                  "t_" <> function_name <> "_" <> int.to_string(index),
+                ),
+              )
+            _ -> substitutions
+          }
+        False -> substitutions
+      }
+    })
+  list.map(generalised, fn(type_) {
+    substitute_type_variables(type_, substitutions)
+  })
+}
+
 fn do_generalise_multi(
   store: TypeStore,
   names: dict.Dict(Int, String),
@@ -918,13 +955,11 @@ pub fn record_generic_edge(
   let existing =
     dict.get(store.generic_edges, from)
     |> result.unwrap([])
-  let merged = list.unique(list.append(existing, embedded))
-  case
-    list.any(merged, fn(name) {
-      // A variable embedding itself is trivial, not infinitely recursive.
-      name != from && reaches(store.generic_edges, name, from)
-    })
-  {
+  // A variable embedding itself is trivial, not infinitely recursive.
+  let merged =
+    list.unique(list.append(existing, embedded))
+    |> list.filter(fn(name) { name != from })
+  case list.any(merged, fn(name) { reaches(store.generic_edges, name, from) }) {
     True -> Error(error.RecursiveType)
     False ->
       Ok(

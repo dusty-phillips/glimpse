@@ -100,14 +100,14 @@ pub fn private_function_generic_inference_test() {
       glance.FunctionParameter(
         _,
         glance.Named("x"),
-        option.Some(glance.VariableType(_, "a")),
+        option.Some(glance.VariableType(_, "t_id_0")),
       ),
     ] -> True
     _ -> False
   }
   assert param_ok
   let return_ok = case id_def.definition.return {
-    option.Some(glance.VariableType(_, "a")) -> True
+    option.Some(glance.VariableType(_, "t_id_0")) -> True
     _ -> False
   }
   assert return_ok
@@ -120,12 +120,15 @@ pub fn private_function_generic_multiple_params_test() {
   let assert Ok(types.GenericCallableType(parameters, labels, return_, _)) =
     pair_type
   assert parameters
-    == [types.GenericTypeVariable("a"), types.GenericTypeVariable("b")]
+    == [
+      types.GenericTypeVariable("t_pair_0"),
+      types.GenericTypeVariable("t_pair_1"),
+    ]
   assert labels == dict.new()
   assert return_
     == types.TupleType([
-      types.GenericTypeVariable("a"),
-      types.GenericTypeVariable("b"),
+      types.GenericTypeVariable("t_pair_0"),
+      types.GenericTypeVariable("t_pair_1"),
     ])
 
   let assert [pair_def] = module.module.functions
@@ -134,12 +137,12 @@ pub fn private_function_generic_multiple_params_test() {
       glance.FunctionParameter(
         option.None,
         glance.Named("x"),
-        option.Some(glance.VariableType(_, "a")),
+        option.Some(glance.VariableType(_, "t_pair_0")),
       ),
       glance.FunctionParameter(
         option.None,
         glance.Named("y"),
-        option.Some(glance.VariableType(_, "b")),
+        option.Some(glance.VariableType(_, "t_pair_1")),
       ),
     ] -> True
     _ -> False
@@ -148,7 +151,7 @@ pub fn private_function_generic_multiple_params_test() {
   let return_ok = case pair_def.definition.return {
     option.Some(glance.TupleType(
       _,
-      [glance.VariableType(_, "a"), glance.VariableType(_, "b")],
+      [glance.VariableType(_, "t_pair_0"), glance.VariableType(_, "t_pair_1")],
     )) -> True
     _ -> False
   }
@@ -161,7 +164,7 @@ pub fn private_function_discard_param_test() {
   let foo_type = dict.get(env.definitions, "foo")
   let assert Ok(types.GenericCallableType(parameters, labels, return_, _)) =
     foo_type
-  assert parameters == [types.GenericTypeVariable("a")]
+  assert parameters == [types.GenericTypeVariable("t_foo_0")]
   assert labels == dict.new()
   assert return_ == types.IntType
 
@@ -171,7 +174,7 @@ pub fn private_function_discard_param_test() {
       glance.FunctionParameter(
         option.None,
         glance.Discarded(_),
-        option.Some(glance.VariableType(_, "a")),
+        option.Some(glance.VariableType(_, "t_foo_0")),
       ),
     ] -> True
     _ -> False
@@ -284,9 +287,9 @@ pub fn private_function_unannotated_then_used_polymorphically_test() {
   let id_type = dict.get(env.definitions, "id")
   let assert Ok(apply_type) = id_type
   let assert types.GenericCallableType(
-    [types.GenericTypeVariable("a")],
+    [types.GenericTypeVariable("t_id_0")],
     _labels,
-    types.GenericTypeVariable("a"),
+    types.GenericTypeVariable("t_id_0"),
     _original,
   ) = apply_type
 

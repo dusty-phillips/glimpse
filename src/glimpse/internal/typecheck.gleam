@@ -2207,7 +2207,7 @@ pub fn call(
   use #(store, return) <- result.try(case target {
     glance.Variable(_, callee) -> {
       let constraints = {
-        record_placeholder_constraints(environment, store, callee, arguments)
+        record_generic_constraints(environment, store, callee, arguments)
       }
       constraints
       |> result.map(fn(store) {
@@ -2223,10 +2223,10 @@ pub fn call(
   Ok(types.resolve(store, return))
 }
 
-/// While a same-module callee's signature is still a placeholder, record how
-/// its generic parameters are constrained by the arguments, so a cycle across
+/// Record how a same-module callee's generic parameters are constrained by the
+/// arguments at this call site, so a cycle of embedding constraints across
 /// functions is reported as a recursive type.
-fn record_placeholder_constraints(
+fn record_generic_constraints(
   environment: Environment,
   store: TypeStore,
   callee: String,

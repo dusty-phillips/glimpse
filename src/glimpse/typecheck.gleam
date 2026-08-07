@@ -880,6 +880,14 @@ pub fn function(
                 })
               let all_types = list.append(param_types, [resolved_return])
               let generalised_all = types.generalise_multi(store, all_types)
+              let generalised_all =
+                types.rename_parameter_generics(
+                  function.name,
+                  list.map(function.parameters, fn(param) {
+                    param.type_ == option.None
+                  }),
+                  generalised_all,
+                )
 
               // Split back into params and return
               let generalised_params =
