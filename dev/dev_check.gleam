@@ -9,8 +9,8 @@ import gleam/set
 import gleam/string
 import glimpse
 import glimpse/internal/import_dependencies
-import glimpse/internal/target
 import glimpse/internal/typecheck/types
+import glimpse/target
 import glimpse/typecheck
 import simplifile
 

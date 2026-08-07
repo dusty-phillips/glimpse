@@ -3,8 +3,8 @@ import gleam/dict
 import gleam/list
 import glimpse
 import glimpse/error
-import glimpse/internal/target
 import glimpse/internal/typecheck/types.{type Environment}
+import glimpse/target
 import glimpse/typecheck
 
 pub fn glance_custom_type(definition: String) -> glance.CustomType {

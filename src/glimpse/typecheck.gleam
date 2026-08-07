@@ -8,13 +8,13 @@ import gleam/string
 import glimpse
 import glimpse/error
 import glimpse/internal/import_dependencies
-import glimpse/internal/target
 import glimpse/internal/typecheck as intern
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/imports
 import glimpse/internal/typecheck/types.{
   type Environment, type EnvironmentResult,
 }
+import glimpse/target
 
 type PackageState {
   PackageState(

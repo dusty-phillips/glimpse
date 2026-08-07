@@ -2,8 +2,8 @@ import glance
 import gleam/dict
 import glimpse
 import glimpse/error
-import glimpse/internal/target
 import glimpse/internal/typecheck/types
+import glimpse/target
 import glimpse/typecheck
 import typecheck/helpers
 

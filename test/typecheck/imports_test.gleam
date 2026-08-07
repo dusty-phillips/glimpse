@@ -3,8 +3,8 @@ import gleam/option
 
 import gleam/dict
 import glimpse
-import glimpse/internal/target
 import glimpse/internal/typecheck/types
+import glimpse/target
 import glimpse/typecheck
 import typecheck/helpers
 
