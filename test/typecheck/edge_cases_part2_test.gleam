@@ -1,5 +1,6 @@
 import glance
 import gleam/dict
+import gleam/list
 import glimpse
 import glimpse/error
 import glimpse/target
@@ -360,4 +361,32 @@ pub fn private_other_target_external_call_is_fine_test() {
     fn uh_oh() -> Int { js_only() }
     pub fn main() { uh_oh() }",
   )
+}
+
+pub fn named_target_filters_custom_targets_test() {
+  // Experimental backends use their own target names via `Named`.
+  let assert Ok(module) =
+    glance.module(
+      "@target(python)
+    pub fn python_only() -> Int
+    @target(erlang)
+    pub fn erlang_only() -> Int",
+    )
+  let filtered = target.filter_for_target(module, target.Named("python"))
+  assert list.map(filtered.functions, fn(def) { def.definition.name })
+    == ["python_only"]
+}
+
+pub fn named_target_erlang_name_matches_builtin_test() {
+  // A `Named("erlang")` target behaves like `Erlang`.
+  let assert Ok(module) =
+    glance.module(
+      "@target(erlang)
+    pub fn erl_only() -> Int
+    @target(javascript)
+    pub fn js_only() -> Int",
+    )
+  let filtered = target.filter_for_target(module, target.Named("erlang"))
+  assert list.map(filtered.functions, fn(def) { def.definition.name })
+    == ["erl_only"]
 }

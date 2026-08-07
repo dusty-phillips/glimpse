@@ -2,11 +2,17 @@ import glance
 import gleam/list
 
 /// The build target that a package is being typechecked for. Definitions
-/// annotated with `@target(erlang)` or `@target(javascript)` are only active
-/// for their target; definitions without a target attribute apply to all.
+/// annotated with `@target(erlang)`, `@target(javascript)`, or a custom target
+/// name are only active for their target; definitions without a target
+/// attribute apply to all.
+///
+/// `Erlang` and `Javascript` are the targets the real compiler builds for, and
+/// `Named(name)` supports experimental backends with their own target names
+/// (e.g. `@target(python)`).
 pub type Target {
   Erlang
   Javascript
+  Named(name: String)
 }
 
 /// Remove definitions whose `@target` attribute does not match the active
@@ -49,6 +55,7 @@ fn target_name(target: Target) -> String {
   case target {
     Erlang -> "erlang"
     Javascript -> "javascript"
+    Named(name) -> name
   }
 }
 

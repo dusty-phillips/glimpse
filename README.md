@@ -107,6 +107,11 @@ that are not active for the target being checked are filtered out before
 typechecking, mirroring the real compiler. Pass `target.Erlang` or
 `target.Javascript` to `typecheck.package`.
 
+Experimental backends targeting another language can use `target.Named(name)`
+to check with their own target, so a `@target(python)` definition is active
+when checking for `target.Named("python")` and filtered out otherwise. The same
+matching applies to `@external(...)` annotations.
+
 ### Lower-level entry points
 
 `glimpse/typecheck` also exposes functions for checking a single module,
