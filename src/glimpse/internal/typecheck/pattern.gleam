@@ -234,7 +234,30 @@ pub fn typecheck_pattern(
         name,
         expected_type,
       ))
-      typecheck_pattern(environment, store, expected_type, pattern)
+      use #(store, environment) <- result.try(typecheck_pattern(
+        environment,
+        store,
+        expected_type,
+        pattern,
+      ))
+      // An `as` binding of a constructor pattern refines the bound variable to
+      // that variant, so field access on it resolves that variant's fields
+      // (e.g. `[Fragment(..) as first, ..]` makes `first.children` valid).
+      case pattern {
+        glance.PatternVariant(_, module, constructor, _arguments, _spread) ->
+          constructor_variant_index(environment, module, constructor)
+          |> option.map(fn(index) {
+            let refined = types.set_custom_type_variant(expected_type, index)
+            let refined_environment =
+              types.Environment(
+                ..environment,
+                definitions: dict.insert(environment.definitions, name, refined),
+              )
+            Ok(#(store, refined_environment))
+          })
+          |> option.unwrap(Ok(#(store, environment)))
+        _ -> Ok(#(store, environment))
+      }
     }
 
     glance.PatternConcatenate(_, _prefix, prefix_name, rest_name) -> {
