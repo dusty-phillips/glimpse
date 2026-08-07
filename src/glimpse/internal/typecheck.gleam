@@ -1673,7 +1673,15 @@ fn bit_string_segment_value(
     store,
     value_expr,
   ))
-  let expected_family = bit_string_segment_type(options)
+  let expected_family = case bit_string_segment_type(options) {
+    types.IntType ->
+      case value_expr {
+        glance.String(_, _) -> types.StringType
+        glance.Float(_, _) -> types.FloatType
+        _ -> types.IntType
+      }
+    forced_family -> forced_family
+  }
   types.unify(store, environment, value_type, expected_family)
   |> result.map(fn(store) { #(store, value_type) })
   |> result.map_error(fn(_) {
@@ -3263,6 +3271,39 @@ fn pipe(
         glimpse_target,
         arguments,
       )
+    }
+    // A function literal piped a value, e.g. `value |> fn(state) { ... }`.
+    // The piped value's type is threaded into the literal's first parameter
+    // *before* its body is checked, so unannotated parameters can be used
+    // (e.g. `state.1`); otherwise the parameter stays an unbound variable.
+    glance.Fn(_, arguments, return_annotation, body) -> {
+      let extra = list.length(arguments) - 1
+      let extra_count = case extra > 0 {
+        True -> extra
+        False -> 0
+      }
+      let #(store, extra_types) = types.fresh_vars(store, extra_count)
+      let expected =
+        types.CallableType(
+          [left_type, ..extra_types],
+          dict.new(),
+          types.InferredReturn,
+        )
+      use #(store, callable) <- result.try(fn_literal(
+        environment,
+        store,
+        arguments,
+        return_annotation,
+        body,
+        option.Some(expected),
+      ))
+      let #(store, pipe_result) = case callable {
+        types.CallableType(_, _, return_) -> types.resolve(store, return_)
+        types.GenericCallableType(_, _, return_, _) ->
+          types.resolve(store, return_)
+        _ -> #(store, callable)
+      }
+      Ok(#(store, pipe_result))
     }
     _ -> {
       use #(store, glimpse_target) <- result.try(expression(
