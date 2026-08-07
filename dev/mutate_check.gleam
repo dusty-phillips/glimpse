@@ -193,7 +193,7 @@ fn check_all(
 
   // Receive one batch of results per worker; order is irrelevant for reporting.
   let collected =
-    indices(workers)
+    indices(list.length(batches))
     |> list.fold([], fn(acc, _i) {
       let #(idx, results) = process.receive_forever(subject)
       [#(idx, results), ..acc]
