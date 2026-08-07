@@ -450,17 +450,46 @@ fn pattern_must_be_irrefutable(
   case checked {
     Error(check_error) -> Error(check_error)
     Ok(state) -> {
-      let #(store, _environment) = state
-      case
-        exhaustive.check(environment, resolve_subjects(store, [type_]), [
-          [pattern],
-        ])
-      {
-        option.Some(missing) ->
-          Error(error.InexhaustivePattern(string.join(missing, "\n")))
-        option.None -> Ok(state)
+      let #(store, state_environment) = state
+      let #(store, resolved) = types.resolve(store, type_)
+      case resolved {
+        types.InferredReturn | types.Var(_) ->
+          // During the first body pass a subject type may still be the
+          // placeholder for a callee whose inferred signature is not final
+          // yet. Defer the irrefutability check to the second pass, which
+          // sees the final signatures.
+          case environment.defer_unknown {
+            True -> Ok(state)
+            False ->
+              check_pattern_is_irrefutable(
+                state_environment,
+                store,
+                resolved,
+                pattern,
+              )
+          }
+        _ ->
+          check_pattern_is_irrefutable(
+            state_environment,
+            store,
+            resolved,
+            pattern,
+          )
       }
     }
+  }
+}
+
+fn check_pattern_is_irrefutable(
+  environment: types.Environment,
+  store: types.TypeStore,
+  type_: types.Type,
+  pattern: glance.Pattern,
+) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
+  case exhaustive.check(environment, [type_], [[pattern]]) {
+    option.Some(missing) ->
+      Error(error.InexhaustivePattern(string.join(missing, "\n")))
+    option.None -> Ok(#(store, environment))
   }
 }
 
@@ -1489,19 +1518,24 @@ fn check_update_variant_safety(
   case resolved {
     types.CustomType(module, name, _parameters, inferred_variant) -> {
       // How many variants the custom type has, and which variant the update's
-      // constructor targets.
+      // constructor targets. A type defined in this module is looked up by its
+      // unqualified constructor; only imported types need the module qualifier.
       let variant_count = custom_type_variant_count(environment, module, name)
+      let constructor_module = case module == environment.current_module {
+        True -> option.None
+        False -> option.Some(module)
+      }
       let constructor_variant =
         pattern.constructor_variant_index(
           environment,
-          option.Some(module),
+          constructor_module,
           constructor,
         )
 
       case variant_count {
         // A single-variant type is always safe to update.
         1 -> Ok(store)
-        _ ->
+        _ -> {
           case inferred_variant {
             // Variant not pinned: we don't know which one we have.
             option.None -> Error(error.UnsafeRecordUpdate(constructor))
@@ -1511,6 +1545,7 @@ fn check_update_variant_safety(
                 False -> Error(error.UnsafeRecordUpdate(constructor))
               }
           }
+        }
       }
     }
     _ -> Ok(store)
@@ -1979,7 +2014,9 @@ fn validate_alternative_patterns(
 }
 
 /// A variable bound by the alternatives of a clause must be bound by every
-/// alternative at the same position.
+/// alternative. The binding positions may differ between alternatives (e.g.
+/// `[], list | list, []`); type agreement across alternatives is checked when
+/// the alternatives are typechecked.
 fn validate_alternative_consistency(
   first: List(#(String, List(Int))),
   other: List(#(String, List(Int))),
@@ -1990,7 +2027,7 @@ fn validate_alternative_consistency(
         [] -> Ok(Nil)
         [#(name, _), ..] -> Error(error.ExtraPatternVariable(name))
       }
-    [#(name, path), ..rest] -> {
+    [#(name, _), ..rest] -> {
       case
         list.find(other, fn(seen) {
           let #(seen_name, _) = seen
@@ -1998,18 +2035,14 @@ fn validate_alternative_consistency(
         })
       {
         Error(_) -> Error(error.MissingPatternVariable(name))
-        Ok(#(_, other_path)) ->
-          case path == other_path {
-            True ->
-              validate_alternative_consistency(
-                rest,
-                list.filter(other, fn(seen) {
-                  let #(seen_name, _) = seen
-                  seen_name != name
-                }),
-              )
-            False -> Error(error.DuplicatePatternVariable(name))
-          }
+        Ok(_) ->
+          validate_alternative_consistency(
+            rest,
+            list.filter(other, fn(seen) {
+              let #(seen_name, _) = seen
+              seen_name != name
+            }),
+          )
       }
     }
   }
@@ -2126,10 +2159,37 @@ fn clause_body_type(
     }
   }
 
-  let pattern_env =
-    dict.fold(agreed, pattern_env, fn(env, name, index) {
-      apply_variant_refinement(env, name, index)
-    })
+  let #(store, pattern_env) =
+    list.fold(
+      dict.to_list(agreed),
+      #(store, pattern_env),
+      fn(state, name_and_index) {
+        let #(store, environment) = state
+        let #(name, index) = name_and_index
+        apply_variant_refinement(store, environment, name, index)
+      },
+    )
+
+  // Every alternative binds the same variables (checked syntactically), and  // each binding must have the same type across alternatives, since the body
+  // sees a single binding per name. A name bound to different types in
+  // different alternatives (e.g. `#(x, _) | #(_, x)`) is a type error.
+  use store <- result.try(
+    list.try_fold(alternatives, store, fn(store, alternative) {
+      let #(alternative_env, _refinements) = alternative
+      dict.fold(
+        alternative_env.definitions,
+        Ok(store),
+        fn(result, name, alternative_type) {
+          use store <- result.try(result)
+          case dict.get(pattern_env.definitions, name) {
+            Ok(body_type) ->
+              types.unify(store, pattern_env, alternative_type, body_type)
+            Error(_) -> Ok(store)
+          }
+        },
+      )
+    }),
+  )
 
   use #(store, guard_type) <- result.try(case clause.guard {
     option.None -> Ok(#(store, types.BoolType))
@@ -2146,21 +2206,28 @@ fn clause_body_type(
 /// Replace a subject variable's binding with a copy marked as a known variant,
 /// so field access on it uses the matching constructor's field types.
 fn apply_variant_refinement(
+  store: TypeStore,
   environment: Environment,
   name: String,
   variant_index: Int,
-) -> Environment {
+) -> #(TypeStore, Environment) {
   case dict.get(environment.definitions, name) {
-    Ok(type_) ->
-      Environment(
-        ..environment,
-        definitions: dict.insert(
-          environment.definitions,
-          name,
-          types.set_custom_type_variant(type_, variant_index),
+    Ok(type_) -> {
+      // The binding may still be an unlinked variable that only resolves to
+      // the concrete custom type through the store (e.g. a case subject bound
+      // to a fresh variable by an earlier clause). Resolve it first so the
+      // variant can be pinned on the concrete type, not lost on the variable.
+      let #(store, resolved) = types.resolve(store, type_)
+      let refined = types.set_custom_type_variant(resolved, variant_index)
+      #(
+        store,
+        Environment(
+          ..environment,
+          definitions: dict.insert(environment.definitions, name, refined),
         ),
       )
-    Error(_) -> environment
+    }
+    Error(_) -> #(store, environment)
   }
 }
 

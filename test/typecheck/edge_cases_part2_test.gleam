@@ -167,18 +167,18 @@ pub fn duplicate_variable_in_record_pattern_test() {
     == error.DuplicatePatternVariable("x")
 }
 
-pub fn duplicate_variable_in_alternative_test() {
+pub fn alternative_variable_bound_to_different_types_test() {
   assert helpers.error_module_typecheck(
       "pub fn main() { case #(1, 1.0) { #(x, _) | #(_, x) -> 1 } }",
     )
-    == error.DuplicatePatternVariable("x")
+    == error.InvalidType("Float", "Int", "in type mismatch")
 }
 
 pub fn variable_bound_to_different_positions_test() {
   assert helpers.error_module_typecheck(
       "pub fn main() { case [1] { [x] | x -> 1 } }",
     )
-    == error.DuplicatePatternVariable("x")
+    == error.InvalidType("List(Int)", "Int", "in type mismatch")
 }
 
 pub fn missing_alternative_pattern_variable_test() {
@@ -198,6 +198,17 @@ pub fn extra_alternative_pattern_variable_test() {
 pub fn alternative_patterns_with_consistent_bindings_are_fine_test() {
   helpers.ok_module_typecheck(
     "pub fn main() { case [1, 2] { [x] | [x, ..] -> x _ -> 0 } }",
+  )
+}
+
+pub fn alternative_bindings_at_different_positions_are_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn main(list1: List(Int), list2: List(Int)) -> Int {
+      case list1, list2 {
+        [], list | list, [] -> 1
+        _, _ -> 0
+      }
+    }",
   )
 }
 
