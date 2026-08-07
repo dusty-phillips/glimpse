@@ -462,31 +462,6 @@ pub fn link_var_to(store: TypeStore, type_: Type, target: Type) -> TypeStore {
   }
 }
 
-/// Whether a type mentions a *rigid* type variable: one created for a declared
-/// type parameter of the current function (tagged `rigid:<name>`). Such values
-/// must not be generalised at a binding boundary, since doing so would turn the
-/// rigid reference into an instantiable named generic.
-pub fn has_rigid_var(store: TypeStore, type_: Type) -> Bool {
-  case type_ {
-    Var(id) ->
-      case var_source(store, Var(id)) {
-        option.Some(source) -> string.starts_with(source, "rigid:")
-        option.None -> False
-      }
-    TupleType(elements) -> list.any(elements, has_rigid_var(store, _))
-    CustomType(_, _, parameters, _) ->
-      list.any(parameters, has_rigid_var(store, _))
-    CallableType(parameters, _, return) ->
-      list.any(parameters, has_rigid_var(store, _))
-      || has_rigid_var(store, return)
-    GenericCallableType(parameters, _, return, _) ->
-      list.any(parameters, has_rigid_var(store, _))
-      || has_rigid_var(store, return)
-    TypeAlias(_, aliased) -> has_rigid_var(store, aliased)
-    _ -> False
-  }
-}
-
 /// Create `count` fresh unbound inference variables.
 pub fn fresh_vars(store: TypeStore, count: Int) -> #(TypeStore, List(Type)) {
   case count {

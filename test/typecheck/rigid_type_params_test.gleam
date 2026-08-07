@@ -396,6 +396,35 @@ pub fn annotated_lambda_stays_polymorphic_test() {
   )
 }
 
+pub fn inferred_let_binding_is_monomorphic_test() {
+  // `let xs = []` infers `List(a)` with a *monomorphic* `a`: real Gleam does
+  // not generalise inference variables at a binding, so using `xs` at two
+  // different element types is rejected.
+  let _ =
+    helpers.error_module_typecheck(
+      "import gleam/list
+
+    pub fn f() -> String {
+      let xs = []
+      let _ = list.map(xs, fn(x) { x + 1 })
+      list.first(xs) |> result.unwrap(\"a\")
+    }",
+    )
+}
+
+pub fn unannotated_lambda_binding_is_monomorphic_test() {
+  // The parameters of an unannotated lambda are inference variables, bound
+  // monomorphically at the `let`; using it at two different types is rejected.
+  let _ =
+    helpers.error_module_typecheck(
+      "pub fn f() -> String {
+      let g = fn(x, y) { y }
+      let _ = g(1, 2)
+      g(\"a\", \"b\")
+    }",
+    )
+}
+
 pub fn capture_branches_with_different_generic_names_unify_test() {
   // Each `case` branch is a capture of a polymorphic function. Generalising
   // the two captures can name their type variables differently (one is pinned

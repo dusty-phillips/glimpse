@@ -431,21 +431,14 @@ fn bind_variable(
   name: String,
   type_: types.Type,
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
-  // Generalise at the binding boundary (the HM "let" point): any inference
-  // variables still unbound here become named type variables, so the binding
-  // is polymorphic and later unifications cannot leak into it. Shadowing is
-  // allowed (Gleam permits rebinding in a new scope), so the definition is
-  // simply overwritten.
-  //
-  // Values that mention a rigid type parameter of the current function are
-  // *not* generalised: turning the rigid reference into a named generic would
-  // let a later lookup instantiate it, weakening the rigid check (e.g.
-  // `case xs, ys { [x, ..], [y, ..] -> x == y }` must not unify `a` with `b`).
-  let bound = case types.has_rigid_var(store, type_) {
-    True -> type_
-    False -> types.generalise(store, type_)
-  }
-  Ok(#(store, types.add_or_update_def_in_env(environment, name, bound)))
+  // A binding is polymorphic only through the *named* generics its value
+  // already carries (from annotations); inference variables are bound
+  // monomorphically, matching real Gleam (`let xs = []` cannot later be used
+  // as both a `List(Int)` and a `List(String)`). Shadowing is allowed (Gleam
+  // permits rebinding in a new scope), so the definition is simply
+  // overwritten. Rigid type parameters stay rigid: binding them as-is keeps
+  // `case xs, ys { [x, ..], [y, ..] -> x == y }` from unifying `a` with `b`.
+  Ok(#(store, types.add_or_update_def_in_env(environment, name, type_)))
 }
 
 fn fold_patterns(
