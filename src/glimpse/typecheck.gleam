@@ -492,7 +492,7 @@ pub fn type_alias(
   {
     Ok(unused) -> Error(error.UnusedTypeParameter(unused))
     Error(_) ->
-      case dict.has_key(environment.custom_types, alias.name) {
+      case clash_with_existing(environment, alias.name) {
         True -> Error(error.DuplicateCustomType(alias.name))
         False -> {
           use resolved <- result.try(types.type_(environment, alias.aliased))
@@ -538,6 +538,15 @@ fn type_uses_type_variable(type_: glance.Type, name: String) -> Bool {
   }
 }
 
+/// A new declaration of `name` clashes with an existing definition unless the
+/// existing entry is an implicit prelude type, which modules may shadow.
+fn clash_with_existing(environment: Environment, name: String) -> Bool {
+  case dict.get(environment.custom_types, name) {
+    Ok(existing) -> !types.is_prelude_type(existing)
+    Error(_) -> False
+  }
+}
+
 /// Register a custom type's name and type parameters in the environment.
 /// Constructors are registered separately (see `custom_type_constructors`) so
 /// that types referencing each other resolve regardless of declaration order.
@@ -545,7 +554,7 @@ pub fn custom_type_declaration(
   environment: Environment,
   custom_type: glance.CustomType,
 ) -> EnvironmentResult {
-  case dict.has_key(environment.custom_types, custom_type.name) {
+  case clash_with_existing(environment, custom_type.name) {
     True -> Error(error.DuplicateCustomType(custom_type.name))
     False -> {
       use _ <- result.try(case list_has_duplicate(custom_type.parameters) {

@@ -53,6 +53,11 @@ pub fn load_module(module: glance.Module, name: String) -> Module {
       glance.Definition(definition: import_, ..) -> import_.module
     }
   })
+  |> list.filter(fn(dep) {
+    // The prelude is implicitly available in every module; `import gleam` does
+    // not pull in a real module to load or sort.
+    dep != "gleam" && dep != "prelude"
+  })
   |> Module(name, module, _)
 }
 

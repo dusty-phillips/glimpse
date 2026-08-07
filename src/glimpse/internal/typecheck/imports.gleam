@@ -36,9 +36,18 @@ pub fn fold_import_from_env(
         _ -> True
       }
 
-      case dict.get(module_envs, module) {
-        Error(_) -> list.Stop(Error(error.InvalidName(module)))
-        Ok(module_env) -> {
+      let module_env = case module {
+        _ if module == "gleam" || module == "prelude" ->
+          option.Some(types.prelude_module_env(module))
+        _ ->
+          dict.get(module_envs, module)
+          |> result.map(option.Some)
+          |> result.unwrap(option.None)
+      }
+
+      case module_env {
+        option.None -> list.Stop(Error(error.InvalidName(module)))
+        option.Some(module_env) -> {
           let environment_result = {
             use _ <- result.try(
               case

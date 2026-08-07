@@ -922,6 +922,26 @@ pub fn new_env(current_module: String) -> Environment {
   )
 }
 
+/// The environment representing the compiler's implicit prelude module, used
+/// to resolve `import gleam`. The prelude's types and values are exposed as
+/// namespace members (e.g. `import gleam.{Error as Err}` brings the Result
+/// constructor into scope), mirroring real Gleam.
+pub fn prelude_module_env(module_name: String) -> Environment {
+  let custom_types = prelude_custom_types()
+  Environment(
+    current_module: module_name,
+    definitions: prelude_definitions(),
+    public_definitions: dict.keys(prelude_definitions()) |> set.from_list,
+    custom_types: custom_types,
+    public_custom_types: dict.keys(custom_types) |> set.from_list,
+    import_names: dict.new(),
+    module_imports: dict.new(),
+    module_environments: dict.new(),
+    defer_unknown: False,
+    generic_edges: dict.new(),
+  )
+}
+
 /// Toggle whether type-directed lookups on still-unknown types defer instead of
 /// erroring. Set during the first function-body pass.
 pub fn set_defer_unknown(environment: Environment, defer: Bool) -> Environment {
@@ -1582,6 +1602,16 @@ fn lookup_named_type(
 
 fn is_prelude_module(module: String) -> Bool {
   module == "gleam" || module == "prelude"
+}
+
+/// Whether a type is one of the implicit prelude types seeded into every
+/// module's scope. A module may shadow these with its own declaration, so
+/// duplicate-definition checks must not treat the prelude seed as a clash.
+pub fn is_prelude_type(type_: Type) -> Bool {
+  case type_ {
+    CustomType(module, _, _, _) -> is_prelude_module(module)
+    _ -> False
+  }
 }
 
 pub fn to_string(environment: Environment, type_: Type) -> String {
