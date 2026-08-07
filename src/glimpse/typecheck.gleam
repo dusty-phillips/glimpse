@@ -849,11 +849,16 @@ pub fn function(
           // inferred return is still the `InferredReturn` placeholder during the
           // first pass, or returned the tagged `r_`-variable of a placeholder
           // call. Keep this function's placeholder signature; the second pass
-          // re-checks it against the callee's now-final return.
+          // re-checks it against the callee's now-final return. A function whose
+          // return is the *own* `r_<self>` marker (a direct recursive call that
+          // also unifies with its parameter types) is finite and can be
+          // finalised here, so recursive helpers like `max_loop` get a real
+          // signature instead of the `todo` wildcard they start with.
           let placeholder_return =
             resolved_return == types.InferredReturn
             || case types.var_source(store, resolved_return) {
-              option.Some(name) -> string.starts_with(name, "r_")
+              option.Some(name) ->
+                string.starts_with(name, "r_") && name != "r_" <> function.name
               option.None -> False
             }
           case placeholder_return {

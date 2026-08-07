@@ -351,6 +351,28 @@ pub fn generic_helper_return_in_error_slot_is_rejected_test() {
     )
 }
 
+pub fn recursive_unannotated_helper_return_is_rejected_test() {
+  // `loop`'s parameters are unannotated, so its signature starts as the
+  // `todo` wildcard; the finite recursion must still finalise it to
+  // `fn(List(a), a) -> a` so its return carries the caller's rigid `a`.
+  let _ =
+    helpers.error_module_typecheck(
+      "fn loop(list, max) {
+      case list {
+        [] -> max
+        [first, ..rest] -> loop(rest, first)
+      }
+    }
+
+    pub fn f(list: List(a)) -> Result(a, Nil) {
+      case list {
+        [] -> Error(Nil)
+        [first, ..rest] -> Error(loop(rest, first))
+      }
+    }",
+    )
+}
+
 pub fn capture_branches_with_different_generic_names_unify_test() {
   // Each `case` branch is a capture of a polymorphic function. Generalising
   // the two captures can name their type variables differently (one is pinned
