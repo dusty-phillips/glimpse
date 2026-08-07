@@ -425,6 +425,35 @@ pub fn unannotated_lambda_binding_is_monomorphic_test() {
     )
 }
 
+pub fn lambda_params_pinned_to_rigid_stay_rigid_test() {
+  // An unannotated wrapper lambda whose parameters the body pins to the
+  // function's rigid `k`/`v` must not be re-instantiated when passed to a
+  // callee whose `Dict(v, k)` conflicts with the rigid `Dict(k, v)`.
+  let _ =
+    helpers.error_module_typecheck(
+      "pub type Dict(k, v) {
+      Dict
+    }
+
+    fn do_fold(
+      fun: fn(k, v, acc) -> acc,
+      initial: acc,
+      dict: Dict(v, k),
+    ) -> acc {
+      initial
+    }
+
+    pub fn fold(
+      dict: Dict(k, v),
+      initial: acc,
+      outer: fn(acc, k, v) -> acc,
+    ) -> acc {
+      let wrapper = fn(key, value, acc) { outer(acc, key, value) }
+      do_fold(wrapper, initial, dict)
+    }",
+    )
+}
+
 pub fn capture_branches_with_different_generic_names_unify_test() {
   // Each `case` branch is a capture of a polymorphic function. Generalising
   // the two captures can name their type variables differently (one is pinned

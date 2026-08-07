@@ -1003,9 +1003,9 @@ fn fn_literal(
   // The parameter names of a function literal must be distinct.
   use _store <- result.try(check_duplicate_fn_parameter_names(arguments))
 
-  use #(store, _, param_types) <- result.try(
-    list.try_fold(arguments, #(store, dict.new(), []), fn(state, param) {
-      let #(store, generic_vars, reversed) = state
+  use #(store, _, param_types, annotated_flags) <- result.try(
+    list.try_fold(arguments, #(store, dict.new(), [], []), fn(state, param) {
+      let #(store, generic_vars, reversed, flags) = state
       case param {
         glance.FnParameter(_, type_: option.Some(annotation)) ->
           types.type_with_store(environment, store, annotation)
@@ -1015,16 +1015,17 @@ fn fn_literal(
             // like a function's declared type parameters.
             let #(store, generic_vars, type_) =
               functions.freshen_generics(store, generic_vars, type_)
-            Ok(#(store, generic_vars, [type_, ..reversed]))
+            Ok(#(store, generic_vars, [type_, ..reversed], [True, ..flags]))
           })
         glance.FnParameter(_, type_: option.None) -> {
           let #(store, type_) = types.fresh_var(store)
-          Ok(#(store, generic_vars, [type_, ..reversed]))
+          Ok(#(store, generic_vars, [type_, ..reversed], [False, ..flags]))
         }
       }
     }),
   )
   let param_types = list.reverse(param_types)
+  let annotated_flags = list.reverse(annotated_flags)
 
   // Bind unannotated parameters to their expected types, in case this literal
   // is supplied where a concrete callable type is expected (e.g. as a callback
@@ -1115,14 +1116,24 @@ fn fn_literal(
   // Annotated parameters were made rigid while the body was checked (so a
   // lambda's type variables cannot be used as a concrete type); resolve them
   // back to their named generics for the lambda's own type so the lambda stays
-  // polymorphic at use sites, while unannotated parameters remain unbound
-  // inference variables.
+  // polymorphic at use sites. Unannotated parameters keep the type the body
+  // gave them (which may be a rigid parameter of the enclosing function), so a
+  // wrapper lambda whose parameters were pinned to rigid types stays
+  // monomorphic and cannot be re-instantiated past a conflicting call.
   let #(store, param_types) =
-    list.fold(param_types, #(store, []), fn(state, param_type) {
-      let #(store, acc) = state
-      let #(store, resolved) = types.resolve(store, param_type)
-      #(store, [resolved, ..acc])
-    })
+    list.fold(
+      list.zip(param_types, annotated_flags),
+      #(store, []),
+      fn(state, pair) {
+        let #(store, acc) = state
+        let #(param_type, is_annotated) = pair
+        let #(store, resolved) = case is_annotated {
+          True -> types.resolve(store, param_type)
+          False -> #(store, param_type)
+        }
+        #(store, [resolved, ..acc])
+      },
+    )
     |> fn(state) { #(state.0, list.reverse(state.1)) }
   let #(store, return_type) = types.resolve(store, return_type)
 
