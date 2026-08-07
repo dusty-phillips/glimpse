@@ -559,6 +559,11 @@ pub fn main() { js_only() }
 - glimpse: now rejects — public externals for other targets report
   `UnsupportedTarget` at the definition, and calls to private ones fail with
   `InvalidName` since they are not registered for the active target.
+- Body-vs-external resolution matches the official matrix: a function whose
+  `@external` covers the active target uses the external (its Gleam body is
+  not checked), while a function whose externals are for other targets has its
+  body typechecked on this target. Unused other-target externals are accepted,
+  and an empty-body external never has a spurious body checked.
 
 ### 11.7 Incorrect number of case patterns — **fixed**
 
@@ -612,6 +617,27 @@ rejected with **DuplicateImport**. Importing a type-only name as a value (e.g.
 `import wibble.{X}` where `X` is a type alias) reports **InvalidName**;
 importing a constructor as a value stays fine. Private values and types of
 dependency modules are not importable.
+
+### 11.12 Dev-dependency imports — **fixed**
+
+`glimpse.Package` now carries `dev_dependencies`; `typecheck.package` rejects a
+source module that imports one, reporting
+`ImportError(SrcImportingDevDependency(module))`. Dev-dependency modules
+importing other dev-dependency modules remain fine.
+
+### 11.13 Missing-pattern text — **fixed (mostly)**
+
+The missing-pattern list now matches the official compiler's rendering for the
+common shapes: constructor arguments render as `_` (`Error(_)`, `Wibble(_)`),
+partially covered single-argument constructors show the missing argument
+(`Ok(False)` from a covered `Ok(True)`), nested constructors wrap
+(`Wrap(Ok(_))`), list tails render as `[_, ..]`, and tuples as `#(_, _)`.
+
+Still approximate: multi-argument partials (`case x { Thing(1, True) -> 1 }`
+reports `_` rather than official `Thing(_, True)`/`Thing(_, False)`),
+length-aware lists (`[_]`, `[_, _]`, `[_, _, ..]` are not distinguished), and
+multi-subject combinations are flattened rather than joined with `", "`. The
+exhaustiveness *verdicts* are unaffected.
 
 Interactions verified as already-correct in glimpse (not listed as bugs): guards
 (Int vs Float operators, non-Bool guard), all operator type mismatches

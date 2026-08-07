@@ -14,7 +14,7 @@ pub fn use_refutable_pattern_test() {
       x
     }",
     )
-    == error.InexhaustivePattern("Error")
+    == error.InexhaustivePattern("Error(_)")
 }
 
 /// A variable or discard pattern binds any value, so it stays irrefutable.

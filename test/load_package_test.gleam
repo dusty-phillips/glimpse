@@ -21,6 +21,7 @@ pub fn no_dependency_package_test() {
           glimpse.Module("main_module", ok_module("pub fn main() {}"), []),
         ),
       ]),
+      [],
     )
 }
 

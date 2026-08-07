@@ -14,12 +14,16 @@ pub type Module {
 pub type Package {
   /// A Package has a name and a collection of modules. Each module is named
   /// according to its import. A module can be converted to a filename
-  ///(relative to the global source / directory) simply by appending '.gleam'
+  /// (relative to the global source / directory) simply by appending '.gleam'
   Package(
     /// The name of the package. Also names the entrypoint module.
     name: String,
     /// Mapping of all modules in the project, from their name to their Module instance
     modules: dict.Dict(String, Module),
+    /// The names of modules that are only available as development
+    /// dependencies. Source modules may not import these, mirroring the real
+    /// compiler's `src`/`dev` split.
+    dev_dependencies: List(String),
   )
 }
 
@@ -33,7 +37,7 @@ pub fn load_package(
   package_name: String,
   loader: fn(String) -> Result(String, a),
 ) -> Result(Package, error.GlimpseError(a)) {
-  let package = Package(package_name, dict.new())
+  let package = Package(package_name, dict.new(), [])
   load_package_recurse(package, [package_name], loader)
 }
 
@@ -89,6 +93,7 @@ fn load_package_recurse(
             Package(
               ..package,
               modules: dict.insert(package.modules, module_name, glimpse_module),
+              dev_dependencies: package.dev_dependencies,
             )
           load_package_recurse(
             recurse_package,

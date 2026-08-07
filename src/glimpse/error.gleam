@@ -15,6 +15,9 @@ pub type GlimpseError(a) {
 pub type GlimpseImportError {
   CircularDependencyError(module_name: String)
   MissingImportError(module_name: String)
+  /// Raised when a source module imports a module that is only available as a
+  /// development dependency.
+  SrcImportingDevDependency(module_name: String)
 }
 
 pub type TypeCheckError {

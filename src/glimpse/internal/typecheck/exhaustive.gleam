@@ -3,6 +3,7 @@ import gleam/dict
 import gleam/list
 import gleam/option
 import gleam/result
+import gleam/string
 import glimpse/internal/typecheck/types
 
 /// How many times a recursive type may expand into itself while computing a
@@ -70,9 +71,42 @@ type Row {
   Row(checks: List(#(Int, Pat)))
 }
 
+/// A missing value pattern: the catch-all `_`, or a constructor with the
+/// missing patterns of its arguments.
+type MissingPattern {
+  AnyMissing
+  ValueMissing(name: String, arguments: List(MissingPattern))
+}
+
 /// The outcome of checking a matrix.
 type Outcome {
-  Outcome(missing: List(String), next_id: Int)
+  Outcome(missing: List(MissingPattern), next_id: Int)
+}
+
+/// Render a missing value pattern the way the official compiler prints it:
+/// `Error(_)`, `Ok(False)`, `[_, ..]`, `#(_, _)`, `Two`, `_`.
+fn render_missing(pattern: MissingPattern) -> String {
+  case pattern {
+    AnyMissing -> "_"
+    ValueMissing(name, arguments) ->
+      case name {
+        "#" ->
+          "#(" <> string.join(list.map(arguments, render_missing), ", ") <> ")"
+        "[..]" -> "[_, ..]"
+        "[]" -> "[]"
+        "element" ->
+          "#(" <> string.join(list.map(arguments, render_missing), ", ") <> ")"
+        _ ->
+          case arguments {
+            [] -> name
+            _ ->
+              name
+              <> "("
+              <> string.join(list.map(arguments, render_missing), ", ")
+              <> ")"
+          }
+      }
+  }
 }
 
 /// The element at `index` of `items`, or `None` when out of bounds.
@@ -124,7 +158,7 @@ pub fn check(
     compile(initial_modes, rows, list.length(subject_types))
   case missing {
     [] -> option.None
-    _ -> option.Some(missing)
+    _ -> option.Some(list.map(missing, render_missing))
   }
 }
 
@@ -456,15 +490,21 @@ fn missing_id_mode_pairs(
   })
 }
 
-/// Every value a mode can take, as pattern descriptions: the constructor names
-/// of a finite mode, or the `_` catch-all of an infinite one.
-fn all_values(pairs: List(#(Int, Mode))) -> List(String) {
+/// Every value a mode can take, as missing patterns: the constructors of a
+/// finite mode, or the `_` catch-all of an infinite one.
+fn all_values(pairs: List(#(Int, Mode))) -> List(MissingPattern) {
   list.flatten(
     list.map(pairs, fn(pair) {
       let #(_id, mode) = pair
       case mode {
-        Finite(fields) -> list.map(fields, fn(field) { field.name })
-        Infinite -> ["_"]
+        Finite(fields) ->
+          list.map(fields, fn(field) {
+            ValueMissing(
+              field.name,
+              list.map(field.modes, fn(_) { AnyMissing }),
+            )
+          })
+        Infinite -> [AnyMissing]
       }
     }),
   )
@@ -510,7 +550,7 @@ fn run_decision(
       let no_check =
         list.filter(rows, fn(row) { has_subject(row, pivot) == False })
       case no_check {
-        [] -> Outcome(["_"], next_id)
+        [] -> Outcome([AnyMissing], next_id)
         _ -> compile(remainder, no_check, next_id)
       }
     }
@@ -548,7 +588,16 @@ fn compile_subject(
         }
       })
     case matches {
-      [] -> Outcome([field.name, ..missing], next)
+      [] ->
+        Outcome(
+          list.append(missing, [
+            ValueMissing(
+              field.name,
+              list.map(field_modes, fn(_) { AnyMissing }),
+            ),
+          ]),
+          next,
+        )
       _ -> {
         let sub_modes =
           dict.merge(
@@ -557,9 +606,16 @@ fn compile_subject(
           )
         let Outcome(sub_missing, next2) =
           compile(sub_modes, matches, next + field_count)
-        case sub_missing {
+        // A partially covered single-argument constructor reports its missing
+        // arguments wrapped in the constructor, e.g. `Ok(False)` for a covered
+        // `Ok(True)`; multi-argument constructors keep the flattened leaves.
+        let wrapped = case field_count == 1 {
+          True -> list.map(sub_missing, fn(m) { ValueMissing(field.name, [m]) })
+          False -> sub_missing
+        }
+        case wrapped {
           [] -> Outcome(missing, next2)
-          _ -> Outcome(list.append(missing, sub_missing), next2)
+          _ -> Outcome(list.append(missing, wrapped), next2)
         }
       }
     }

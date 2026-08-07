@@ -314,3 +314,34 @@ pub fn parametric_call_chains_are_fine_test() {
     }",
   )
 }
+
+pub fn other_target_external_body_is_typechecked_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"one\", \"two\")
+    fn x() -> Int {
+      \"not an int\"
+    }
+    pub fn main() { x() }",
+    )
+    == error.InvalidReturnType("x", "String", "Int")
+}
+
+pub fn covered_target_external_body_is_skipped_test() {
+  helpers.ok_module_typecheck(
+    "@external(erlang, \"one\", \"two\")
+    fn x() -> Int {
+      \"not an int\"
+    }
+    pub fn main() { x() }",
+  )
+}
+
+pub fn private_other_target_external_call_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"one\", \"two\")
+    fn js_only() -> Int
+    fn uh_oh() -> Int { js_only() }
+    pub fn main() { uh_oh() }",
+    )
+    == error.InvalidName("js_only")
+}

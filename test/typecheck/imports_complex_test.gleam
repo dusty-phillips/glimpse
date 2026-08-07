@@ -183,6 +183,7 @@ pub fn missing_import_returns_import_error_test() {
     glimpse.Package(
       "main_module",
       dict.from_list([#("main_module", main_module)]),
+      [],
     )
 
   let actual: Result(glimpse.Package, error.GlimpseError(Nil)) =
@@ -199,4 +200,56 @@ pub fn load_package_missing_module_returns_load_error_test() {
       }
     })
   assert actual == Error(error.LoadError(Nil))
+}
+
+pub fn src_importing_dev_dependency_is_rejected_test() {
+  let assert Ok(parsed_main) =
+    glance.module(
+      "import devonly
+    pub fn main() { devonly.x() }",
+    )
+  let assert Ok(parsed_devonly) = glance.module("pub fn x() -> Int { 1 }")
+  let main_module = glimpse.Module("main_module", parsed_main, ["devonly"])
+  let devonly_module = glimpse.Module("devonly", parsed_devonly, [])
+  let package =
+    glimpse.Package(
+      "main_module",
+      dict.from_list([
+        #("main_module", main_module),
+        #("devonly", devonly_module),
+      ]),
+      ["devonly"],
+    )
+  let actual: Result(glimpse.Package, error.GlimpseError(Nil)) =
+    typecheck.package(package, target.Erlang)
+  assert actual
+    == Error(error.ImportError(error.SrcImportingDevDependency("main_module")))
+}
+
+pub fn dev_dependency_importing_dev_dependency_is_fine_test() {
+  let assert Ok(parsed_dev) =
+    glance.module(
+      "import devonly
+    pub fn main() { devonly.x() }",
+    )
+  let assert Ok(parsed_devonly) = glance.module("pub fn x() -> Int { 1 }")
+  let assert Ok(parsed_main) = glance.module("pub fn main() { Nil }")
+  let dev_module = glimpse.Module("dev", parsed_dev, ["devonly"])
+  let devonly_module = glimpse.Module("devonly", parsed_devonly, [])
+  let package =
+    glimpse.Package(
+      "main_module",
+      dict.from_list([
+        #("main_module", glimpse.Module("main_module", parsed_main, [])),
+        #("dev", dev_module),
+        #("devonly", devonly_module),
+      ]),
+      ["dev", "devonly"],
+    )
+  let actual: Result(glimpse.Package, error.GlimpseError(Nil)) =
+    typecheck.package(package, target.Erlang)
+  assert case actual {
+    Ok(_) -> True
+    Error(_) -> False
+  }
 }

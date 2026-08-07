@@ -81,7 +81,7 @@ pub fn list_case_missing_fixed_length_and_tail_test() {
         case xs { [x, y] -> 1 }
       }",
     )
-    == error.InexhaustivePattern("[]\n[]\n[..]")
+    == error.InexhaustivePattern("[_, ..]\n[]\n[]")
 }
 
 pub fn list_case_missing_two_element_pattern_test() {
@@ -90,7 +90,7 @@ pub fn list_case_missing_two_element_pattern_test() {
         case xs { [] -> 0 [x] -> 1 }
       }",
     )
-    == error.InexhaustivePattern("[..]")
+    == error.InexhaustivePattern("[_, ..]")
 }
 
 pub fn recursive_custom_type_case_is_exhaustive_test() {
@@ -138,5 +138,42 @@ pub fn main(wrapper: Wrapper(CaCert)) -> Int {
   }
 }",
     )
-    == error.InexhaustivePattern("CaCertData")
+    == error.InexhaustivePattern("Wrap(CaCertData(_))")
+}
+
+pub fn missing_constructor_with_argument_shows_underscore_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn main(x: Result(Int, Nil)) {
+        case x { Ok(1) -> 1 }
+      }",
+    )
+    == error.InexhaustivePattern("Ok(_)\nError(_)")
+}
+
+pub fn partially_covered_constructor_shows_missing_argument_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn main(x: Result(Bool, Nil)) {
+        case x { Ok(True) -> 1 }
+      }",
+    )
+    == error.InexhaustivePattern("Ok(False)\nError(_)")
+}
+
+pub fn nested_missing_constructor_is_wrapped_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Wrapper(a) { Wrap(a) }
+      pub fn main(x: Wrapper(Result(Int, Nil))) {
+        case x { Wrap(Ok(1)) -> 1 }
+      }",
+    )
+    == error.InexhaustivePattern("Wrap(Ok(_))\nWrap(Error(_))")
+}
+
+pub fn list_cons_missing_pattern_matches_official_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn main(x: List(Int)) {
+        case x { [_] -> 1 }
+      }",
+    )
+    == error.InexhaustivePattern("[_, ..]\n[]")
 }

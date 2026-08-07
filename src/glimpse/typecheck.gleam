@@ -41,6 +41,26 @@ pub fn package(
     import_graph,
     package.name,
   ))
+  // A source module may not import a module that is only available as a
+  // development dependency.
+  use _ <- result.try(
+    list.try_fold(ordered_dependencies, Nil, fn(_, module_name) {
+      case
+        !list.contains(package.dev_dependencies, module_name)
+        && case dict.get(package.modules, module_name) {
+          Ok(module) ->
+            list.any(module.dependencies, fn(dep) {
+              list.contains(package.dev_dependencies, dep)
+            })
+          Error(_) -> False
+        }
+      {
+        True ->
+          Error(error.ImportError(error.SrcImportingDevDependency(module_name)))
+        False -> Ok(Nil)
+      }
+    }),
+  )
   ordered_dependencies
   |> list.fold_until(
     Ok(PackageState(package, dict.new())),
@@ -226,10 +246,12 @@ pub fn module(
   use #(environment, _) <- result.try(typecheck_function_bodies(
     types.set_defer_unknown(environment, True),
     glimpse_module.module.functions,
+    target,
   ))
   use #(environment, functions) <- result.try(typecheck_function_bodies(
     types.set_defer_unknown(environment, False),
     glimpse_module.module.functions,
+    target,
   ))
 
   let new_glance_module =
@@ -241,10 +263,6 @@ pub fn module(
   let new_glimpse_module =
     glimpse.Module(..glimpse_module, module: new_glance_module)
   Ok(#(new_glimpse_module, environment))
-}
-
-fn is_external(definition: glance.Definition(glance.Function)) -> Bool {
-  list.any(definition.attributes, fn(attribute) { attribute.name == "external" })
 }
 
 /// A public function may not reference a private custom type in its signature.
@@ -342,16 +360,23 @@ fn find_private_in_types(
 fn typecheck_function_bodies(
   environment: Environment,
   definitions: List(glance.Definition(glance.Function)),
+  target: target.Target,
 ) -> error.TypeCheckResult(
   #(Environment, List(glance.Definition(glance.Function))),
 ) {
   use functions_env_state <- result.try(
     definitions
     |> list.try_fold(types.EnvState(environment, []), fn(env_state, definition) {
-      use function_env_state <- result.try(case is_external(definition) {
-        True -> Ok(types.EnvState(env_state.environment, definition.definition))
-        False -> function(env_state.environment, definition.definition)
-      })
+      use function_env_state <- result.try(
+        case
+          target.has_external_for_target(target, definition)
+          || definition.definition.body == []
+        {
+          True ->
+            Ok(types.EnvState(env_state.environment, definition.definition))
+          False -> function(env_state.environment, definition.definition)
+        },
+      )
       let updated_definition =
         glance.Definition(..definition, definition: function_env_state.state)
       Ok(

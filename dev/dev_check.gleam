@@ -86,7 +86,7 @@ fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
     }
     option.None -> "glimpse"
   }
-  let package = glimpse.Package(package_name, module_dict)
+  let package = glimpse.Package(package_name, module_dict, [])
   io.println(
     "Parsed " <> string.inspect(list.length(all_entries)) <> " modules total",
   )

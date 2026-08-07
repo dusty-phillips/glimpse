@@ -11,7 +11,7 @@ pub fn no_dependencies_test() {
   let assert Ok(glance_module) = glance.module("")
   let module = glimpse.load_module(glance_module, "some/module")
 
-  let package = glimpse.Package("some_package", dict.new())
+  let package = glimpse.Package("some_package", dict.new(), [])
 
   assert glimpse.filter_new_dependencies(module, package) == []
 }
@@ -20,7 +20,7 @@ pub fn new_dependency_test() {
   let assert Ok(glance_module) = glance.module("import gleam/io")
   let module = glimpse.load_module(glance_module, "some/module")
 
-  let package = glimpse.Package("some_package", dict.new())
+  let package = glimpse.Package("some_package", dict.new(), [])
 
   assert glimpse.filter_new_dependencies(module, package) == ["gleam/io"]
 }
@@ -33,6 +33,7 @@ pub fn old_dependency_test() {
     glimpse.Package(
       "some_package",
       dict.new() |> dict.insert("gleam/io", empty_module("gleam/io")),
+      [],
     )
 
   assert glimpse.filter_new_dependencies(module, package) == []
@@ -50,6 +51,7 @@ import gleam/list",
     glimpse.Package(
       "some_package",
       dict.new() |> dict.insert("gleam/io", empty_module("gleam/io")),
+      [],
     )
 
   assert glimpse.filter_new_dependencies(module, package) == ["gleam/list"]

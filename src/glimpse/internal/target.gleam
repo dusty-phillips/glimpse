@@ -85,3 +85,16 @@ fn external_matches_target(
     _ -> True
   }
 }
+
+/// Whether a function's `@external` attributes include one for the given
+/// target. A function with such an external uses the external implementation
+/// on this target and its Gleam body is not checked; a function whose
+/// externals are for other targets uses its body instead.
+pub fn has_external_for_target(
+  target: Target,
+  definition: glance.Definition(glance.Function),
+) -> Bool {
+  list.any(definition.attributes, fn(attribute) {
+    attribute.name == "external" && external_matches_target(target, attribute)
+  })
+}
