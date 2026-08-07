@@ -1703,14 +1703,18 @@ fn bit_string_segment_value(
     store,
     value_expr,
   ))
-  let expected_family = case bit_string_segment.segment_type(options) {
-    types.IntType ->
+  // A literal String/Float segment with no options defaults to its own family
+  // (`<<"x">>` and `<<1.5>>` are valid), but once any option is present the
+  // family is forced by the options: `<<"x":8>>` and `<<1.5:8>>` are rejected
+  // because an integer size makes the segment an `Int`.
+  let expected_family = case options {
+    [] ->
       case value_expr {
         glance.String(_, _) -> types.StringType
         glance.Float(_, _) -> types.FloatType
         _ -> types.IntType
       }
-    forced_family -> forced_family
+    _ -> bit_string_segment.segment_type(options)
   }
   types.unify(store, environment, value_type, expected_family)
   |> result.map(fn(store) { #(store, value_type) })
