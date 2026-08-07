@@ -381,8 +381,16 @@ fn bind_variable(
   // is polymorphic and later unifications cannot leak into it. Shadowing is
   // allowed (Gleam permits rebinding in a new scope), so the definition is
   // simply overwritten.
-  let generalised = types.generalise(store, type_)
-  Ok(#(store, types.add_or_update_def_in_env(environment, name, generalised)))
+  //
+  // Values that mention a rigid type parameter of the current function are
+  // *not* generalised: turning the rigid reference into a named generic would
+  // let a later lookup instantiate it, weakening the rigid check (e.g.
+  // `case xs, ys { [x, ..], [y, ..] -> x == y }` must not unify `a` with `b`).
+  let bound = case types.has_rigid_var(store, type_) {
+    True -> type_
+    False -> types.generalise(store, type_)
+  }
+  Ok(#(store, types.add_or_update_def_in_env(environment, name, bound)))
 }
 
 fn fold_patterns(

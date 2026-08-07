@@ -2391,7 +2391,7 @@ pub fn call(
     _ -> Ok(#(store, return))
   })
 
-  Ok(types.resolve(store, return))
+  Ok(#(store, return))
 }
 
 /// Record how a same-module callee's generic parameters are constrained by the
@@ -3113,13 +3113,16 @@ pub fn binop(
         glance.Eq | glance.NotEq -> {
           case types.unify(store, environment, left_type, right_type) {
             Ok(store) -> Ok(#(store, types.BoolType))
-            Error(_) ->
+            Error(_) -> {
+              let #(store, resolved_left) = types.resolve(store, left_type)
+              let #(_store, resolved_right) = types.resolve(store, right_type)
               Error(error.InvalidBinOp(
                 operator_string(operator),
-                types.to_string(environment, left_type),
-                types.to_string(environment, right_type),
+                types.to_string(environment, resolved_left),
+                types.to_string(environment, resolved_right),
                 "same type",
               ))
+            }
           }
         }
 
@@ -3236,10 +3239,12 @@ fn check_operands(
   })
   |> result.map(fn(store) { #(store, expected_type) })
   |> result.map_error(fn(_) {
+    let #(store, resolved_left) = types.resolve(store, left)
+    let #(_store, resolved_right) = types.resolve(store, right)
     error.InvalidBinOp(
       operator,
-      types.to_string(environment, left),
-      types.to_string(environment, right),
+      types.to_string(environment, resolved_left),
+      types.to_string(environment, resolved_right),
       expected,
     )
   })

@@ -389,7 +389,18 @@ fn freshen_generics(
       case dict.get(generic_vars, name) {
         Ok(existing) -> #(store, generic_vars, existing)
         Error(_) -> {
-          let #(store, fresh) = types.fresh_var(store)
+          // A declared type parameter becomes a fresh variable *linked* to the
+          // named generic it stands for. Inside the function body it is a rigid
+          // type variable: unification resolves it to `a` and rejects binding
+          // it to a concrete type or to a different type parameter, exactly as
+          // the real compiler does for `fn f(x: a) { x && True }`. The link is
+          // what lets generalization and error messages still show `a`, and it
+          // keeps type parameter names locally scoped (no cross-function
+          // collisions, since rigidity is tracked per variable, not per name).
+          let #(store, fresh) =
+            types.fresh_var_with_source(store, "rigid:" <> name)
+          let store =
+            types.link_var_to(store, fresh, types.GenericTypeVariable(name))
           #(store, dict.insert(generic_vars, name, fresh), fresh)
         }
       }

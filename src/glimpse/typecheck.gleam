@@ -658,7 +658,7 @@ fn constant_(
   constant: glance.Constant,
 ) -> types.EnvStateResult(glance.Constant) {
   let store = types.new_type_store()
-  use #(_store, value_type) <- result.try(intern.expression(
+  use #(store, value_type) <- result.try(intern.expression(
     environment,
     store,
     constant.value,
@@ -672,12 +672,14 @@ fn constant_(
         let #(store, annotated) = state
         case types.unify(store, environment, value_type, annotated) {
           Ok(store) -> Ok(#(store, annotated))
-          Error(_) ->
+          Error(_) -> {
+            let #(_store, resolved) = types.resolve(store, value_type)
             Error(error.InvalidAnnotation(
-              types.to_string(environment, value_type),
+              types.to_string(environment, resolved),
               types.to_string(environment, annotated),
               constant.name,
             ))
+          }
         }
       })
   }

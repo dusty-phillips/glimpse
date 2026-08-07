@@ -302,6 +302,43 @@ pub fn fresh_var(store: TypeStore) -> #(TypeStore, Type) {
   fresh_type(store)
 }
 
+/// Link a type variable to another type in the store, returning the updated
+/// store. Used to pin a declared type parameter's variable to its named
+/// generic at creation, so the variable resolves to (and renders as) the
+/// generic name while staying rigid during body checking.
+pub fn link_var_to(store: TypeStore, type_: Type, target: Type) -> TypeStore {
+  case type_ {
+    Var(id) ->
+      TypeStore(..store, vars: dict.insert(store.vars, id, Link(target)))
+    _ -> store
+  }
+}
+
+/// Whether a type mentions a *rigid* type variable: one created for a declared
+/// type parameter of the current function (tagged `rigid:<name>`). Such values
+/// must not be generalised at a binding boundary, since doing so would turn the
+/// rigid reference into an instantiable named generic.
+pub fn has_rigid_var(store: TypeStore, type_: Type) -> Bool {
+  case type_ {
+    Var(id) ->
+      case var_source(store, Var(id)) {
+        option.Some(source) -> string.starts_with(source, "rigid:")
+        option.None -> False
+      }
+    TupleType(elements) -> list.any(elements, has_rigid_var(store, _))
+    CustomType(_, _, parameters, _) ->
+      list.any(parameters, has_rigid_var(store, _))
+    CallableType(parameters, _, return) ->
+      list.any(parameters, has_rigid_var(store, _))
+      || has_rigid_var(store, return)
+    GenericCallableType(parameters, _, return, _) ->
+      list.any(parameters, has_rigid_var(store, _))
+      || has_rigid_var(store, return)
+    TypeAlias(_, aliased) -> has_rigid_var(store, aliased)
+    _ -> False
+  }
+}
+
 /// Create `count` fresh unbound inference variables.
 pub fn fresh_vars(store: TypeStore, count: Int) -> #(TypeStore, List(Type)) {
   case count {
@@ -1549,17 +1586,18 @@ pub fn map_types(types: List(Type), on_leaf: fn(Type) -> Type) -> List(Type) {
 /// type without rebuilding it.
 pub fn fold_type(acc: a, type_: Type, on_leaf: fn(a, Type) -> a) -> a {
   case type_ {
-    TupleType(elements) -> fold_types(acc, elements, on_leaf)
-    CustomType(_, _, parameters, _) -> fold_types(acc, parameters, on_leaf)
+    TupleType(elements) -> fold_types(on_leaf(acc, type_), elements, on_leaf)
+    CustomType(_, _, parameters, _) ->
+      fold_types(on_leaf(acc, type_), parameters, on_leaf)
     CallableType(parameters, _, return) -> {
-      let acc = fold_types(acc, parameters, on_leaf)
+      let acc = fold_types(on_leaf(acc, type_), parameters, on_leaf)
       fold_type(acc, return, on_leaf)
     }
     GenericCallableType(parameters, _, return, _) -> {
-      let acc = fold_types(acc, parameters, on_leaf)
+      let acc = fold_types(on_leaf(acc, type_), parameters, on_leaf)
       fold_type(acc, return, on_leaf)
     }
-    TypeAlias(_, aliased) -> fold_type(acc, aliased, on_leaf)
+    TypeAlias(_, aliased) -> fold_type(on_leaf(acc, type_), aliased, on_leaf)
     _ -> on_leaf(acc, type_)
   }
 }

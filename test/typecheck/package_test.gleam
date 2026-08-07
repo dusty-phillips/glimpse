@@ -2,6 +2,7 @@ import glance
 import gleam/dict
 import gleam/list
 import gleam/option
+import gleam/result
 import typecheck/helpers
 
 pub fn typecheck_single_module_package_test() {
@@ -91,4 +92,48 @@ pub fn module_shadowing_value_falls_back_to_module_test() {
       _ -> panic as "only two modules in this test"
     }
   })
+}
+
+/// An inferred type that mentions a custom type from a module the current
+/// module does not import cannot be written back as an annotation (it has no
+/// way to name the module). This must leave the parameter unannotated rather
+/// than panic: `Memos` is an alias to `mutable_map.MutableMap`, and a caller
+/// that only imports the alias' module must still infer through it.
+pub fn inferred_type_with_unimportable_module_is_left_unannotated_test() {
+  let package =
+    helpers.ok_package_check("main_module", fn(pkg) {
+      case pkg {
+        "main_module" ->
+          Ok(
+            "import mid/package
+
+          pub fn pass(inner) {
+            package.takes(inner)
+          }",
+          )
+        "mid/package" ->
+          Ok(
+            "import base/package
+
+          pub fn takes(inner: package.Alias(Int)) -> Int {
+            1
+          }",
+          )
+        "base/package" ->
+          Ok(
+            "pub type Inner(x) {
+            Inner(value: x)
+          }
+          pub type Alias(x) = Inner(x)",
+          )
+        _ -> panic as "only three modules in this test"
+      }
+    })
+
+  let assert Ok(module) = dict.get(package.modules, "main_module")
+  let assert Ok(function) = list.first(module.module.functions)
+  let assert option.None =
+    list.first(function.definition.parameters)
+    |> result.map(fn(param) { param.type_ })
+    |> result.unwrap(option.None)
 }
