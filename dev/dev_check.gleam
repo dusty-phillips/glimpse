@@ -44,7 +44,11 @@ fn parse_extra_dir(argv: List(String)) -> option.Option(String) {
   }
 }
 
-fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
+/// Typecheck the package rooted at `extra_project` (when given) or this
+/// package's own `src/` and `dev/`, returning the typecheck result. Prints
+/// nothing itself so callers (like the mutation harness) can run it in-process
+/// without noise.
+pub fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
   use src_entries <- result.try(case extra_project {
     option.None -> scan_project_dir("src")
     option.Some(root) -> {
@@ -76,11 +80,6 @@ fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
       scan_build_packages(root <> "build/packages/")
     }
   }
-  io.println(
-    "Found "
-    <> string.inspect(list.length(dep_entries))
-    <> " dependency modules",
-  )
 
   let all_entries = list.flatten([dep_entries, src_entries, dev_entries])
   let module_dict = dict.from_list(all_entries)
@@ -92,9 +91,6 @@ fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
     option.None -> "glimpse"
   }
   let package = glimpse.Package(package_name, module_dict, [])
-  io.println(
-    "Parsed " <> string.inspect(list.length(all_entries)) <> " modules total",
-  )
 
   let import_graph =
     dict.map_values(package.modules, fn(_, value) { value.dependencies })
@@ -108,7 +104,6 @@ fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
       dict.Dict(String, types.Environment),
       String,
     ) {
-      io.println("  typechecking: " <> next_module)
       case dict.get(package.modules, next_module) {
         Error(_) -> Error("missing module " <> next_module)
         Ok(glimpse_module) ->

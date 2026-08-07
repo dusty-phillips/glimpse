@@ -1,4 +1,5 @@
 import argv
+import dev_check
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -59,7 +60,12 @@ type Options =
 
 fn parse_args(args: List(String)) -> Result(Options, String) {
   // parse recursively to allow any option order
-  let parsed = parse_args_(args, 4, option.None, False)
+  // Default to more jobs than a single core's worth: workers are part I/O
+  // bound (file copies and subprocess spawns), so parallelism above the core
+  // count helps. Beyond ~1.5x cores the real `gleam check` subprocesses (each
+  // already multithreaded) contend and throughput plateaus or degrades, so 16
+  // is a safe default; tune with `--jobs`.
+  let parsed = parse_args_(args, 16, option.None, False)
   case parsed {
     Ok(v) -> Ok(v)
     Error(_) ->
@@ -697,17 +703,13 @@ fn real_check(root: String) -> Result(String, String) {
   }
 }
 
-/// Whether glimpse's dev_check reports all modules typechecked.
+/// Whether glimpse's dev_check reports all modules typechecked. Runs in-process
+/// (no `gleam run -m dev_check` subprocess) so the worker's Erlang VM and the
+/// project's cached build are reused across mutants instead of booting a fresh
+/// process and re-running the build graph check each time.
 fn glimpse_check(root: String) -> Bool {
-  case
-    shellout.command(
-      run: "gleam",
-      with: ["run", "-m", "dev_check", "--", "--typecheck", root],
-      in: ".",
-      opt: [],
-    )
-  {
-    Ok(out) -> string.contains(out, "OK: all modules typechecked")
+  case dev_check.run_typecheck(option.Some(root)) {
+    Ok(_) -> True
     Error(_) -> False
   }
 }
