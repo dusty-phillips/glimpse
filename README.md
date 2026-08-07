@@ -1,44 +1,71 @@
 # Glimpse
 
-Perhaps, a library for parsing and typechecking a gleam project. Wraps the AST
-produced by [glance](https://hex.pm/packages/glance) with two pieces:
+A library for parsing, loading, and typechecking a Gleam project. It wraps the
+AST produced by [glance](https://hex.pm/packages/glance) with two pieces:
 
-- Ability to represent and introspect a gleam program (multiple interdependent
-  modules) as opposed to just one module.
+- The ability to represent and introspect a Gleam program (multiple
+  interdependent modules) as opposed to just one module.
 - Typechecking both within and between modules.
 
-This package is not filesystem aware. That means all modules need to be loaded
-externally, but it does provide tooling to determine what dependencies need
-to be loaded.
+Glimpse is not filesystem aware: all modules are loaded externally through a
+loader function. It provides tooling to determine which dependencies need to be
+loaded, and it typechecks across module boundaries.
+
+It is not yet a complete Gleam typechecker, but it covers the common parts of
+the language so that folks targeting different languages from Gleam can focus
+on codegen.
 
 Docs: https://hexdocs.pm/glimpse/
 Repo: https://github.com/dusty-phillips/glimpse
 
-## Development
+## Install
 
 ```sh
-gleam test  # Run the tests
+gleam add glimpse
 ```
+
+## Quickstart
+
+Load a package, then typecheck it for the Erlang target:
+
+```gleam
+import gleam/io
+import gleam/result
+import glimpse
+import glimpse/target
+import glimpse/typecheck
+
+fn load_module(module_name: String) -> Result(String, Nil) {
+  // read the module contents from the filesystem here
+  Ok("<contents of " <> module_name <> ".gleam>")
+}
+
+pub fn main() {
+  let package =
+    glimpse.load_package("my_package", load_module)
+    |> result.map(typecheck.package(_, target.Erlang))
+
+  case package {
+    Ok(_) -> io.println("typechecked ok")
+    Error(_) -> io.println("typecheck failed")
+  }
+}
+```
+
+The package is loaded with a loader function (see below) and returned with
+inferred types filled in. You can then iterate the modules and inspect the
+resolved AST.
 
 ## Loading packages
 
-The main entry point is `glimpse.load_package`. It accepts the name of the package
-and a function that accepts the string name of a module and returns the contents
-of the module.
+The main entry point is `glimpse.load_package`. It accepts the name of the
+package and a function that accepts the string name of a module and returns the
+contents of the module. The loader is called with the main module for the
+package (which is always the package name) and, recursively, for every module
+that is imported.
 
-```gleam
-pub fn load_package(
-  package_name: String,
-  loader: fn(String) -> Result(String, a),
-) -> Result(Package, error.GlimpseError(a))
-```
-
-The loader function will be called with the main module for the package (which
-is always package_name) and for every module that is imported by that module
-(recursively).
-
-Here's an example from the [macabre](https://github.com/dusty-phillips/macabre)
-gleam-to-python compiler:
+Here's a condensed example from [macabre](https://github.com/dusty-phillips/macabre),
+a Gleam-to-Python compiler:
 
 ```gleam
 fn load_glimpse_package(
@@ -63,29 +90,50 @@ fn load_glimpse_package(
 
 Glimpse can typecheck a loaded package, both within and between modules. The
 entry point you'll usually want is `typecheck.package`, which sorts the modules
-by their dependencies and checks each in turn:
+by their dependencies and checks each in turn. It takes the target the package
+is being built for, and returns the package with inferred types filled in:
 
 ```gleam
 pub fn package(
   package: glimpse.Package,
+  target: target.Target,
 ) -> Result(glimpse.Package, error.GlimpseError(a))
 ```
 
-It returns the package with inferred types filled in. Lower-level entry points
-live in `glimpse/typecheck` for checking individual modules, constants, custom
-types, and functions.
+### Targets
 
-The typechecker covers expressions, statements, patterns, annotations, imports
-(including aliases and unqualified imports), module constants, custom types
-(including parametric types such as `type Box(a)`), function signatures and
-bodies, `use` syntax, and case expressions. Generic callables are instantiated
-at each call site, so polymorphic functions such as
-`fn identity(x: a) -> a { x }` check correctly.
+Glimpse handles `@target(erlang)` / `@target(javascript)` annotations: definitions
+that are not active for the target being checked are filtered out before
+typechecking, mirroring the real compiler. Pass `target.Erlang` or
+`target.Javascript` to `typecheck.package`.
 
-It is not yet a complete Gleam typechecker. One known gap:
+### Lower-level entry points
 
-- Generic function inference is shallow: generic calls are checked for
-  consistency at each call site, but the most general type is not inferred.
+`glimpse/typecheck` also exposes functions for checking a single module,
+constant, or function against an existing type environment:
+
+- `module(glimpse_module, module_envs, target)` — typechecks one module; any
+  modules it imports must already have been checked.
+- `constant(environment, constant)` — typechecks a module constant.
+- `function(environment, function)` — typechecks a function body against the
+  environment.
+
+### Errors
+
+Functions return a `Result`, with errors reported as `glimpse/error`'s
+`GlimpseError` type. Its variants cover the whole pipeline:
+
+- `LoadError` — a module failed to load.
+- `ParseError` — a module failed to parse.
+- `ImportError` — a missing import, a circular dependency, or a source module
+  importing a development dependency.
+- `TypeCheckError` — an error in the code being checked, such as a type
+  mismatch, unknown custom type, or invalid argument.
+
+Because Glimpse is not filesystem-aware, it can't discover which modules are
+dev-only on its own. Set `Package.dev_dependencies` to the names of those
+modules after loading so that a source module importing one is reported as an
+`ImportError`, mirroring the real compiler's `src`/`dev` split.
 
 ## Future Ideas
 
@@ -120,3 +168,9 @@ there is currently no way to communicate to the user where the error occurred.
 Solving this requires modifications to, a rewrite of, or a fork of the glance
 library. I'm not willing to tackle that anytime soon, but it is a prerequisite
 for the vision for this project.
+
+## Development
+
+```sh
+gleam test  # Run the tests
+```
