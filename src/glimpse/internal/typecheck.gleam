@@ -1135,7 +1135,14 @@ fn fn_literal(
       },
     )
     |> fn(state) { #(state.0, list.reverse(state.1)) }
-  let #(store, return_type) = types.resolve(store, return_type)
+  // The return is resolved only when it was annotated: an annotated return's
+  // named generics are already polymorphic, but an inferred return that the
+  // body pinned to a rigid parameter of the enclosing function must stay rigid
+  // (resolving it to a named generic would let a later call instantiate it).
+  let #(store, return_type) = case return_annotation {
+    option.Some(_) -> types.resolve(store, return_type)
+    option.None -> #(store, return_type)
+  }
 
   let lambda_type = case
     functions.has_generic_types(param_types)

@@ -454,6 +454,53 @@ pub fn lambda_params_pinned_to_rigid_stay_rigid_test() {
     )
 }
 
+pub fn return_annotation_swapped_generics_rejected_test() {
+  // The return annotation `Decoder(Dict(value, key))` swaps the distinct rigid
+  // parameters; the body pins `Dict(key, value)` through its inner lambda, so
+  // the annotation cannot be satisfied.
+  let _ =
+    helpers.error_module_typecheck(
+      "import gleam/dict.{type Dict}
+
+    pub type Decoder(t) {
+      Decoder(function: fn(Int) -> t)
+    }
+
+    fn decode_error(name: String, data: Int) -> List(Int) {
+      []
+    }
+
+    fn decode_dict(data: Int) -> Result(Dict(Int, Int), Nil) {
+      Ok(dict.new())
+    }
+
+    fn fold_dict(
+      acc: #(Dict(k, v), List(Int)),
+      key: Int,
+      value: Int,
+      key_decoder: fn(Int) -> #(k, List(Int)),
+      value_decoder: fn(Int) -> #(v, List(Int)),
+    ) -> #(Dict(k, v), List(Int)) {
+      acc
+    }
+
+    pub fn dict(
+      key: Decoder(key),
+      value: Decoder(value),
+    ) -> Decoder(Dict(value, key)) {
+      Decoder(fn(data) {
+        case decode_dict(data) {
+          Error(_) -> #(dict.new(), decode_error(\"Dict\", data))
+          Ok(dict) ->
+            dict.fold(dict, #(dict.new(), []), fn(a, k, v) {
+              fold_dict(a, k, v, key.function, value.function)
+            })
+        }
+      })
+    }",
+    )
+}
+
 pub fn capture_branches_with_different_generic_names_unify_test() {
   // Each `case` branch is a capture of a polymorphic function. Generalising
   // the two captures can name their type variables differently (one is pinned
