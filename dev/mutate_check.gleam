@@ -301,6 +301,9 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "tuple ",
     "pattern ",
     "variant ",
+    "bitstring ",
+    "literal ",
+    "arg ",
     "import ",
   ]
   list.map(kinds, fn(kind) {
@@ -473,6 +476,16 @@ fn binop_mutants(lines: List(String)) -> List(Mutant) {
     |> list.append(swap_on_line(lines, idx, "binop ==->&&", " == ", " && "))
     |> list.append(swap_on_line(lines, idx, "binop +-><>", " + ", " <> "))
     |> list.append(swap_on_line(lines, idx, "binop <>->+", " <> ", " + "))
+    |> list.append(swap_on_line(lines, idx, "binop <.-><", " <.", " < "))
+    |> list.append(swap_on_line(lines, idx, "binop <-><.", " < ", " <. "))
+    |> list.append(swap_on_line(lines, idx, "binop <=.-><=", " <=.", " <= "))
+    |> list.append(swap_on_line(lines, idx, "binop <=-><=.", " <= ", " <=. "))
+    |> list.append(swap_on_line(lines, idx, "binop >=.->>=", " >=.", " >= "))
+    |> list.append(swap_on_line(lines, idx, "binop >=->>=.", " >= ", " >=. "))
+    |> list.append(swap_on_line(lines, idx, "binop >.->>", " >.", " > "))
+    |> list.append(swap_on_line(lines, idx, "binop >->>.", " > ", " >. "))
+    |> list.append(swap_on_line(lines, idx, "binop +.->+", " +.", " + "))
+    |> list.append(swap_on_line(lines, idx, "binop +->+.", " + ", " +. "))
   })
   |> list.flatten
 }
@@ -533,6 +546,241 @@ fn variant_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `bitstring`: swap a bit-string segment option so its value's type no
+/// longer matches the forced family. A String/Float segment given an integer
+/// size, or an Int segment given `:utf8`, is rejected by the real compiler.
+/// (`:binary` is skipped: it is not a valid Gleam option at all and `glance`
+/// collapses it to `:bytes`, so the typechecker cannot distinguish them.)
+fn bitstring_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    swap_on_line(lines, idx, "bitstring utf8->8", ":utf8", ":8")
+    |> list.append(swap_on_line(lines, idx, "bitstring 8->utf8", ":8", ":utf8"))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "bitstring binary->utf8",
+      ":binary",
+      ":utf8",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "bitstring utf8->binary",
+      ":utf8",
+      ":binary",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "bitstring float->8",
+      ":float",
+      ":8",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "bitstring bytes->utf8",
+      ":bytes",
+      ":utf8",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "bitstring utf8->bytes",
+      ":utf8",
+      ":bytes",
+    ))
+  })
+  |> list.flatten
+}
+
+/// Kind `literal`: swap a literal for one of a different type, so a value used
+/// where its type is pinned to another primitive is rejected.
+fn literal_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    swap_on_line(lines, idx, "literal 1.5->1", "1.5", "1")
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "literal 1.5->\"a\"",
+      "1.5",
+      "\"a\"",
+    ))
+    |> list.append(swap_on_line(lines, idx, "literal True->1", "True", "1"))
+    |> list.append(swap_on_line(lines, idx, "literal False->0", "False", "0"))
+    |> list.append(swap_on_line(lines, idx, "literal 0->False", "0", "False"))
+    |> list.append(swap_on_line(lines, idx, "literal 1->True", "1", "True"))
+    |> list.append(swap_on_line(lines, idx, "literal \"a\"->1", "\"a\"", "1"))
+    |> list.append(swap_on_line(lines, idx, "literal 1->\"a\"", "1", "\"a\""))
+  })
+  |> list.flatten
+}
+
+/// Kind `arg`: swap the two arguments of a two-argument call when both are
+/// simple identifiers or literals, so a call whose arguments have different
+/// types is rejected.
+fn arg_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    swap_args_in_line(lines, idx, fetch(lines, idx))
+  })
+  |> list.flatten
+}
+
+/// Produce a mutant swapping the first two simple arguments of the first
+/// two-argument call on `line`.
+fn swap_args_in_line(
+  lines: List(String),
+  index: Int,
+  line: String,
+) -> List(Mutant) {
+  case find_two_arg_call(line) {
+    option.None -> []
+    option.Some(#(call_start, first_start, first_end, second_start, second_end)) -> {
+      let first =
+        string.slice(
+          line,
+          at_index: first_start,
+          length: first_end - first_start,
+        )
+      let second =
+        string.slice(
+          line,
+          at_index: second_start,
+          length: second_end - second_start,
+        )
+      let swapped =
+        string.slice(line, at_index: 0, length: first_start)
+        <> second
+        <> string.slice(
+          line,
+          at_index: first_end,
+          length: second_start - first_end,
+        )
+        <> first
+        <> string.slice(
+          line,
+          at_index: second_end,
+          length: string.length(line) - second_end,
+        )
+      case first == second {
+        True -> []
+        False -> [#("arg swap", source_of(lines, index, swapped))]
+      }
+    }
+  }
+}
+
+fn is_simple_arg_char(ch: String) -> Bool {
+  string.contains(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.\"",
+    ch,
+  )
+}
+
+/// Scan `line` for a call `name(tok, tok)` where both arguments are runs of
+/// simple characters. Returns the byte offsets of the call and both arguments.
+fn find_two_arg_call(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int, Int)) {
+  find_two_arg_call_from(line, 0, option.None)
+}
+
+fn find_two_arg_call_from(
+  line: String,
+  index: Int,
+  acc: option.Option(#(Int, Int, Int, Int, Int)),
+) -> option.Option(#(Int, Int, Int, Int, Int)) {
+  case index >= string.length(line) {
+    True -> acc
+    False -> {
+      let ch = string.slice(line, at_index: index, length: 1)
+      case ch {
+        "(" -> {
+          // Skip if this paren belongs to a record type/annotation like
+          // `fn(a, b)` or `Tuple(a, b)`: a type context. We cannot tell
+          // reliably, so only accept if the two args are simple tokens.
+          case read_call_args(line, index) {
+            option.Some(span) -> option.Some(span)
+            option.None -> find_two_arg_call_from(line, index + 1, acc)
+          }
+        }
+        _ -> find_two_arg_call_from(line, index + 1, acc)
+      }
+    }
+  }
+}
+
+/// Given `line` and the index of a `(`, try to read `tok, tok)`. Returns
+/// `#(call_start, first_start, first_end, second_start, second_end)` if the
+/// paren contains exactly two comma-separated simple tokens followed by `)`.
+fn read_call_args(
+  line: String,
+  open_index: Int,
+) -> option.Option(#(Int, Int, Int, Int, Int)) {
+  let after = open_index + 1
+  let first_start = first_simple_start(line, after)
+  case first_start {
+    option.None -> option.None
+    option.Some(first_start) -> {
+      let first_end = simple_token_end(line, first_start)
+      case string.slice(line, at_index: first_end, length: 1) {
+        "," ->
+          case skip_spaces(line, first_end + 1) {
+            option.Some(second_start) -> {
+              let second_end = simple_token_end(line, second_start)
+              case string.slice(line, at_index: second_end, length: 1) {
+                ")" ->
+                  option.Some(#(
+                    open_index,
+                    first_start,
+                    first_end,
+                    second_start,
+                    second_end,
+                  ))
+                _ -> option.None
+              }
+            }
+            option.None -> option.None
+          }
+        _ -> option.None
+      }
+    }
+  }
+}
+
+fn first_simple_start(line: String, from: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case is_simple_arg_char(string.slice(line, at_index: from, length: 1)) {
+        True -> option.Some(from)
+        False -> first_simple_start(line, from + 1)
+      }
+  }
+}
+
+fn simple_token_end(line: String, from: Int) -> Int {
+  case from >= string.length(line) {
+    True -> from
+    False ->
+      case is_simple_arg_char(string.slice(line, at_index: from, length: 1)) {
+        True -> simple_token_end(line, from + 1)
+        False -> from
+      }
+  }
+}
+
+fn skip_spaces(line: String, from: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: from, length: 1) {
+        " " -> skip_spaces(line, from + 1)
+        _ -> option.Some(from)
+      }
+  }
+}
+
 /// Kind `import`: rename the module on an `import` line to a name that does
 /// not exist, so import resolution must fail.
 fn import_mutants(lines: List(String)) -> List(Mutant) {
@@ -585,6 +833,9 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(tuple_mutants(lines))
   |> list.append(pattern_mutants(lines))
   |> list.append(variant_mutants(lines))
+  |> list.append(bitstring_mutants(lines))
+  |> list.append(literal_mutants(lines))
+  |> list.append(arg_mutants(lines))
   |> list.append(import_mutants(lines))
 }
 

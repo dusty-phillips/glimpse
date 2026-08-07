@@ -55,6 +55,44 @@ pub fn variable_segment_requires_option_test() {
     == error.InvalidType("String", "Int", "in bit string segment")
 }
 
+pub fn pattern_bits_not_last_is_rejected_test() {
+  // A bare `bits`/`bytes` pattern segment matches the rest of the bit array,
+  // so it is only valid as the final segment.
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<_:bits, rest:bytes>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidBitStringSegment("bits")
+}
+
+pub fn pattern_utf_on_variable_is_rejected_test() {
+  // A utf segment cannot bind a plain variable; use `_` or a literal.
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<x:utf8, rest:bytes>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidBitStringSegment("utf8")
+}
+
+pub fn pattern_sized_bits_anywhere_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<pref:bits-size(8), _:bits>> -> True
+        _ -> False
+      }
+    }",
+  )
+}
+
 pub fn double_variable_assignment_test() {
   assert helpers.error_module_typecheck(
       "pub fn main() { let assert <<a as b>> = <<>> a }",

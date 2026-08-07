@@ -342,9 +342,18 @@ fn check_segments(
     #(glance.Pattern, List(glance.BitStringSegmentOption(glance.BitArraySize))),
   ),
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
-  list.try_fold(segments, #(store, environment), fn(state, segment) {
+  let count = list.length(segments)
+  let indexed =
+    segments
+    |> list.index_map(fn(segment, index) { #(segment, index == count - 1) })
+  list.try_fold(indexed, #(store, environment), fn(state, entry) {
     let #(store, env) = state
-    let #(pattern, options) = segment
+    let #(#(pattern, options), is_last) = entry
+    // Real Gleam restricts a pattern segment's options the same way it
+    // restricts expressions, plus: a bare `bits`/`bytes` segment matches the
+    // *rest* of the bit array, so it is only valid as the final segment, and
+    // a utf segment cannot bind a plain variable (use `_` or a literal).
+    use _ <- result.try(check_pattern_segment_options(options, is_last, pattern))
     // Literal sizes and units must be positive.
     use store <- result.try(check_pattern_size_options(store, options))
     // A bit-string segment cannot assign a variable twice (`<<a as b>>`).
@@ -369,6 +378,51 @@ fn check_segments(
         )
     }
   })
+}
+
+/// Validate a pattern segment's options against real Gleam's rules: a
+/// `bits`/`bytes` option without a size matches the rest of the bit array, so
+/// it is only allowed on the final segment, and a utf-family segment cannot
+/// bind a plain variable (the byte boundary cannot be inferred for an
+/// unconstrained variable; `_` and literals are fine).
+fn check_pattern_segment_options(
+  options: List(glance.BitStringSegmentOption(glance.BitArraySize)),
+  is_last: Bool,
+  pattern: glance.Pattern,
+) -> error.TypeCheckResult(Nil) {
+  let has_size =
+    list.any(options, fn(option) {
+      case option {
+        glance.SizeOption(_) | glance.SizeValueOption(_) -> True
+        _ -> False
+      }
+    })
+  let has_bits_or_bytes =
+    list.any(options, fn(option) {
+      case option {
+        glance.BitsOption | glance.BytesOption -> True
+        _ -> False
+      }
+    })
+  let has_utf =
+    list.any(options, fn(option) {
+      case option {
+        glance.Utf8Option | glance.Utf16Option | glance.Utf32Option -> True
+        _ -> False
+      }
+    })
+  let is_variable = case pattern {
+    glance.PatternVariable(_, _) -> True
+    _ -> False
+  }
+  case !is_last && has_bits_or_bytes && !has_size {
+    True -> Error(error.InvalidBitStringSegment("bits"))
+    False ->
+      case has_utf && is_variable {
+        True -> Error(error.InvalidBitStringSegment("utf8"))
+        False -> Ok(Nil)
+      }
+  }
 }
 
 fn bind_variable(
