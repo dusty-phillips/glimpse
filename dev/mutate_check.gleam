@@ -23,11 +23,16 @@ import simplifile
 ///
 /// Mutants come from several *kinds*, each aimed at a different part of the
 /// typechecker:
-///   - `type`   : swap a signature annotation for an incompatible one
+///   - `type`   : swap a signature annotation for an incompatible one, covering
+///                primitives and parametric types (`List`, `Option`, `Result`)
 ///   - `bool`   : flip `True`/`False` literals (breaks pattern exhaustiveness)
 ///   - `binop`  : swap a binary operator for a type-incompatible one
 ///   - `label`  : rename a labelled argument / record field
 ///   - `tuple`  : index a tuple with an out-of-range `.N`
+///   - `pattern`: swap an integer literal in a `case` pattern so it collides
+///                with another clause (exhaustiveness for non-bool patterns)
+///   - `variant`: swap `Ok`/`Error` constructors (Result dispatch)
+///   - `import` : rename the module on an `import` line
 ///
 /// Ground truth is always the real compiler, so any mutation that is not a real
 /// error is simply not counted. This makes it safe to over-generate mutants.
@@ -277,7 +282,16 @@ fn check_one_worker(
 
 /// Tally how many mutants each kind contributed, for sizing runs.
 fn counts_by_kind(mutants: List(Mutant)) -> String {
-  let kinds = ["type ", "bool ", "binop ", "label ", "tuple "]
+  let kinds = [
+    "type ",
+    "bool ",
+    "binop ",
+    "label ",
+    "tuple ",
+    "pattern ",
+    "variant ",
+    "import ",
+  ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
     kind <> string.inspect(n)
@@ -353,7 +367,8 @@ fn swap_on_line(
 }
 
 /// Kind `type`: swap an `Int`/`String`/`Bool`/`Float` annotation for an
-/// incompatible type, covering both parameters and return values.
+/// incompatible type, covering both parameters and return values. Also swaps
+/// the type arguments of parametric types so generic unification is exercised.
 fn type_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     swap_on_line(lines, idx, "type Int->String", "Int", "String")
@@ -383,6 +398,41 @@ fn type_mutants(lines: List(String)) -> List(Mutant) {
       "Float",
       "String",
     ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "type List(Int)->List(String)",
+      "List(Int)",
+      "List(String)",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "type List(String)->List(Int)",
+      "List(String)",
+      "List(Int)",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "type Option(Int)->Option(String)",
+      "Option(Int)",
+      "Option(String)",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "type Result(Int, String)->Result(String, Int)",
+      "Result(Int, String)",
+      "Result(String, Int)",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "type Dict(String, Int)->Dict(String, String)",
+      "Dict(String, Int)",
+      "Dict(String, String)",
+    ))
   })
   |> list.flatten
 }
@@ -409,6 +459,9 @@ fn binop_mutants(lines: List(String)) -> List(Mutant) {
     |> list.append(swap_on_line(lines, idx, "binop !=->==", " != ", " == "))
     |> list.append(swap_on_line(lines, idx, "binop <->==", " < ", " == "))
     |> list.append(swap_on_line(lines, idx, "binop >->==", " > ", " == "))
+    |> list.append(swap_on_line(lines, idx, "binop ==->&&", " == ", " && "))
+    |> list.append(swap_on_line(lines, idx, "binop +-><>", " + ", " <> "))
+    |> list.append(swap_on_line(lines, idx, "binop <>->+", " <> ", " + "))
   })
   |> list.flatten
 }
@@ -439,6 +492,78 @@ fn tuple_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `pattern`: swap a small integer literal so that, when it lands in a
+/// `case` pattern, it collides with another clause's pattern and the real
+/// compiler rejects the clause as a duplicate or the case as inexhaustive.
+/// The ground-truth filter means swaps that only hit expressions are ignored.
+fn pattern_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    swap_on_line(lines, idx, "pattern 1->2", "1", "2")
+    |> list.append(swap_on_line(lines, idx, "pattern 2->1", "2", "1"))
+    |> list.append(swap_on_line(lines, idx, "pattern 0->1", "0", "1"))
+  })
+  |> list.flatten
+}
+
+/// Kind `variant`: swap a `Result` constructor between `Ok` and `Error`. In an
+/// expression the argument type usually no longer matches; in a pattern it can
+/// collide with another clause or break exhaustiveness.
+fn variant_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    swap_on_line(lines, idx, "variant Ok->Error", "Ok(", "Error(")
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "variant Error->Ok",
+      "Error(",
+      "Ok(",
+    ))
+  })
+  |> list.flatten
+}
+
+/// Kind `import`: rename the module on an `import` line to a name that does
+/// not exist, so import resolution must fail.
+fn import_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case string.starts_with(line, "import ") {
+      False -> []
+      True -> {
+        let path = import_path(string.drop_start(line, up_to: 7))
+        case path == "" {
+          True -> []
+          False -> {
+            let renamed = path <> "__zzz"
+            [
+              #(
+                "import " <> path,
+                string.replace(line, each: path, with: renamed),
+              ),
+            ]
+          }
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// The module path of an import (characters up to `.`, `{`, whitespace, or a
+/// paren), e.g. `gleam/io` from `gleam/io` or `gleam/list.{type List}`.
+fn import_path(rest: String) -> String {
+  let chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_"
+  let first_stop =
+    list.find(indices(string.length(rest)), fn(i) {
+      let ch = string.slice(rest, at_index: i, length: 1)
+      !string.contains(chars, ch)
+    })
+  case first_stop {
+    Ok(i) -> string.slice(rest, at_index: 0, length: i)
+    Error(_) -> rest
+  }
+}
+
 /// Everything we can mutate in a file, one kind's mutants appended to the next.
 fn mutate_file(source: String) -> List(Mutant) {
   let lines = split_lines(source)
@@ -447,6 +572,9 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(binop_mutants(lines))
   |> list.append(label_mutants(lines))
   |> list.append(tuple_mutants(lines))
+  |> list.append(pattern_mutants(lines))
+  |> list.append(variant_mutants(lines))
+  |> list.append(import_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that
