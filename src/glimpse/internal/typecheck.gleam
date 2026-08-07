@@ -289,16 +289,28 @@ fn use_call(
       let #(store, parameters, labels, return) =
         types.instantiate_callable(store, glimpse_target)
 
-      let given_parameters =
-        list.take(parameters, up_to: list.length(parameters) - 1)
+      // The `use` callback is appended as a trailing positional argument, so
+      // after label/position alignment it occupies the parameter position that
+      // is not claimed by a labelled argument and not filled by an explicit
+      // positional argument. The callback is not necessarily the last
+      // parameter: labelled arguments may follow it in the signature.
+      let callback_position =
+        use_callback_position(arguments, labels, list.length(parameters))
+      let given_parameters = remove_at(parameters, callback_position)
+      let given_labels = remap_labels(labels, callback_position)
 
       use #(store, _argument_types) <- result.try(check_arguments(
         environment,
         store,
         arguments,
         given_parameters,
-        labels,
+        given_labels,
       ))
+
+      let callback_parameter =
+        list.drop(parameters, up_to: callback_position)
+        |> list.first
+        |> result.unwrap(types.IntType)
 
       // Fold the use patterns against the callback parameter only after the
       // explicit arguments are unified, so the callback's types are resolved
@@ -307,8 +319,7 @@ fn use_call(
         environment,
         store,
         patterns,
-        list.length(arguments),
-        parameters,
+        callback_parameter,
       ))
 
       // The statements after the `use` are the callback body, checked against
@@ -317,6 +328,77 @@ fn use_call(
     }
     _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
   }
+}
+
+/// The parameter index a `use` statement's implicit callback occupies. The
+/// callback is appended as the final positional argument, so it fills the
+/// parameter position that is neither claimed by a labelled or shorthand
+/// argument nor already filled by an explicit positional argument.
+fn use_callback_position(
+  fields: List(glance.Field(glance.Expression)),
+  position_labels: dict.Dict(String, Int),
+  param_count: Int,
+) -> Int {
+  let positional_count =
+    list.fold(fields, 0, fn(count, field) {
+      case field {
+        glance.UnlabelledField(_) -> count + 1
+        _ -> count
+      }
+    })
+  let claimed =
+    list.fold(fields, set.new(), fn(acc, field) {
+      case field {
+        glance.LabelledField(label, _, _) | glance.ShorthandField(label, _) ->
+          case dict.get(position_labels, label) {
+            Ok(position) -> set.insert(acc, position)
+            Error(_) -> acc
+          }
+        _ -> acc
+      }
+    })
+  // Walk the parameter positions; the callback is the `positional_count`-th
+  // unclaimed position (0-indexed), i.e. the next one after the explicit
+  // positional arguments have claimed their slots.
+  let #(_, position) =
+    list.fold_until(
+      index_range(param_count),
+      #(positional_count, 0),
+      fn(state, position) {
+        let #(remaining, _) = state
+        case set.contains(claimed, position) {
+          True -> list.Continue(state)
+          False ->
+            case remaining == 0 {
+              True -> list.Stop(#(remaining, position))
+              False -> list.Continue(#(remaining - 1, 0))
+            }
+        }
+      },
+    )
+  position
+}
+
+/// Remove the element at `index` from a list.
+fn remove_at(items: List(a), index: Int) -> List(a) {
+  list.append(
+    list.take(items, up_to: index),
+    list.drop(items, up_to: index + 1),
+  )
+}
+
+/// Remap label positions after a parameter has been removed: positions after
+/// the removed index shift down by one so they still address the reduced list.
+fn remap_labels(
+  labels: dict.Dict(String, Int),
+  removed_index: Int,
+) -> dict.Dict(String, Int) {
+  dict.map_values(labels, fn(_label, position) {
+    case position > removed_index {
+      True -> position - 1
+      False -> position
+    }
+  })
 }
 
 /// Typecheck a `use` statement whose function is a bare name or other
@@ -338,103 +420,83 @@ fn use_statement_with_type(
   case target_type {
     types.CallableType(parameters, _, return)
     | types.GenericCallableType(parameters, _, return, _) -> {
-      use #(store, env, callback_return) <- result.try(fold_use_patterns(
-        environment,
-        store,
-        patterns,
-        0,
-        parameters,
-      ))
-      check_continuation(env, store, callback_return, return, continuation)
+      case list.length(parameters) == 1 {
+        False -> Error(error.InvalidUse(list.length(patterns)))
+        True -> {
+          let callback_parameter =
+            list.last(parameters) |> result.unwrap(types.IntType)
+          use #(store, env, callback_return) <- result.try(fold_use_patterns(
+            environment,
+            store,
+            patterns,
+            callback_parameter,
+          ))
+          check_continuation(env, store, callback_return, return, continuation)
+        }
+      }
     }
     _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
   }
 }
 
-/// The parameters given to a `use` statement are the call's explicit arguments
-/// plus one implicit callback parameter. The callback's parameters are matched
-/// against the use patterns. This extracts the callback's parameter types and
-/// return type, folds the use patterns against the callback's parameter types,
-/// and checks the explicit argument count against the callable's parameters.
+/// Fold the use patterns against the callback's parameter types. The callback
+/// parameter is the one the `use` statement's implicit trailing argument
+/// occupies after argument alignment, not necessarily the last parameter.
 fn fold_use_patterns(
   environment: Environment,
   store: TypeStore,
   patterns: List(glance.UsePattern),
-  given_argument_count: Int,
-  parameters: List(types.Type),
+  callback_parameter: types.Type,
 ) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
-  case list.length(parameters) == given_argument_count + 1 {
-    False -> Error(error.InvalidUse(list.length(patterns)))
-    True -> {
-      let callback_parameter =
-        list.last(parameters) |> result.unwrap(types.IntType)
-      let callback_types = case callback_parameter {
-        types.CallableType(callback_params, _, callback_return) ->
-          Ok(#(callback_params, callback_return))
-        types.GenericCallableType(callback_params, _, callback_return, _) ->
-          Ok(#(callback_params, callback_return))
-        _ ->
-          Error(
-            error.NotCallable(types.to_string(environment, callback_parameter)),
-          )
-      }
-      use #(callback_params, callback_return) <- result.try(callback_types)
+  let callback_types = case callback_parameter {
+    types.CallableType(callback_params, _, callback_return) ->
+      Ok(#(callback_params, callback_return))
+    types.GenericCallableType(callback_params, _, callback_return, _) ->
+      Ok(#(callback_params, callback_return))
+    _ ->
+      Error(error.NotCallable(types.to_string(environment, callback_parameter)))
+  }
+  use #(callback_params, callback_return) <- result.try(callback_types)
 
-      case list.length(callback_params) == list.length(patterns) {
-        False -> Error(error.InvalidUse(list.length(patterns)))
-        True ->
-          list.try_fold(
-            list.zip(patterns, callback_params),
-            #(store, environment),
-            fn(state, pair) {
-              let #(store, env) = state
-              let #(use_pattern, type_) = pair
-              case use_pattern.annotation {
-                option.None ->
-                  pattern.typecheck_pattern(
-                    env,
-                    store,
-                    type_,
-                    use_pattern.pattern,
-                  )
-                  |> pattern_must_be_irrefutable(
-                    env,
-                    type_,
-                    use_pattern.pattern,
-                  )
-                option.Some(annotation) -> {
-                  use #(store, annotated) <- result.try(types.type_with_store(
-                    env,
-                    store,
-                    annotation,
-                  ))
-                  use store <- result.try(types.unify(
-                    store,
-                    env,
-                    type_,
-                    annotated,
-                  ))
-                  pattern.typecheck_pattern(
-                    env,
-                    store,
-                    annotated,
-                    use_pattern.pattern,
-                  )
-                  |> pattern_must_be_irrefutable(
-                    env,
-                    annotated,
-                    use_pattern.pattern,
-                  )
-                }
-              }
-            },
-          )
-          |> result.map(fn(state) {
-            let #(store, env) = state
-            #(store, env, callback_return)
-          })
-      }
-    }
+  case list.length(callback_params) == list.length(patterns) {
+    False -> Error(error.InvalidUse(list.length(patterns)))
+    True ->
+      list.try_fold(
+        list.zip(patterns, callback_params),
+        #(store, environment),
+        fn(state, pair) {
+          let #(store, env) = state
+          let #(use_pattern, type_) = pair
+          case use_pattern.annotation {
+            option.None ->
+              pattern.typecheck_pattern(env, store, type_, use_pattern.pattern)
+              |> pattern_must_be_irrefutable(env, type_, use_pattern.pattern)
+            option.Some(annotation) -> {
+              use #(store, annotated) <- result.try(types.type_with_store(
+                env,
+                store,
+                annotation,
+              ))
+              use store <- result.try(types.unify(store, env, type_, annotated))
+              pattern.typecheck_pattern(
+                env,
+                store,
+                annotated,
+                use_pattern.pattern,
+              )
+              |> pattern_must_be_irrefutable(
+                env,
+                annotated,
+                use_pattern.pattern,
+              )
+            }
+          }
+        },
+      )
+      |> result.map(fn(state) {
+        let #(store, env) = state
+        #(store, env, callback_return)
+      })
   }
 }
 
