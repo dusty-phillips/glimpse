@@ -379,7 +379,11 @@ pub fn fold_function_parameter_into_env(
 /// reusing the same fresh variable for the same generic name. This keeps the
 /// type variables introduced by a function's annotations shared across all of
 /// the function's parameters, so inference can tie them to the return type.
-fn freshen_generics(
+/// Replace every declared type parameter in an annotation with its rigid
+/// variable, sharing the same variable across all occurrences of the same name
+/// (so `fn(x: a, y: a)` unifies the two `a`s). Used for function parameters and
+/// function-literal parameters.
+pub fn freshen_generics(
   store: TypeStore,
   generic_vars: dict.Dict(String, Type),
   type_: Type,

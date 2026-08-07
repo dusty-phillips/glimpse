@@ -1003,19 +1003,23 @@ fn fn_literal(
   // The parameter names of a function literal must be distinct.
   use _store <- result.try(check_duplicate_fn_parameter_names(arguments))
 
-  use #(store, param_types) <- result.try(
-    list.try_fold(arguments, #(store, []), fn(state, param) {
-      let #(store, reversed) = state
+  use #(store, _, param_types) <- result.try(
+    list.try_fold(arguments, #(store, dict.new(), []), fn(state, param) {
+      let #(store, generic_vars, reversed) = state
       case param {
         glance.FnParameter(_, type_: option.Some(annotation)) ->
           types.type_with_store(environment, store, annotation)
-          |> result.map(fn(state) {
+          |> result.try(fn(state) {
             let #(store, type_) = state
-            #(store, [type_, ..reversed])
+            // A lambda's annotated type variables are rigid within its body,
+            // like a function's declared type parameters.
+            let #(store, generic_vars, type_) =
+              functions.freshen_generics(store, generic_vars, type_)
+            Ok(#(store, generic_vars, [type_, ..reversed]))
           })
         glance.FnParameter(_, type_: option.None) -> {
           let #(store, type_) = types.fresh_var(store)
-          Ok(#(store, [type_, ..reversed]))
+          Ok(#(store, generic_vars, [type_, ..reversed]))
         }
       }
     }),
@@ -1441,7 +1445,23 @@ fn record_update(
             |> result.unwrap(types.GenericTypeVariable("todo"))
           let #(_, expected_type) = types.resolve(store, expected_type)
           case field.item {
-            option.None -> Ok(#(store, env))
+            option.None -> {
+              // Shorthand (`index:`) references a variable in scope; its type
+              // must match the field type, and the variable must exist.
+              types.lookup_variable_type(env, field.label)
+              |> result.replace_error(error.InvalidName(field.label))
+              |> result.try(fn(var_type) {
+                types.unify(store, env, var_type, expected_type)
+                |> result.map(fn(store) { #(store, env) })
+                |> result.map_error(fn(_) {
+                  error.InvalidType(
+                    types.to_string(env, var_type),
+                    types.to_string(env, expected_type),
+                    "in record update of field " <> field.label,
+                  )
+                })
+              })
+            }
             option.Some(value_expr) -> {
               use #(store, value_type) <- result.try(expression(
                 env,

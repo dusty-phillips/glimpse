@@ -56,3 +56,27 @@ pub fn b_to_a(value: Wibble(a)) -> Wibble(Int) {
     )
     == error.UnsafeRecordUpdate("Wibble")
 }
+
+pub fn shorthand_field_requires_variable_in_scope_test() {
+  // `index:` is shorthand for `index: index`; the variable must exist.
+  assert helpers.error_module_typecheck(
+      "pub type Patch {
+    Patch(index: Int, path: List(Int))
+  }
+  pub fn add_parent(child: Patch, index__zzz: Int) -> Patch {
+    Patch(..child, path: [child.index], index:)
+  }",
+    )
+    == error.InvalidName("index")
+}
+
+pub fn shorthand_field_with_variable_in_scope_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Patch {
+    Patch(index: Int, path: List(Int))
+  }
+  pub fn add_parent(child: Patch, index: Int) -> Patch {
+    Patch(..child, path: [child.index], index:)
+  }",
+  )
+}

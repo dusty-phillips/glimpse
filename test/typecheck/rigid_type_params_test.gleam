@@ -222,3 +222,24 @@ pub fn const_value_must_match_annotation_test() {
     pub const ok: Wrap(Int) = Wrap(bool_val)",
     )
 }
+
+pub fn lambda_annotated_param_rigidity_is_preserved_test() {
+  // A lambda's annotated type variables are rigid within its body, so
+  // `a_pair.1` (a tuple of `Float` and rigid `a`) cannot feed `float.compare`.
+  let _ =
+    helpers.error_module_typecheck(
+      "fn compare(a: Float, b: Float) -> Int { 0 }
+
+    pub fn f(a_pair: #(Float, a), b_pair: #(Float, a)) -> Int {
+      compare(a_pair.1, b_pair.1)
+    }",
+    )
+}
+
+pub fn lambda_annotated_param_generic_use_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f(a_pair: #(Float, a), b_pair: #(Float, a)) -> a {
+      a_pair.1
+    }",
+  )
+}
