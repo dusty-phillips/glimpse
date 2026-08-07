@@ -1007,25 +1007,12 @@ fn reaches(
 
 /// The named generic variables embedded in a type.
 pub fn named_vars_in(type_: Type) -> List(String) {
-  case type_ {
-    GenericTypeVariable(name) -> [name]
-    Var(_) -> []
-    CustomType(_, _, parameters, _) ->
-      parameters |> list.map(named_vars_in) |> list.flatten
-    TupleType(elements) -> elements |> list.map(named_vars_in) |> list.flatten
-    CallableType(parameters, _, return) ->
-      list.append(
-        parameters |> list.map(named_vars_in) |> list.flatten,
-        named_vars_in(return),
-      )
-    GenericCallableType(parameters, _, return, _) ->
-      list.append(
-        parameters |> list.map(named_vars_in) |> list.flatten,
-        named_vars_in(return),
-      )
-    TypeAlias(_, aliased) -> named_vars_in(aliased)
-    _ -> []
-  }
+  fold_type([], type_, fn(acc, type_) {
+    case type_ {
+      GenericTypeVariable(name) -> [name, ..acc]
+      _ -> acc
+    }
+  })
 }
 
 /// The named generic variables embedded in a type, including the names of
@@ -1535,6 +1522,61 @@ fn fold_type_parameters(
   })
 }
 
+/// Rebuild a type, applying a callback to each non-compound type (tuples,
+/// custom types, callables, and aliases are recursed into and reconstructed).
+/// Used to rewrite the leaves of a type, e.g. substituting type variables.
+pub fn map_type(type_: Type, on_leaf: fn(Type) -> Type) -> Type {
+  case type_ {
+    TupleType(elements) -> TupleType(map_types(elements, on_leaf))
+    CustomType(module, name, parameters, inferred_variant) ->
+      CustomType(module, name, map_types(parameters, on_leaf), inferred_variant)
+    CallableType(parameters, labels, return) ->
+      CallableType(
+        map_types(parameters, on_leaf),
+        labels,
+        map_type(return, on_leaf),
+      )
+    GenericCallableType(parameters, labels, return, original) ->
+      GenericCallableType(
+        map_types(parameters, on_leaf),
+        labels,
+        map_type(return, on_leaf),
+        original,
+      )
+    TypeAlias(parameters, aliased) ->
+      TypeAlias(parameters, map_type(aliased, on_leaf))
+    _ -> on_leaf(type_)
+  }
+}
+
+pub fn map_types(types: List(Type), on_leaf: fn(Type) -> Type) -> List(Type) {
+  list.map(types, fn(type_) { map_type(type_, on_leaf) })
+}
+
+/// Thread an accumulator through every non-compound type, recursing into the
+/// same structure as `map_type`. Used to collect or combine the leaves of a
+/// type without rebuilding it.
+pub fn fold_type(acc: a, type_: Type, on_leaf: fn(a, Type) -> a) -> a {
+  case type_ {
+    TupleType(elements) -> fold_types(acc, elements, on_leaf)
+    CustomType(_, _, parameters, _) -> fold_types(acc, parameters, on_leaf)
+    CallableType(parameters, _, return) -> {
+      let acc = fold_types(acc, parameters, on_leaf)
+      fold_type(acc, return, on_leaf)
+    }
+    GenericCallableType(parameters, _, return, _) -> {
+      let acc = fold_types(acc, parameters, on_leaf)
+      fold_type(acc, return, on_leaf)
+    }
+    TypeAlias(_, aliased) -> fold_type(acc, aliased, on_leaf)
+    _ -> on_leaf(acc, type_)
+  }
+}
+
+pub fn fold_types(acc: a, types: List(Type), on_leaf: fn(a, Type) -> a) -> a {
+  list.fold(types, acc, fn(acc, type_) { fold_type(acc, type_, on_leaf) })
+}
+
 /// Substitute the given type variables (by `GenericTypeVariable` name) with the
 /// provided types throughout a type. Used to apply a type alias to its
 /// parameters.
@@ -1542,42 +1584,13 @@ pub fn substitute_type_variables(
   type_: Type,
   substitutions: dict.Dict(String, Type),
 ) -> Type {
-  case type_ {
-    GenericTypeVariable(name) -> {
-      case dict.get(substitutions, name) {
-        Ok(substitute) -> substitute
-        Error(_) -> type_
-      }
+  map_type(type_, fn(type_) {
+    case type_ {
+      GenericTypeVariable(name) ->
+        dict.get(substitutions, name) |> result.unwrap(type_)
+      _ -> type_
     }
-    TupleType(elements) ->
-      TupleType(list.map(elements, substitute_type_variables(_, substitutions)))
-    CustomType(module, name, parameters, inferred_variant) ->
-      CustomType(
-        module,
-        name,
-        list.map(parameters, substitute_type_variables(_, substitutions)),
-        inferred_variant,
-      )
-    CallableType(parameters, labels, return) ->
-      CallableType(
-        list.map(parameters, substitute_type_variables(_, substitutions)),
-        labels,
-        substitute_type_variables(return, substitutions),
-      )
-    GenericCallableType(parameters, labels, return, original) ->
-      GenericCallableType(
-        list.map(parameters, substitute_type_variables(_, substitutions)),
-        labels,
-        substitute_type_variables(return, substitutions),
-        original,
-      )
-    TypeAlias(alias_parameters, aliased) ->
-      TypeAlias(
-        alias_parameters,
-        substitute_type_variables(aliased, substitutions),
-      )
-    _ -> type_
-  }
+  })
 }
 
 /// Look up the type a name refers to, either directly in the environment or
@@ -1672,20 +1685,13 @@ pub fn list_to_string(types: List(Type), environment: Environment) -> String {
 /// types referencing other (transitively-reached) modules cannot be written
 /// back, so callers leave such parameters/returns unannotated.
 pub fn can_render(environment: Environment, type_: Type) -> Bool {
-  case type_ {
-    CustomType(module, _, parameters, _) ->
-      list.all(parameters, can_render(environment, _))
-      && is_renderable_module(environment, module)
-    TupleType(elements) -> list.all(elements, can_render(environment, _))
-    CallableType(parameters, _, return) ->
-      list.all(parameters, can_render(environment, _))
-      && can_render(environment, return)
-    GenericCallableType(parameters, _, return, _) ->
-      list.all(parameters, can_render(environment, _))
-      && can_render(environment, return)
-    TypeAlias(_, aliased) -> can_render(environment, aliased)
-    _ -> True
-  }
+  fold_type(True, type_, fn(acc, type_) {
+    case type_ {
+      CustomType(module, _, _, _) ->
+        acc && is_renderable_module(environment, module)
+      _ -> acc
+    }
+  })
 }
 
 fn is_renderable_module(environment: Environment, module: String) -> Bool {
