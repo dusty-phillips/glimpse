@@ -1,6 +1,5 @@
 import glance
 import gleam/dict
-import gleam/list
 import glimpse
 import glimpse/error
 import glimpse/internal/target

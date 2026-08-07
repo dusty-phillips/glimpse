@@ -892,15 +892,6 @@ pub type EnvStateResult(a) =
 pub type EnvStateFold(a) =
   error.TypeCheckFold(EnvState(a))
 
-pub type TypeState =
-  EnvState(Type)
-
-pub type TypeStateFold =
-  error.TypeCheckFold(TypeState)
-
-pub type TypeStateResult =
-  error.TypeCheckResult(TypeState)
-
 pub type EnvironmentResult =
   error.TypeCheckResult(Environment)
 
@@ -1751,19 +1742,4 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
     InferredReturn ->
       panic as "InferredReturn should be replaced with actual type before conversion to glance"
   }
-}
-
-pub fn to_binop_error(
-  environment: Environment,
-  operator: String,
-  left: Type,
-  right: Type,
-  expected: String,
-) -> TypeResult {
-  Error(error.InvalidBinOp(
-    operator,
-    to_string(environment, left),
-    to_string(environment, right),
-    expected,
-  ))
 }

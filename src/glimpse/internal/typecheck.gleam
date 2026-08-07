@@ -186,29 +186,20 @@ fn callable_parts(
   target: types.Type,
   argument_count: Int,
 ) -> error.TypeCheckResult(
-  #(
-    TypeStore,
-    List(types.Type),
-    List(types.Type),
-    dict.Dict(String, Int),
-    types.Type,
-  ),
+  #(TypeStore, List(types.Type), dict.Dict(String, Int), types.Type),
 ) {
   case target {
-    types.CallableType(target_arguments, _, _)
-    | types.GenericCallableType(target_arguments, _, _, _) -> {
+    types.CallableType(_, _, _) | types.GenericCallableType(_, _, _, _) -> {
       let #(store, parameters, labels, return) =
         types.instantiate_callable(store, target)
-      Ok(#(store, target_arguments, parameters, labels, return))
+      Ok(#(store, parameters, labels, return))
     }
     types.Var(_) | types.InferredReturn -> {
       let #(store, parameters) = types.fresh_vars(store, argument_count)
       let #(store, return) = types.fresh_var(store)
       let callable = types.CallableType(parameters, dict.new(), return)
       types.unify(store, environment, target, callable)
-      |> result.map(fn(store) {
-        #(store, parameters, parameters, dict.new(), return)
-      })
+      |> result.map(fn(store) { #(store, parameters, dict.new(), return) })
     }
     _ -> Error(error.NotCallable(types.to_string(environment, target)))
   }
@@ -1400,7 +1391,7 @@ fn record_update(
   use constructor_type <- result.try(constructor_lookup)
 
   // Updating the same field more than once is an error.
-  use _ <- result.try(check_update_no_duplicate_fields(environment, fields))
+  use _ <- result.try(check_update_no_duplicate_fields(fields))
 
   // The updated value's variant must be statically known and match the
   // constructor. Reject updates on an open/multi-variant value, on a
@@ -1543,13 +1534,11 @@ fn check_update_linked_field(
 
 /// Duplicate field labels within a single record update are an error.
 fn check_update_no_duplicate_fields(
-  environment: Environment,
   fields: List(glance.RecordUpdateField(glance.Expression)),
-) -> error.TypeCheckResult(Environment) {
-  let seen = set.new()
+) -> Result(Nil, error.TypeCheckError) {
   let relevant = fields |> list.map(fn(field) { field.label })
-  case
-    list.fold(relevant, #(seen, option.None), fn(state, label) {
+  let #(_seen, duplicate) =
+    list.fold(relevant, #(set.new(), option.None), fn(state, label) {
       let #(seen, found) = state
       case found {
         option.Some(_) -> state
@@ -1560,9 +1549,9 @@ fn check_update_no_duplicate_fields(
           }
       }
     })
-  {
-    #(_, option.Some(label)) -> Error(error.DuplicateArgument(label))
-    #(_, option.None) -> Ok(environment)
+  case duplicate {
+    option.Some(label) -> Error(error.DuplicateArgument(label))
+    option.None -> Ok(Nil)
   }
 }
 
@@ -2182,7 +2171,8 @@ fn clause_body_type(
       },
     )
 
-  // Every alternative binds the same variables (checked syntactically), and  // each binding must have the same type across alternatives, since the body
+  // Every alternative binds the same variables (checked syntactically), and
+  // each binding must have the same type across alternatives, since the body
   // sees a single binding per name. A name bound to different types in
   // different alternatives (e.g. `#(x, _) | #(_, x)`) is a type error.
   use store <- result.try(
@@ -2266,9 +2256,12 @@ pub fn call(
     target,
   ))
 
-  use #(store, _target_arguments, parameters, labels, return) <- result.try(
-    callable_parts(environment, store, glimpse_target, list.length(arguments)),
-  )
+  use #(store, parameters, labels, return) <- result.try(callable_parts(
+    environment,
+    store,
+    glimpse_target,
+    list.length(arguments),
+  ))
 
   use #(store, _argument_types) <- result.try(check_arguments(
     environment,
@@ -3093,6 +3086,8 @@ pub fn binop(
             types.StringType,
           )
 
+        // Handled in the outer case before the operands are checked as
+        // ordinary expressions; kept only because this case must be exhaustive.
         glance.Pipe -> pipe(environment, store, left, right)
       }
     }
@@ -3277,14 +3272,12 @@ fn pipe_value_into_callable(
   // The piped value occupies a parameter slot, so there is one more argument
   // than the explicit ones. `callable_parts` also shapes an unbound target
   // (an unannotated parameter, e.g. `request |> service`) into a fresh callable.
-  use #(store, _target_arguments, parameters, labels, return) <- result.try(
-    callable_parts(
-      environment,
-      store,
-      glimpse_target,
-      list.length(arguments) + 1,
-    ),
-  )
+  use #(store, parameters, labels, return) <- result.try(callable_parts(
+    environment,
+    store,
+    glimpse_target,
+    list.length(arguments) + 1,
+  ))
 
   // The piped value occupies the first parameter position not claimed by a
   // labelled argument, matching how `value |> f(label: x)` desugars to
@@ -3380,7 +3373,7 @@ fn pipe_value_into_result(
   left_type: Type,
   return: Type,
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  use #(store, _target_arguments, parameters, _labels, result_return) <- result.try(
+  use #(store, parameters, _labels, result_return) <- result.try(
     callable_parts(environment, store, return, 1)
     |> result.map_error(fn(_) { error.InvalidArguments("()", "a piped value") }),
   )

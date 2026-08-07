@@ -25,10 +25,7 @@ pub fn fold_import_from_env(
 
       let namespace = case alias {
         option.Some(glance.Named(name)) -> name
-        _ -> {
-          let assert Ok(namespace) = string.split(module, "/") |> list.last
-          namespace
-        }
+        _ -> result.unwrap(string.split(module, "/") |> list.last, module)
       }
 
       let add_namespace = case alias {

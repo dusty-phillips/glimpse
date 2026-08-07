@@ -59,16 +59,12 @@ pub fn function_supported(
   target: Target,
   definition: glance.Definition(glance.Function),
 ) -> Bool {
-  let externals =
-    list.filter(definition.attributes, fn(attribute) {
-      attribute.name == "external"
-    })
-  case externals {
+  case external_attributes(definition) {
     [] -> True
     _ ->
       case definition.definition.body {
         [] ->
-          list.any(externals, fn(attribute) {
+          list.any(external_attributes(definition), fn(attribute) {
             external_matches_target(target, attribute)
           })
         _ -> True
@@ -94,7 +90,15 @@ pub fn has_external_for_target(
   target: Target,
   definition: glance.Definition(glance.Function),
 ) -> Bool {
-  list.any(definition.attributes, fn(attribute) {
-    attribute.name == "external" && external_matches_target(target, attribute)
+  list.any(external_attributes(definition), fn(attribute) {
+    external_matches_target(target, attribute)
+  })
+}
+
+fn external_attributes(
+  definition: glance.Definition(glance.Function),
+) -> List(glance.Attribute) {
+  list.filter(definition.attributes, fn(attribute) {
+    attribute.name == "external"
   })
 }

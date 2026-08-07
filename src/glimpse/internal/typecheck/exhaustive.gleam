@@ -610,8 +610,6 @@ fn zip_fields(
   })
 }
 
-/// Unpack a constructor argument into its inner pattern (nothing for a
-/// shorthand field, which binds a fresh variable that never fails).
 /// Reduce a list pattern `[elements .. tail]` against a list subject's mode.
 fn reduce_list(
   environment: types.Environment,

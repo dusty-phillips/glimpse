@@ -98,7 +98,6 @@ fn load_package_recurse(
             Package(
               ..package,
               modules: dict.insert(package.modules, module_name, glimpse_module),
-              dev_dependencies: package.dev_dependencies,
             )
           load_package_recurse(
             recurse_package,
