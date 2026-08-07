@@ -2380,7 +2380,10 @@ fn apply_variant_refinement(
       // the concrete custom type through the store (e.g. a case subject bound
       // to a fresh variable by an earlier clause). Resolve it first so the
       // variant can be pinned on the concrete type, not lost on the variable.
-      let #(store, resolved) = types.resolve(store, type_)
+      // Rigid type parameters are preserved: refining `Result(a, e)` to the
+      // `Ok` variant must not turn the rigid `a`/`e` into instantiable named
+      // generics, or a later branch returning the subject loses the rigidity.
+      let #(store, resolved) = types.resolve_keep_rigid(store, type_)
       let refined = types.set_custom_type_variant(resolved, variant_index)
       #(
         store,

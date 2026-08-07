@@ -542,3 +542,18 @@ pub fn capture_branches_with_different_generic_names_unify_test() {
     }",
     )
 }
+
+pub fn variant_refinement_preserves_rigidity_test() {
+  // Refining `first` to the `Ok` variant in the case must not collapse the
+  // rigid `a`/`e` to instantiable named generics, or `or` accepts a
+  // `Result(e, a)` first parameter alongside `Result(a, e)`.
+  let _ =
+    helpers.error_module_typecheck(
+      "pub fn or(first: Result(e, a), second: Result(a, e)) -> Result(a, e) {
+      case first {
+        Ok(_) -> first
+        Error(_) -> second
+      }
+    }",
+    )
+}
