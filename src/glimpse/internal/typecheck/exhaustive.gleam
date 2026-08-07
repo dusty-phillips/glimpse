@@ -4,22 +4,15 @@ import gleam/list
 import gleam/option
 import gleam/result
 import gleam/string
+import glimpse/internal/typecheck/pattern
 import glimpse/internal/typecheck/types
 
-/// How many times a recursive type may expand into itself while computing a
-/// subject's mode. Deeper expansions of list tails and recursive custom type
-/// fields become `Infinite`, which keeps the mode finite while still allowing
-/// patterns like `[first, second]` to split the tail into `[]` and `[..]`.
+/// How many levels deep a subject's mode may expand. Deeper expansions become
+/// `Infinite`, which keeps the mode finite while still allowing patterns like
+/// `[first, second]` to split the tail into `[]` and `[..]`. The limit bounds
+/// the total number of mode computations to `depth * number of types`, since
+/// identical `(depth, type)` states are computed once and shared.
 const mode_expansion_depth = 8
-
-fn seen_count(seen: List(String), name: String) -> Int {
-  list.fold(seen, 0, fn(count, item) {
-    case item == name {
-      True -> count + 1
-      False -> count
-    }
-  })
-}
 
 /// Decision-tree exhaustiveness checking, mirroring the algorithm the official
 /// Gleam compiler uses (`compiler-core/src/exhaustiveness.rs`), which is based
@@ -62,8 +55,11 @@ type Mode {
 }
 
 /// One constructor of a Finite type, together with the modes of its fields.
+/// `labels` carries the constructor's field labels in definition order (empty
+/// strings for unlabelled fields), so patterns written with labelled or
+/// shorthand arguments can be realigned to their definition positions.
 type Field {
-  Field(name: String, modes: List(Mode))
+  Field(name: String, modes: List(Mode), labels: List(String))
 }
 
 /// A compiled row of the pattern matrix.
@@ -137,7 +133,13 @@ pub fn check(
   subject_types: List(types.Type),
   alternatives: List(List(glance.Pattern)),
 ) -> option.Option(List(String)) {
-  let modes = list.map(subject_types, fn(type_) { mode_of(environment, type_) })
+  let #(_cache, modes) =
+    list.fold(subject_types, #(dict.new(), []), fn(state, type_) {
+      let #(cache, modes) = state
+      let #(cache, mode) = mode_of(environment, cache, type_)
+      #(cache, [mode, ..modes])
+    })
+  let modes = list.reverse(modes)
   let ids = range(0, list.length(subject_types))
   let rows =
     list.map(alternatives, fn(alternative) {
@@ -146,7 +148,7 @@ pub fn check(
         list.fold(triples, [], fn(acc, pair) {
           let #(ids_and_modes, pattern) = pair
           let #(id, mode) = ids_and_modes
-          case reduce(mode, pattern) {
+          case reduce(environment, mode, pattern) {
             Any -> acc
             reduced -> [#(id, reduced), ..acc]
           }
@@ -162,18 +164,46 @@ pub fn check(
   }
 }
 
-/// Compute the mode of a program type: how it branches when split. The `seen`
-/// lists the custom type names currently being expanded so that recursive types
-/// recurse into an `Infinite` mode instead of looping forever.
-fn mode_of(environment: types.Environment, type_: types.Type) -> Mode {
-  mode_of_guarded(environment, [], type_)
+/// A cache of already-computed modes, keyed by the current expansion depth and
+/// the type itself. Modes are a pure function of that state, so equal states
+/// share one result. Without it a recursive type like
+/// `type Type { FunctionType(Type, List(Type)) }` re-expands the same sub-modes
+/// exponentially.
+pub type ModeCache =
+  dict.Dict(#(Int, types.Type), Mode)
+
+/// Compute the mode of a program type: how it branches when split. `depth`
+/// tracks how many expansions have been performed on the current path so that
+/// recursive types recurse into an `Infinite` mode instead of looping forever.
+fn mode_of(
+  environment: types.Environment,
+  cache: ModeCache,
+  type_: types.Type,
+) -> #(ModeCache, Mode) {
+  mode_of_guarded(environment, cache, 0, type_)
 }
 
 fn mode_of_guarded(
   environment: types.Environment,
-  seen: List(String),
+  cache: ModeCache,
+  depth: Int,
   type_: types.Type,
-) -> Mode {
+) -> #(ModeCache, Mode) {
+  case dict.get(cache, #(depth, type_)) {
+    Ok(mode) -> #(cache, mode)
+    Error(_) -> {
+      let #(cache, mode) = mode_of_uncached(environment, cache, depth, type_)
+      #(dict.insert(cache, #(depth, type_), mode), mode)
+    }
+  }
+}
+
+fn mode_of_uncached(
+  environment: types.Environment,
+  cache: ModeCache,
+  depth: Int,
+  type_: types.Type,
+) -> #(ModeCache, Mode) {
   case type_ {
     types.IntType
     | types.FloatType
@@ -184,43 +214,64 @@ fn mode_of_guarded(
     | types.InferredReturn
     | types.CallableType(..)
     | types.GenericCallableType(..)
-    | types.NamespaceType(..) -> Infinite
+    | types.NamespaceType(..) -> #(cache, Infinite)
     // `Nil` is a custom type with a single constructor, so a `Nil` pattern
     // covers every value of a `Nil`-typed subject.
-    types.NilType -> Finite([Field("Nil", [])])
-    types.BoolType -> Finite([Field("True", []), Field("False", [])])
-    types.TupleType(elements) ->
-      Finite([
-        Field(
-          "element",
-          list.map(elements, fn(e) { mode_of_guarded(environment, seen, e) }),
-        ),
-      ])
+    types.NilType -> #(cache, Finite([Field("Nil", [], [])]))
+    types.BoolType -> #(
+      cache,
+      Finite([Field("True", [], []), Field("False", [], [])]),
+    )
+    types.TupleType(elements) -> {
+      let #(cache, modes) =
+        list.fold(elements, #(cache, []), fn(state, e) {
+          let #(cache, modes) = state
+          let #(cache, mode) = mode_of_guarded(environment, cache, depth, e)
+          #(cache, [mode, ..modes])
+        })
+      #(cache, Finite([Field("element", list.reverse(modes), [])]))
+    }
     types.CustomType("gleam", "List", [element], _) ->
-      case seen_count(seen, "List") >= mode_expansion_depth {
-        True -> Infinite
-        False ->
-          Finite([
-            Field("[..]", [
-              mode_of_guarded(environment, seen, element),
-              mode_of_guarded(environment, ["List", ..seen], type_),
+      case depth >= mode_expansion_depth {
+        True -> #(cache, Infinite)
+        False -> {
+          // The tail is the same list type, so its mode is the element's mode
+          // under one more expansion; the cache makes that chain linear.
+          let #(cache, element_mode) =
+            mode_of_guarded(environment, cache, depth, element)
+          let #(cache, tail_mode) =
+            mode_of_guarded(environment, cache, depth + 1, type_)
+          #(
+            cache,
+            Finite([
+              Field("[..]", [element_mode, tail_mode], []),
+              Field("[]", [], []),
             ]),
-            Field("[]", []),
-          ])
+          )
+        }
       }
     // The prelude `Result` pre-registers no variant index on its constructors,
     // so build its `Ok`/`Error` fields from the concrete type arguments.
-    types.CustomType("gleam", "Result", [ok_type, error_type], _) ->
-      Finite([
-        Field("Ok", [mode_of_guarded(environment, seen, ok_type)]),
-        Field("Error", [mode_of_guarded(environment, seen, error_type)]),
-      ])
+    types.CustomType("gleam", "Result", [ok_type, error_type], _) -> {
+      let #(cache, ok_mode) =
+        mode_of_guarded(environment, cache, depth, ok_type)
+      let #(cache, error_mode) =
+        mode_of_guarded(environment, cache, depth, error_type)
+      #(
+        cache,
+        Finite([
+          Field("Ok", [ok_mode], [""]),
+          Field("Error", [error_mode], [""]),
+        ]),
+      )
+    }
     types.CustomType(module, name, parameters, _) ->
-      case constructors(environment, seen, module, name, parameters) {
-        option.Some(fields) -> Finite(fields)
-        option.None -> Infinite
+      case constructors(environment, cache, depth, module, name, parameters) {
+        #(cache, option.Some(fields)) -> #(cache, Finite(fields))
+        #(cache, option.None) -> #(cache, Infinite)
       }
-    types.TypeAlias(_, aliased) -> mode_of_guarded(environment, seen, aliased)
+    types.TypeAlias(_, aliased) ->
+      mode_of_guarded(environment, cache, depth, aliased)
   }
 }
 
@@ -228,25 +279,34 @@ fn mode_of_guarded(
 /// is opaque and only a catch-all can cover it.
 fn constructors(
   environment: types.Environment,
-  seen: List(String),
+  cache: ModeCache,
+  depth: Int,
   module_name: String,
   name: String,
   subject_parameters: List(types.Type),
-) -> option.Option(List(Field)) {
-  case seen_count(seen, name) >= mode_expansion_depth {
-    True -> option.None
+) -> #(ModeCache, option.Option(List(Field))) {
+  case depth >= mode_expansion_depth {
+    True -> #(cache, option.None)
     False ->
-      constructors_(environment, seen, module_name, name, subject_parameters)
+      constructors_(
+        environment,
+        cache,
+        depth,
+        module_name,
+        name,
+        subject_parameters,
+      )
   }
 }
 
 fn constructors_(
   environment: types.Environment,
-  seen: List(String),
+  cache: ModeCache,
+  depth: Int,
   module_name: String,
   name: String,
   subject_parameters: List(types.Type),
-) -> option.Option(List(Field)) {
+) -> #(ModeCache, option.Option(List(Field))) {
   let source = case module_name {
     "." -> environment.current_module
     other -> other
@@ -290,20 +350,23 @@ fn constructors_(
       _ -> option.None
     }
   }
-  let by_index =
-    dict.fold(definitions, dict.new(), fn(fields, def_name, def_type) {
-      let #(index, parameters, return_) = case def_type {
-        types.CallableType(parameters, _, return_) -> #(
+  let #(cache, by_index) =
+    dict.fold(definitions, #(cache, dict.new()), fn(state, def_name, def_type) {
+      let #(cache, fields) = state
+      let #(index, parameters, return_, labels) = case def_type {
+        types.CallableType(parameters, labels, return_) -> #(
           variant_index_of(return_),
           parameters,
           return_,
+          labels,
         )
-        types.GenericCallableType(parameters, _, return_, _) -> #(
+        types.GenericCallableType(parameters, labels, return_, _) -> #(
           variant_index_of(return_),
           parameters,
           return_,
+          labels,
         )
-        _ -> #(variant_index_of(def_type), [], def_type)
+        _ -> #(variant_index_of(def_type), [], def_type, dict.new())
       }
       case index {
         option.Some(variant) -> {
@@ -327,20 +390,28 @@ fn constructors_(
               |> dict.from_list
             _ -> dict.new()
           }
-          dict.insert(
-            fields,
-            variant,
-            Field(
-              def_name,
-              list.map(parameters, fn(param) {
-                let param =
-                  types.substitute_type_variables(param, substitutions)
-                mode_of_guarded(environment, [name, ..seen], param)
-              }),
+          let #(cache, param_modes) =
+            list.fold(parameters, #(cache, []), fn(state, param) {
+              let #(cache, modes) = state
+              let param = types.substitute_type_variables(param, substitutions)
+              let #(cache, mode) =
+                mode_of_guarded(environment, cache, depth + 1, param)
+              #(cache, [mode, ..modes])
+            })
+          #(
+            cache,
+            dict.insert(
+              fields,
+              variant,
+              Field(
+                def_name,
+                list.reverse(param_modes),
+                labels_by_position(labels, parameters),
+              ),
             ),
           )
         }
-        option.None -> fields
+        option.None -> #(cache, fields)
       }
     })
   let fields = by_index
@@ -357,44 +428,66 @@ fn constructors_(
     max -> max + 1
   }
   case count {
-    0 -> option.None
-    _ ->
+    0 -> #(cache, option.None)
+    _ -> #(
+      cache,
       option.Some(
         list.map(range(0, count), fn(index) {
           dict.get(fields, index)
-          |> result.unwrap(Field("?", []))
+          |> result.unwrap(Field("?", [], []))
         }),
-      )
+      ),
+    )
   }
 }
 
 /// Reduce a glance pattern against the mode of its subject into the fragments
-/// exhaustiveness cares about.
-fn reduce(mode: Mode, pattern: glance.Pattern) -> Pat {
-  case pattern {
+/// exhaustiveness cares about. The environment is used to resolve constructor
+/// names that may have been written via an import alias (e.g. `Err` for
+/// `gleam.Error`) to their canonical variant index.
+fn reduce(
+  environment: types.Environment,
+  mode: Mode,
+  p: glance.Pattern,
+) -> Pat {
+  case p {
     glance.PatternVariable(_, _) | glance.PatternDiscard(_, _) -> Any
-    glance.PatternAssignment(_, inner, _) -> reduce(mode, inner)
+    glance.PatternAssignment(_, inner, _) -> reduce(environment, mode, inner)
     glance.PatternInt(_, _)
     | glance.PatternFloat(_, _)
     | glance.PatternString(_, _)
     | glance.PatternConcatenate(_, _, _, _) -> Literal
     glance.PatternBitString(_, _) -> Literal
     glance.PatternTuple(_, elements) ->
-      Constructor(0, zip_fields(fields_of(mode, 0), elements))
-    glance.PatternList(_, elements, tail) -> reduce_list(mode, elements, tail)
-    glance.PatternVariant(_, _module, name, arguments, _spread) -> {
-      let index = index_of(existing_fields(mode), name)
-      let sub =
-        list.fold(arguments, [], fn(acc, field) {
-          case field {
-            glance.UnlabelledField(p) -> [p, ..acc]
-            glance.LabelledField(_, _, p) -> [p, ..acc]
-            glance.ShorthandField(_, _) -> acc
-          }
-        })
-      Constructor(index, zip_fields(fields_of(mode, index), list.reverse(sub)))
+      Constructor(0, zip_fields(environment, fields_of(mode, 0), elements))
+    glance.PatternList(_, elements, tail) ->
+      reduce_list(environment, mode, elements, tail)
+    glance.PatternVariant(_, module, name, arguments, _spread) -> {
+      let fields = existing_fields(mode)
+      let index = case
+        pattern.constructor_variant_index(environment, module, name)
+      {
+        option.Some(variant) -> variant
+        option.None -> field_index(fields, name) |> option.unwrap(0)
+      }
+      let sub = align_constructor_arguments(labels_of(mode, index), arguments)
+      Constructor(index, zip_fields(environment, fields_of(mode, index), sub))
     }
   }
+}
+
+/// The position of the field with the given name, or `None` when absent.
+fn field_index(fields: List(Field), name: String) -> option.Option(Int) {
+  list.index_fold(fields, option.None, fn(acc, field, index) {
+    case acc {
+      option.Some(_) -> acc
+      option.None ->
+        case field.name == name {
+          True -> option.Some(index)
+          False -> option.None
+        }
+    }
+  })
 }
 
 /// The constructors of a Finite mode.
@@ -411,6 +504,81 @@ fn fields_of(mode: Mode, index: Int) -> List(Mode) {
     option.Some(field) -> field.modes
     option.None -> []
   }
+}
+
+/// The field labels (definition order, `""` for unlabelled fields) of the
+/// constructor at `index` of a subject's mode.
+fn labels_of(mode: Mode, index: Int) -> List(String) {
+  case at(existing_fields(mode), index) {
+    option.Some(field) -> field.labels
+    option.None -> []
+  }
+}
+
+/// The constructor's field labels in definition order, resolved from the
+/// position -> label mapping of its callable definition.
+fn labels_by_position(
+  labels: dict.Dict(String, Int),
+  parameters: List(types.Type),
+) -> List(String) {
+  list.index_map(parameters, fn(_parameter, position) {
+    dict.fold(labels, "", fn(acc, label, pos) {
+      case pos == position {
+        True -> label
+        False -> acc
+      }
+    })
+  })
+}
+
+/// Realign the arguments written in a constructor pattern to the definition
+/// order of its fields. A pattern may write labelled fields in any order and
+/// skip fields with `..`, but the constructor's field modes are positional.
+fn align_constructor_arguments(
+  labels: List(String),
+  arguments: List(glance.Field(glance.Pattern)),
+) -> List(glance.Pattern) {
+  let labelled =
+    list.fold(arguments, dict.new(), fn(d, field) {
+      case field {
+        glance.LabelledField(label, _, pattern) ->
+          dict.insert(d, label, pattern)
+        // A shorthand field binds a variable, so it can never fail; give it a
+        // variable pattern that reduces to `Any`.
+        glance.ShorthandField(label, _) ->
+          dict.insert(
+            d,
+            label,
+            glance.PatternVariable(glance.Span(-1, -1), label),
+          )
+        glance.UnlabelledField(_) -> d
+      }
+    })
+  let unlabelled =
+    list.fold(arguments, [], fn(acc, field) {
+      case field {
+        glance.UnlabelledField(pattern) -> [pattern, ..acc]
+        _ -> acc
+      }
+    })
+    |> list.reverse
+  let #(aligned, _remaining) =
+    list.fold(labels, #([], unlabelled), fn(state, label) {
+      let #(aligned, remaining) = state
+      case dict.get(labelled, label) {
+        Ok(pattern) -> #([pattern, ..aligned], remaining)
+        Error(_) ->
+          case remaining {
+            [pattern, ..rest] -> #([pattern, ..aligned], rest)
+            // A field the pattern does not mention (e.g. covered by `..`).
+            [] -> #(
+              [glance.PatternDiscard(glance.Span(-1, -1), ""), ..aligned],
+              [],
+            )
+          }
+      }
+    })
+  list.reverse(aligned)
 }
 
 /// The index of the first constructor with the given name, or 0 if absent.
@@ -430,11 +598,15 @@ fn index_of_from(fields: List(Field), name: String, index: Int) -> Int {
 }
 
 /// Reduce each pattern against its corresponding field mode.
-fn zip_fields(modes: List(Mode), patterns: List(glance.Pattern)) -> List(Pat) {
+fn zip_fields(
+  environment: types.Environment,
+  modes: List(Mode),
+  patterns: List(glance.Pattern),
+) -> List(Pat) {
   list.zip(modes, patterns)
   |> list.map(fn(pair) {
     let #(mode, pattern) = pair
-    reduce(mode, pattern)
+    reduce(environment, mode, pattern)
   })
 }
 
@@ -442,6 +614,7 @@ fn zip_fields(modes: List(Mode), patterns: List(glance.Pattern)) -> List(Pat) {
 /// shorthand field, which binds a fresh variable that never fails).
 /// Reduce a list pattern `[elements .. tail]` against a list subject's mode.
 fn reduce_list(
+  environment: types.Environment,
   mode: Mode,
   elements: List(glance.Pattern),
   tail: option.Option(glance.Pattern),
@@ -453,13 +626,13 @@ fn reduce_list(
       let cons = fields_of(mode, 0)
       let element_mode = at(cons, 0) |> option.unwrap(Infinite)
       Constructor(0, [
-        reduce(element_mode, head),
-        reduce_list(mode, rest, tail),
+        reduce(environment, element_mode, head),
+        reduce_list(environment, mode, rest, tail),
       ])
     }
     [] ->
       case tail {
-        option.Some(whole) -> reduce(mode, whole)
+        option.Some(whole) -> reduce(environment, mode, whole)
         option.None -> Constructor(1, [])
       }
   }

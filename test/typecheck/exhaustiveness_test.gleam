@@ -177,3 +177,39 @@ pub fn list_cons_missing_pattern_matches_official_test() {
     )
     == error.InexhaustivePattern("[_, ..]\n[]")
 }
+
+pub fn spread_labelled_patterns_are_exhaustive_test() {
+  helpers.ok_module_typecheck(
+    "pub type Maybe {
+  Just(Int)
+  Nothing
+}
+pub type Three {
+  Three(first: Int, second: List(Int), third: Maybe)
+}
+pub fn main(x: Three) -> Int {
+  case x {
+    Three(third: Just(n), ..) -> n
+    Three(third: Nothing, ..) -> 0
+  }
+}",
+  )
+}
+
+pub fn spread_labelled_pattern_missing_constructor_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Maybe {
+  Just(Int)
+  Nothing
+}
+pub type Three {
+  Three(first: Int, second: List(Int), third: Maybe)
+}
+pub fn main(x: Three) -> Int {
+  case x {
+    Three(third: Just(n), ..) -> n
+  }
+}",
+    )
+    == error.InexhaustivePattern("Nothing")
+}

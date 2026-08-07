@@ -1081,7 +1081,7 @@ fn prelude_definitions() -> dict.Dict(String, Type) {
       GenericCallableType(
         [value],
         dict.new(),
-        CustomType("gleam", "Result", [value, error], option.None),
+        CustomType("gleam", "Result", [value, error], option.Some(0)),
         dummy_function,
       ),
     ),
@@ -1090,7 +1090,7 @@ fn prelude_definitions() -> dict.Dict(String, Type) {
       GenericCallableType(
         [error],
         dict.new(),
-        CustomType("gleam", "Result", [value, error], option.None),
+        CustomType("gleam", "Result", [value, error], option.Some(1)),
         dummy_function,
       ),
     ),
