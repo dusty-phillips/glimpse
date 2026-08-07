@@ -2195,7 +2195,10 @@ fn clause_body_type(
 
   use #(store, guard_type) <- result.try(case clause.guard {
     option.None -> Ok(#(store, types.BoolType))
-    option.Some(guard_expr) -> expression(pattern_env, store, guard_expr)
+    option.Some(guard_expr) -> {
+      check_guard_grammar(guard_expr)
+      |> result.try(fn(_) { expression(pattern_env, store, guard_expr) })
+    }
   })
 
   case types.unify(store, pattern_env, guard_type, types.BoolType) {
@@ -2203,6 +2206,102 @@ fn clause_body_type(
     Error(_) ->
       Error(error.InvalidGuard(types.to_string(pattern_env, guard_type)))
   }
+}
+
+/// The official compiler restricts case clause guards to a small grammar:
+/// variables, field access, tuple indexes, negation, binary operators, blocks,
+/// and constant values (literals, tuples, lists, record construction). Function
+/// calls, pipelines, `case`, `panic`, `fn`, captures, record updates, and
+/// assignments inside guards are rejected at parse time. Glance parses guards
+/// as full expressions, so this check recovers that restriction.
+fn check_guard_grammar(expr: glance.Expression) -> error.TypeCheckResult(Nil) {
+  case expr {
+    glance.Int(_, _) | glance.Float(_, _) | glance.String(_, _) -> Ok(Nil)
+    glance.Variable(_, _) -> Ok(Nil)
+    glance.Tuple(_, elements) -> check_guard_expressions(elements)
+    glance.List(_, elements, rest) ->
+      check_guard_expressions(elements)
+      |> result.try(fn(_) {
+        case rest {
+          option.None -> Ok(Nil)
+          option.Some(tail) -> check_guard_grammar(tail)
+        }
+      })
+    glance.FieldAccess(_, container, _label) -> check_guard_grammar(container)
+    glance.TupleIndex(_, tuple, _index) -> check_guard_grammar(tuple)
+    glance.NegateBool(_, value) -> check_guard_grammar(value)
+    // A `-` only appears before a literal (lexed as a single negative token by
+    // the official compiler); negation of a non-literal is not valid in guards.
+    glance.NegateInt(_, value) ->
+      case value {
+        glance.Int(_, _) | glance.Float(_, _) -> Ok(Nil)
+        _ -> Error(error.InvalidGuardExpression)
+      }
+    glance.Block(_, statements) -> check_guard_block(statements)
+    glance.BinaryOperator(_, operator, left, right) ->
+      case operator {
+        glance.Pipe -> Error(error.InvalidGuardExpression)
+        _ ->
+          check_guard_grammar(left)
+          |> result.try(fn(_) { check_guard_grammar(right) })
+      }
+    glance.Call(_, function, arguments) -> {
+      case is_record_construction(function) {
+        True -> check_guard_arguments(arguments)
+        False -> Error(error.InvalidGuardExpression)
+      }
+    }
+    // Bit arrays are constant values, so they are permitted grammatically.
+    glance.BitString(_, _segments) -> Ok(Nil)
+    glance.Todo(_, _) -> Error(error.TodoInConstant)
+    _ -> Error(error.InvalidGuardExpression)
+  }
+}
+
+fn check_guard_expressions(
+  expressions: List(glance.Expression),
+) -> error.TypeCheckResult(Nil) {
+  list.try_fold(expressions, Nil, fn(_nil, expr) { check_guard_grammar(expr) })
+}
+
+fn check_guard_arguments(
+  arguments: List(glance.Field(glance.Expression)),
+) -> error.TypeCheckResult(Nil) {
+  list.try_fold(arguments, Nil, fn(_nil, field) {
+    case field {
+      glance.LabelledField(_label, _location, item) -> check_guard_grammar(item)
+      glance.ShorthandField(_label, _location) -> Ok(Nil)
+      glance.UnlabelledField(item) -> check_guard_grammar(item)
+    }
+  })
+}
+
+fn check_guard_block(
+  statements: List(glance.Statement),
+) -> error.TypeCheckResult(Nil) {
+  list.try_fold(statements, Nil, fn(_nil, statement) {
+    case statement {
+      glance.Expression(expr) -> check_guard_grammar(expr)
+      _ -> Error(error.InvalidGuardExpression)
+    }
+  })
+}
+
+/// Whether a call target is a record construction (`UpName(...)` or
+/// `module.UpName(...)`), the only calls the official guard grammar permits.
+fn is_record_construction(function: glance.Expression) -> Bool {
+  case function {
+    glance.Variable(_, name) -> is_upper_first(name)
+    glance.FieldAccess(_, glance.Variable(_, _module), label) ->
+      is_upper_first(label)
+    _ -> False
+  }
+}
+
+fn is_upper_first(name: String) -> Bool {
+  string.first(name)
+  |> result.map(fn(first) { string.uppercase(first) == first })
+  |> result.unwrap(False)
 }
 
 /// Replace a subject variable's binding with a copy marked as a known variant,

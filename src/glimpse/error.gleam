@@ -49,6 +49,12 @@ pub type TypeCheckError {
   PatternMismatch(pattern: String, expected: String, got: String)
   /// Raised when the guard of a case clause is not a Bool
   InvalidGuard(got: String)
+  /// Raised when a case clause guard uses syntax that is not part of the
+  /// restricted guard grammar (e.g. function calls, pipelines, `case`).
+  InvalidGuardExpression
+  /// Raised when a pattern names a variable `true` or `false`, which is
+  /// almost certainly a mistake for the `True`/`False` constructors.
+  LowercaseBoolPattern(name: String)
   /// Raised when a function parameter is missing a type annotation
   MissingParameterAnnotation(name: String)
   /// Raised when `use` syntax is used with an unsupported number of subjects

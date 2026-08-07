@@ -259,3 +259,22 @@ pub fn let_assert_custom_type_pattern_test() {
     )
   assert list.length(module.module.functions) == 1
 }
+
+pub fn lowercase_bool_case_pattern_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Bool) -> Int { case x { true -> 0 false -> 1 } }",
+    )
+    == error.LowercaseBoolPattern("true")
+}
+
+pub fn lowercase_bool_let_pattern_test() {
+  assert helpers.error_function_typecheck("fn foo() { let true = True }")
+    == error.LowercaseBoolPattern("true")
+}
+
+pub fn lowercase_bool_shadow_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Bool) -> Int { case x { false -> 0 _ -> 1 } }",
+    )
+    == error.LowercaseBoolPattern("false")
+}

@@ -37,7 +37,10 @@ pub fn typecheck_pattern(
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   case pattern {
     glance.PatternVariable(_, name) ->
-      bind_variable(environment, store, name, expected_type)
+      case name {
+        "true" | "false" -> Error(error.LowercaseBoolPattern(name))
+        _ -> bind_variable(environment, store, name, expected_type)
+      }
 
     glance.PatternDiscard(_, _) -> Ok(#(store, environment))
 

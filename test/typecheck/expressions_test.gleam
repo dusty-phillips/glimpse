@@ -265,6 +265,69 @@ pub fn case_invalid_guard_test() {
     == error.InvalidGuard("Int")
 }
 
+pub fn guard_function_call_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "fn pos(x: Int) -> Bool { x > 0 } fn foo(x: Int) -> Int { case x { y if pos(y) -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
+pub fn guard_pipeline_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "fn pos(x: Int) -> Bool { x > 0 } fn foo(x: Int) -> Int { case x { y if y |> pos -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
+pub fn guard_case_expression_rejected_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if case y { 1 -> True _ -> False } -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
+pub fn guard_panic_rejected_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if panic -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
+pub fn guard_unary_minus_rejected_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if -y > 0 -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
+pub fn guard_todo_rejected_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if todo -> 0 _ -> 1 } }",
+    )
+    == error.TodoInConstant
+}
+
+pub fn guard_negative_literal_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if y > -1 -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_block_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if { y > 0 } -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_record_construction_allowed_test() {
+  let _ =
+    helpers.ok_module_typecheck(
+      "type Rec { Rec(a: Int, b: Int) } fn foo(x: Rec) -> Int { case x { y if y == Rec(1, 2) -> 0 _ -> 1 } }",
+    )
+}
+
 pub fn case_pattern_mismatch_test() {
   assert helpers.error_function_typecheck(
       "fn foo(x: Int) -> String { case x { \"a\" -> \"one\" _ -> \"other\" } }",
