@@ -373,6 +373,29 @@ pub fn recursive_unannotated_helper_return_is_rejected_test() {
     )
 }
 
+pub fn return_annotation_distinct_generics_rejected_test() {
+  // The return annotation's type variables are rigid like the parameters', so
+  // a body returning `fn(a) -> a` cannot satisfy a `fn(b) -> b` annotation.
+  let assert error.InvalidReturnType("take", _, _) =
+    helpers.error_module_typecheck(
+      "fn take(f: fn(a) -> a) -> fn(b) -> b {
+      f
+    }",
+    )
+}
+
+pub fn annotated_lambda_stays_polymorphic_test() {
+  // A lambda's annotated type variables are rigid *inside* its body but the
+  // lambda itself is polymorphic, so it can be used at different types.
+  helpers.ok_module_typecheck(
+    "pub fn f() -> String {
+      let g = fn(x: a, y: b) -> b { y }
+      let _ = g(1, 2)
+      g(\"a\", \"b\")
+    }",
+  )
+}
+
 pub fn capture_branches_with_different_generic_names_unify_test() {
   // Each `case` branch is a capture of a polymorphic function. Generalising
   // the two captures can name their type variables differently (one is pinned

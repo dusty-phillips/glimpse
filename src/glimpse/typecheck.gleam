@@ -964,12 +964,21 @@ pub fn function(
           }
         }
         option.Some(expected_type) -> {
-          // Explicit return annotation: check that body type matches
+          // Explicit return annotation: check that body type matches. The
+          // annotation's type variables are made rigid like the parameters'
+          // (via the same `generic_vars`), so a return of `fn(b) -> b` cannot
+          // adopt the body's distinct rigid `a`.
           use #(store, expected) <- result.try(types.type_with_store(
             param_state.environment,
             store,
             expected_type,
           ))
+          let #(store, _generic_vars, expected) =
+            functions.freshen_generics(
+              store,
+              param_state.generic_vars,
+              expected,
+            )
           case
             types.unify(store, param_state.environment, body_type, expected)
           {

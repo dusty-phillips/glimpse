@@ -1111,6 +1111,21 @@ fn fn_literal(
   // site. Generalisation happens at binding boundaries, not on the lambda
   // itself. Annotations may still introduce named generics, which keep the
   // lambda polymorphic.
+  //
+  // Annotated parameters were made rigid while the body was checked (so a
+  // lambda's type variables cannot be used as a concrete type); resolve them
+  // back to their named generics for the lambda's own type so the lambda stays
+  // polymorphic at use sites, while unannotated parameters remain unbound
+  // inference variables.
+  let #(store, param_types) =
+    list.fold(param_types, #(store, []), fn(state, param_type) {
+      let #(store, acc) = state
+      let #(store, resolved) = types.resolve(store, param_type)
+      #(store, [resolved, ..acc])
+    })
+    |> fn(state) { #(state.0, list.reverse(state.1)) }
+  let #(store, return_type) = types.resolve(store, return_type)
+
   let lambda_type = case
     functions.has_generic_types(param_types)
     || functions.is_generic_type(return_type)
