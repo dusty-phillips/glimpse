@@ -192,25 +192,8 @@ pub fn module(
   )
   let environment = env_for_signatures
 
-  // A public function implemented only for other targets cannot be imported
-  // on this one.
-  use _ <- result.try(
-    list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
-      case
-        definition.definition.publicity == glance.Public
-        && !target.function_supported(target, definition)
-      {
-        True -> Error(error.UnsupportedTarget(definition.definition.name))
-        False -> Ok(Nil)
-      }
-    }),
-  )
-
   let function_signature_result =
     glimpse_module.module.functions
-    |> list.filter(fn(definition) {
-      target.function_supported(target, definition)
-    })
     |> list.map(fn(definition) { definition.definition })
     |> list.fold_until(Ok(environment), functions.function_signature)
 

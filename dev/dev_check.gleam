@@ -56,6 +56,11 @@ fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
     }
   })
 
+  let build_target = case extra_project {
+    option.Some(root) -> target_from_project(root)
+    option.None -> target.Erlang
+  }
+
   use dev_entries <- result.try(case extra_project {
     option.None -> scan_project_dir("dev")
     option.Some(_) -> Ok([])
@@ -107,7 +112,7 @@ fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
       case dict.get(package.modules, next_module) {
         Error(_) -> Error("missing module " <> next_module)
         Ok(glimpse_module) ->
-          case typecheck.module(glimpse_module, module_envs, target.Erlang) {
+          case typecheck.module(glimpse_module, module_envs, build_target) {
             Error(err) -> Error(next_module <> ": " <> string.inspect(err))
             Ok(#(_, module_env)) ->
               Ok(dict.insert(module_envs, next_module, module_env))
@@ -155,6 +160,27 @@ fn scan_project_dir(
       }
     }
   })
+}
+
+/// Read the build target from a project's `gleam.toml`, defaulting to Erlang.
+fn target_from_project(root: String) -> target.Target {
+  let root = case string.ends_with(root, "/") {
+    True -> root
+    False -> root <> "/"
+  }
+  let toml = read_file(root <> "gleam.toml")
+  case
+    toml
+    |> string.split("\n")
+    |> list.find(fn(line) { string.starts_with(string.trim(line), "target") })
+  {
+    Ok(line) ->
+      case string.contains(line, "javascript") {
+        True -> target.Javascript
+        False -> target.Erlang
+      }
+    Error(_) -> target.Erlang
+  }
 }
 
 /// Sort the import graph starting from every module that nothing imports, so

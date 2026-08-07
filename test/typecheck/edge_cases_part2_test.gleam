@@ -230,21 +230,23 @@ pub fn pipe_into_zero_argument_result_test() {
     == error.InvalidArguments("()", "a piped value")
 }
 
-pub fn public_other_target_external_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "@external(javascript, \"one\", \"two\")
+pub fn public_other_target_external_is_fine_test() {
+  // The defining module may declare an external for another target; real
+  // Gleam only rejects calls to it, and only from a project's own modules.
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"one\", \"two\")
     pub fn js_only() -> Int",
-    )
-    == error.UnsupportedTarget("js_only")
+  )
 }
 
-pub fn other_target_external_call_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "@external(javascript, \"one\", \"two\")
+pub fn other_target_external_call_within_module_is_fine_test() {
+  // A module may call its own other-target external; the real compiler does
+  // not reject dependency modules that do this.
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"one\", \"two\")
     fn js_only() -> Int
     pub fn main() { js_only() }",
-    )
-    == error.InvalidName("js_only")
+  )
 }
 
 pub fn matching_target_external_is_fine_test() {
@@ -336,12 +338,11 @@ pub fn covered_target_external_body_is_skipped_test() {
   )
 }
 
-pub fn private_other_target_external_call_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "@external(javascript, \"one\", \"two\")
+pub fn private_other_target_external_call_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"one\", \"two\")
     fn js_only() -> Int
     fn uh_oh() -> Int { js_only() }
     pub fn main() { uh_oh() }",
-    )
-    == error.InvalidName("js_only")
+  )
 }
