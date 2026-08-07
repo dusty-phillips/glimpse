@@ -340,13 +340,17 @@ pub fn other_target_external_body_is_typechecked_test() {
 }
 
 pub fn covered_target_external_body_is_skipped_test() {
-  helpers.ok_module_typecheck(
-    "@external(erlang, \"one\", \"two\")
+  // An external-with-body function has its body typechecked on every target:
+  // the body is what actually runs on the other targets. The real compiler
+  // requires the body to typecheck even when an external covers this target.
+  assert helpers.error_module_typecheck(
+      "@external(erlang, \"one\", \"two\")
     fn x() -> Int {
       \"not an int\"
     }
     pub fn main() { x() }",
-  )
+    )
+    == error.InvalidReturnType("x", "String", "Int")
 }
 
 pub fn private_other_target_external_call_is_fine_test() {

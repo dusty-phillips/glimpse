@@ -229,12 +229,10 @@ pub fn module(
   use #(environment, _) <- result.try(typecheck_function_bodies(
     types.set_defer_unknown(environment, True),
     glimpse_module.module.functions,
-    target,
   ))
   use #(environment, functions) <- result.try(typecheck_function_bodies(
     types.set_defer_unknown(environment, False),
     glimpse_module.module.functions,
-    target,
   ))
 
   let new_glance_module =
@@ -343,7 +341,6 @@ fn find_private_in_types(
 fn typecheck_function_bodies(
   environment: Environment,
   definitions: List(glance.Definition(glance.Function)),
-  target: target.Target,
 ) -> error.TypeCheckResult(
   #(Environment, List(glance.Definition(glance.Function))),
 ) {
@@ -351,10 +348,7 @@ fn typecheck_function_bodies(
     definitions
     |> list.try_fold(types.EnvState(environment, []), fn(env_state, definition) {
       use function_env_state <- result.try(
-        case
-          target.has_external_for_target(target, definition)
-          || definition.definition.body == []
-        {
+        case definition.definition.body == [] {
           True ->
             Ok(types.EnvState(env_state.environment, definition.definition))
           False -> function(env_state.environment, definition.definition)
