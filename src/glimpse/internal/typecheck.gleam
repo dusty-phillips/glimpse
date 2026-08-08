@@ -1264,19 +1264,10 @@ fn field_access_type(
             types.to_string(environment, container_type),
             label,
           ))
-        [#(parameters, labels, return_type)] ->
-          variant_field_type(
-            environment,
-            store,
-            container_type,
-            parameters,
-            labels,
-            return_type,
-            label,
-          )
         _ ->
-          // Multiple variants: the label must be present on every variant and
-          // at the same position, or no single accessor exists.
+          // The label must be present on every variant and at the same
+          // position, or no single accessor exists. A single-constructor
+          // list passes these checks trivially.
           case
             list.all(constructors, fn(entry) {
               let #(_, entry_labels, _) = entry
@@ -1648,10 +1639,7 @@ fn custom_type_variant_count(
   module_name: String,
   name: String,
 ) -> Int {
-  let source = case module_name {
-    "." -> environment.current_module
-    other -> types.module_access_name(environment, other)
-  }
+  let source = types.module_access_name(environment, module_name)
   let definitions = case source == environment.current_module {
     True -> environment.scope.definitions
     False ->
@@ -1670,15 +1658,23 @@ fn custom_type_variant_count(
   }
   definitions
   |> dict.values
-  |> list.fold(set.new(), fn(seen, type_) {
+  |> list.fold_until(set.new(), fn(seen, type_) {
     let candidate = case type_ {
       types.CallableType(_, _, return_) -> our(return_)
       types.GenericCallableType(_, _, return_, _) -> our(return_)
       _ -> option.None
     }
     case candidate {
-      option.Some(index) -> set.insert(seen, index)
-      option.None -> seen
+      // The caller only distinguishes one variant from several, so stop
+      // scanning once a second distinct variant is found.
+      option.Some(index) -> {
+        let next = set.insert(seen, index)
+        case set.size(next) >= 2 {
+          True -> list.Stop(next)
+          False -> list.Continue(next)
+        }
+      }
+      option.None -> list.Continue(seen)
     }
   })
   |> set.size

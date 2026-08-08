@@ -78,5 +78,8 @@ pub fn error_field_access_on_nonexistent_field_test() {
     }",
     )
 
-  assert actual == error.InvalidFieldAccess("main_module.Person", "bad")
+  assert actual
+    == error.MissingField(
+      "main_module.Person does not have field bad on every variant",
+    )
 }
