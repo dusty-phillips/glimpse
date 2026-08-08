@@ -632,8 +632,8 @@ fn typecheck_with_expected(
 
     glance.Block(_, statements) -> block(environment, store, statements)
 
-    glance.Panic(_, _) -> Ok(#(store, types.GenericTypeVariable("todo")))
-    glance.Todo(_, _) -> Ok(#(store, types.GenericTypeVariable("todo")))
+    glance.Panic(_, _) -> Ok(#(store, types.TodoType))
+    glance.Todo(_, _) -> Ok(#(store, types.TodoType))
 
     glance.Tuple(_, elements) -> {
       use #(store, types_rev) <- result.try(
@@ -1909,12 +1909,11 @@ fn case_expression(
                 [first_body_type, ..remaining_types]
                 |> list.find(fn(type_) {
                   case type_ {
-                    types.GenericTypeVariable("todo") | types.InferredReturn ->
-                      False
+                    types.TodoType | types.InferredReturn -> False
                     _ -> True
                   }
                 })
-                |> result.unwrap(types.GenericTypeVariable("todo"))
+                |> result.unwrap(types.TodoType)
               #(store, case_type)
             })
         }

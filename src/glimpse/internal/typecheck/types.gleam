@@ -83,6 +83,10 @@ pub type Type {
   /// only exist transiently during call checking and are resolved or generalised
   /// back to `GenericTypeVariable` before being stored.
   Var(id: Int)
+  /// The wildcard type of `todo` and `panic` expressions, and of functions
+  /// whose return type is not yet known. Unifies with any type, so it can be
+  /// used in any context.
+  TodoType
   InferredReturn
 }
 
@@ -187,6 +191,7 @@ pub fn nested_var_has_source(
     | BoolType
     | BitArrayType
     | NilType
+    | TodoType
     | InferredReturn -> False
     CustomType(_, _, parameters, _) ->
       list.any(parameters, var_has_source(store, _, source))
@@ -418,7 +423,7 @@ fn unify_rigid(
                 ),
               )
           }
-        GenericTypeVariable("todo") -> Ok(store)
+        TodoType -> Ok(store)
         InferredReturn -> Ok(store)
         GenericTypeVariable(other_name) ->
           case other_name == name {
@@ -571,7 +576,7 @@ fn do_instantiate(
   type_: Type,
 ) -> #(TypeStore, dict.Dict(String, Type), Type) {
   case type_ {
-    GenericTypeVariable(name) if name == "todo" -> #(store, substitutions, type_)
+    TodoType -> #(store, substitutions, TodoType)
     GenericTypeVariable(name) -> {
       case dict.get(substitutions, name) {
         Ok(type_) -> #(store, substitutions, type_)
@@ -769,8 +774,8 @@ pub fn unify(
       unify_callable_types(store, environment, left, right)
     GenericCallableType(..), GenericCallableType(..) ->
       unify_callable_types(store, environment, left, right)
-    GenericTypeVariable("todo"), _ -> Ok(store)
-    _, GenericTypeVariable("todo") -> Ok(store)
+    TodoType, _ -> Ok(store)
+    _, TodoType -> Ok(store)
     InferredReturn, _ -> Ok(store)
     _, InferredReturn -> Ok(store)
     GenericTypeVariable(ln), GenericTypeVariable(rn) -> {
@@ -1098,6 +1103,7 @@ pub fn raw_show(type_: Type) -> String {
     NamespaceType(_, _) -> "Namespace"
     TypeAlias(_, aliased) -> "Alias(" <> raw_show(aliased) <> ")"
     GenericTypeVariable(n) -> "G:" <> n
+    TodoType -> "Todo"
     InferredReturn -> "InferredReturn"
   }
 }
@@ -1883,6 +1889,7 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
     TypeAlias(_, aliased) -> to_string(environment, aliased)
     GenericTypeVariable(name) -> name
     Var(id) -> "var_" <> int.to_string(id)
+    TodoType -> "todo"
     InferredReturn -> ""
   }
 }
@@ -1962,6 +1969,7 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
     TypeAlias(_, aliased) -> to_glance(environment, aliased)
     GenericTypeVariable(name) -> glance.VariableType(unknown_span, name)
     Var(id) -> glance.VariableType(unknown_span, "var_" <> int.to_string(id))
+    TodoType -> glance.VariableType(unknown_span, "todo")
     InferredReturn ->
       panic as "InferredReturn should be replaced with actual type before conversion to glance"
   }

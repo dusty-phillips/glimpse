@@ -211,6 +211,7 @@ fn mode_of_uncached(
     | types.BitArrayType
     | types.Var(..)
     | types.GenericTypeVariable(..)
+    | types.TodoType
     | types.InferredReturn
     | types.CallableType(..)
     | types.GenericCallableType(..)

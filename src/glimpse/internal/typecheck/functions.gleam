@@ -94,7 +94,7 @@ pub fn update_function_signature(
       // during the signature phase. It is replaced with the real return type once
       // the body is checked.
       case has_generic_types(param_state.reversed_by_position) {
-        True -> Ok(types.GenericTypeVariable("todo"))
+        True -> Ok(types.TodoType)
         False -> Ok(types.InferredReturn)
       }
     }
