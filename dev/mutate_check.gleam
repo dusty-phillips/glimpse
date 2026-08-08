@@ -306,6 +306,13 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "arg ",
     "arity ",
     "negate ",
+    "letpat ",
+    "sigswap ",
+    "pipe ",
+    "casepat ",
+    "typeparam ",
+    "bitreorder ",
+    "importfn ",
     "import ",
   ]
   list.map(kinds, fn(kind) {
@@ -796,6 +803,90 @@ fn is_simple_arg_char(ch: String) -> Bool {
   )
 }
 
+/// Kind `letpat`: swap the two elements of a tuple destructure pattern
+/// (`let #(a, b) = ...`), so the pattern binds each name to the other's type.
+/// If the tuple's elements differ in type, later uses of the names diverge from
+/// what the source intends and the real compiler rejects.
+fn letpat_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_tuple_pattern(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        case first == second {
+          True -> []
+          False -> [#("letpat swap", source_of(lines, idx, swapped))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a `#(a, b)` pattern inside a `let` binding on `line`. Returns the byte
+/// offsets of the two pattern names.
+fn find_tuple_pattern(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  case string.contains(line, "=") && string.contains(line, "#(") {
+    False -> option.None
+    True -> find_tuple_pattern_from(line, 0, option.None)
+  }
+}
+
+fn find_tuple_pattern_from(
+  line: String,
+  index: Int,
+  acc: option.Option(#(Int, Int, Int, Int)),
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case index >= string.length(line) {
+    True -> acc
+    False -> {
+      let ch = string.slice(line, at_index: index, length: 1)
+      case ch {
+        "#" -> {
+          case read_call_args(line, index + 1) {
+            option.Some(#(
+              _call_start,
+              first_start,
+              first_end,
+              second_start,
+              second_end,
+            )) ->
+              option.Some(#(first_start, first_end, second_start, second_end))
+            option.None -> find_tuple_pattern_from(line, index + 1, acc)
+          }
+        }
+        _ -> find_tuple_pattern_from(line, index + 1, acc)
+      }
+    }
+  }
+}
+
 /// Scan `line` for a call `name(tok, tok)` where both arguments are runs of
 /// simple characters. Returns the byte offsets of the call and both arguments.
 fn find_two_arg_call(
@@ -927,6 +1018,627 @@ fn import_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `sigswap`: swap the type annotations of two adjacent parameters in a
+/// function signature, e.g. `fn go(a: Int, b: String)` becomes
+/// `fn go(a: String, b: Int)`. The body still uses each parameter name as
+/// before, so any use that relied on the original type is now rejected.
+fn sigswap_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_param_annotations(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) -> {
+        let first_type =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second_type =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second_type
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first_type
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        case first_type == second_type {
+          True -> []
+          False -> [#("sigswap swap", source_of(lines, idx, swapped))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find two `name: Type` parameters on a signature line where both types are
+/// simple tokens (`Int`, `String`, `Bool`, `Float`, or `List(...)`). Returns
+/// the byte offsets of the two type tokens.
+fn find_param_annotations(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case string.contains(line, "(") && string.contains(line, ":") {
+    False -> option.None
+    True -> {
+      // Collect every `: Type` annotation's type-token offsets.
+      let annotations = collect_annotations(line, 0, [])
+      case annotations {
+        [first, second, ..] ->
+          option.Some(#(first.0, first.1, second.0, second.1))
+        _ -> option.None
+      }
+    }
+  }
+}
+
+fn collect_annotations(
+  line: String,
+  index: Int,
+  acc: List(#(Int, Int)),
+) -> List(#(Int, Int)) {
+  case index >= string.length(line) {
+    True -> list.reverse(acc)
+    False -> {
+      let ch = string.slice(line, at_index: index, length: 1)
+      case ch {
+        ":" -> {
+          case skip_spaces(line, index + 1) {
+            option.Some(type_start) -> {
+              let type_end = simple_token_end(line, type_start)
+              let type_token =
+                string.slice(
+                  line,
+                  at_index: type_start,
+                  length: type_end - type_start,
+                )
+              // Only primitive types: swapping `List(Int)` would truncate the
+              // token at the `(` and produce a malformed annotation.
+              case
+                list.contains(
+                  ["Int", "String", "Bool", "Float", "Nil"],
+                  type_token,
+                )
+              {
+                True ->
+                  collect_annotations(line, index + 1, [
+                    #(type_start, type_end),
+                    ..acc
+                  ])
+                False -> collect_annotations(line, index + 1, acc)
+              }
+            }
+            option.None -> collect_annotations(line, index + 1, acc)
+          }
+        }
+        _ -> collect_annotations(line, index + 1, acc)
+      }
+    }
+  }
+}
+
+/// Kind `casepat`: mutate multi-subject `case` expressions. Swapping the two
+/// subjects (`case a, b` -> `case b, a`) makes each subject match the wrong
+/// pattern; dropping the second subject breaks pattern-count alignment. Either
+/// way the real compiler rejects the clause.
+fn casepat_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_two_case_subjects(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        let dropped =
+          string.slice(line, at_index: 0, length: first_end)
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        case first == second {
+          True -> [#("casepat drop-subject", source_of(lines, idx, dropped))]
+          False -> [
+            #("casepat swap-subjects", source_of(lines, idx, swapped)),
+            #("casepat drop-subject", source_of(lines, idx, dropped)),
+          ]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find `case a, b {` on `line` where both subjects are simple tokens. Returns
+/// the byte offsets of the two subject tokens.
+fn find_two_case_subjects(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case string.starts_with(string.trim(line), "case ") {
+    False -> option.None
+    True -> {
+      // offset of "case " within the line
+      let case_offset =
+        string.length(line) - string.length(string.trim(line)) + 5
+      // first subject: first simple token after "case "
+      case first_simple_start(line, case_offset) {
+        option.None -> option.None
+        option.Some(first_start) -> {
+          let first_end = simple_token_end(line, first_start)
+          // expect ", " then second subject
+          case skip_spaces(line, first_end + 1) {
+            option.Some(second_start) -> {
+              let second_end = simple_token_end(line, second_start)
+              option.Some(#(first_start, first_end, second_start, second_end))
+            }
+            option.None -> option.None
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Kind `typeparam`: swap the two type parameters in a custom type definition
+/// (`type Foo(a, b)` -> `type Foo(b, a)`). Any use or annotation of `Foo(x, y)`
+/// that relied on the original parameter order now mismatches when the two
+/// parameter types differ.
+fn typeparam_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_type_params(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        case first == second {
+          True -> []
+          False -> [#("typeparam swap", source_of(lines, idx, swapped))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a `type Name(a, b)` (or `pub type Name(a, b)`) declaration with two
+/// single-letter type parameters. Returns the offsets of the two parameters.
+fn find_type_params(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  let trimmed = string.trim(line)
+  let is_type = string.starts_with(trimmed, "type ")
+  let is_pub_type = string.starts_with(trimmed, "pub type ")
+  case is_type || is_pub_type {
+    False -> option.None
+    True -> {
+      // skip the "type " or "pub type " prefix and the name, find the "("
+      let base_offset = string.length(line) - string.length(trimmed)
+      let prefix_len = case is_pub_type {
+        True -> 9
+        False -> 5
+      }
+      case find_first_paren_after(line, base_offset + prefix_len) {
+        option.Some(paren_index) -> read_two_params(line, paren_index)
+        option.None -> option.None
+      }
+    }
+  }
+}
+
+/// Read `a, b)` after a `(` where both are simple single-letter tokens.
+fn read_two_params(
+  line: String,
+  open_index: Int,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case first_simple_start(line, open_index + 1) {
+    option.None -> option.None
+    option.Some(first_start) -> {
+      let first_end = simple_token_end(line, first_start)
+      case first_end - first_start != 1 {
+        True -> option.None
+        False ->
+          case string.slice(line, at_index: first_end, length: 1) {
+            "," ->
+              case skip_spaces(line, first_end + 1) {
+                option.Some(second_start) -> {
+                  let second_end = simple_token_end(line, second_start)
+                  case second_end - second_start != 1 {
+                    True -> option.None
+                    False ->
+                      case string.slice(line, at_index: second_end, length: 1) {
+                        ")" ->
+                          option.Some(#(
+                            first_start,
+                            first_end,
+                            second_start,
+                            second_end,
+                          ))
+                        _ -> option.None
+                      }
+                  }
+                }
+                option.None -> option.None
+              }
+            _ -> option.None
+          }
+      }
+    }
+  }
+}
+
+/// Kind `bitreorder`: swap the two segments of a bit-string literal/pattern
+/// (`<<a, b>>` -> `<<b, a>>`). If the two segments carry different types
+/// (e.g. an Int and a String utf segment) the real compiler rejects the swap.
+fn bitreorder_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_two_segments(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        case first == second {
+          True -> []
+          False -> [#("bitreorder swap", source_of(lines, idx, swapped))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a `<<a, b>>` with exactly two comma-separated simple segments. Returns
+/// the offsets of the two segments.
+fn find_two_segments(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  case string.contains(line, "<<") && string.contains(line, ">>") {
+    False -> option.None
+    True -> {
+      case find_double_less(line, 0) {
+        option.None -> option.None
+        option.Some(open_index) ->
+          case find_segment_pair(line, open_index + 2) {
+            option.Some(offsets) -> option.Some(offsets)
+            option.None -> option.None
+          }
+      }
+    }
+  }
+}
+
+fn find_double_less(line: String, index: Int) -> option.Option(Int) {
+  case index + 1 >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 2) == "<<" {
+        True -> option.Some(index)
+        False -> find_double_less(line, index + 1)
+      }
+  }
+}
+
+/// Read `tok, tok >>` after a `<<` where both segments are runs of characters
+/// up to the separating `,` or the closing `>>` (a segment includes options
+/// like `a:8` or `x:8/utf8`).
+fn find_segment_pair(
+  line: String,
+  from: Int,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case first_simple_start(line, from) {
+    option.None -> option.None
+    option.Some(first_start) -> {
+      let first_end = segment_end(line, first_start)
+      case string.slice(line, at_index: first_end, length: 1) {
+        "," ->
+          case skip_spaces(line, first_end + 1) {
+            option.Some(second_start) -> {
+              let second_end = segment_end(line, second_start)
+              case string.slice(line, at_index: second_end, length: 2) == ">>" {
+                True ->
+                  option.Some(#(
+                    first_start,
+                    first_end,
+                    second_start,
+                    second_end,
+                  ))
+                False -> option.None
+              }
+            }
+            option.None -> option.None
+          }
+        _ -> option.None
+      }
+    }
+  }
+}
+
+/// The end of a bit-string segment: characters up to `,` or `>`.
+fn segment_end(line: String, from: Int) -> Int {
+  case from >= string.length(line) {
+    True -> from
+    False -> {
+      let ch = string.slice(line, at_index: from, length: 1)
+      case ch == "," || ch == ">" {
+        True -> from
+        False -> segment_end(line, from + 1)
+      }
+    }
+  }
+}
+
+fn pipe_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_pipe_swap(line) {
+      option.None -> []
+      option.Some(#(pipe_start, call_start, arg_start, arg_end)) -> {
+        // the piped value is the token ending just before `|>`
+        case find_token_before(line, pipe_start) {
+          option.None -> []
+          option.Some(#(val_start, val_end)) -> {
+            let piped =
+              string.slice(
+                line,
+                at_index: val_start,
+                length: val_end - val_start,
+              )
+            let arg =
+              string.slice(
+                line,
+                at_index: arg_start,
+                length: arg_end - arg_start,
+              )
+            let swapped =
+              string.slice(line, at_index: 0, length: val_start)
+              <> arg
+              <> string.slice(
+                line,
+                at_index: val_end,
+                length: arg_start - val_end,
+              )
+              <> piped
+              <> string.slice(
+                line,
+                at_index: arg_end,
+                length: string.length(line) - arg_end,
+              )
+            case piped == arg {
+              True -> []
+              False -> [#("pipe swap", source_of(lines, idx, swapped))]
+            }
+          }
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find `x |> f(a)` on `line`: the `|>` pipe, the call after it, and the call's
+/// single simple argument. Returns their byte offsets.
+fn find_pipe_swap(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  case string.contains(line, "|>") {
+    False -> option.None
+    True ->
+      find_pipe_index(line, 0)
+      |> option.then(fn(pipe_index) {
+        case find_first_paren_after(line, pipe_index + 2) {
+          option.Some(call_open) ->
+            case read_one_arg_call(line, call_open) {
+              option.Some(#(_call_start, arg_start, arg_end)) ->
+                option.Some(#(pipe_index, call_open, arg_start, arg_end))
+              option.None -> option.None
+            }
+          option.None -> option.None
+        }
+      })
+  }
+}
+
+/// Given `line` and the index of a `(`, read `tok)`. Returns
+/// `#(call_start, arg_start, arg_end)` if the paren contains exactly one
+/// simple token followed by `)`.
+fn read_one_arg_call(
+  line: String,
+  open_index: Int,
+) -> option.Option(#(Int, Int, Int)) {
+  case first_simple_start(line, open_index + 1) {
+    option.None -> option.None
+    option.Some(arg_start) -> {
+      let arg_end = simple_token_end(line, arg_start)
+      case string.slice(line, at_index: arg_end, length: 1) {
+        ")" -> option.Some(#(open_index, arg_start, arg_end))
+        _ -> option.None
+      }
+    }
+  }
+}
+
+fn find_pipe_index(line: String, index: Int) -> option.Option(Int) {
+  case index + 1 >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 2) == "|>" {
+        True -> option.Some(index)
+        False -> find_pipe_index(line, index + 1)
+      }
+  }
+}
+
+fn find_first_paren_after(line: String, from: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: from, length: 1) {
+        "(" -> option.Some(from)
+        _ -> find_first_paren_after(line, from + 1)
+      }
+  }
+}
+
+/// The byte offsets of the identifier or literal immediately before `index`,
+/// skipping any whitespace between it and `index`.
+fn find_token_before(line: String, index: Int) -> option.Option(#(Int, Int)) {
+  let end = skip_spaces_back(line, index)
+  case end <= 0 {
+    True -> option.None
+    False ->
+      case
+        is_simple_arg_char(string.slice(line, at_index: end - 1, length: 1))
+      {
+        True -> option.Some(#(token_start(line, end - 1), end))
+        False -> option.None
+      }
+  }
+}
+
+fn skip_spaces_back(line: String, index: Int) -> Int {
+  case index > 0 && string.slice(line, at_index: index - 1, length: 1) == " " {
+    True -> skip_spaces_back(line, index - 1)
+    False -> index
+  }
+}
+
+fn token_start(line: String, index: Int) -> Int {
+  case index <= 0 {
+    True -> 0
+    False ->
+      case
+        is_simple_arg_char(string.slice(line, at_index: index - 1, length: 1))
+      {
+        True -> token_start(line, index - 1)
+        False -> index
+      }
+  }
+}
+
+/// Kind `importfn`: rename an explicitly imported function or type
+/// (`import gleam/list.{append}`), so import item resolution must fail.
+fn importfn_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case string.starts_with(line, "import ") && string.contains(line, ".{") {
+      False -> []
+      True -> {
+        let items = import_items(line)
+        list.map(items, fn(item) {
+          let renamed = item <> "__zzz"
+          #(
+            "importfn " <> item,
+            string.replace(line, each: item, with: renamed),
+          )
+        })
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// The explicitly imported names after `.{` on an import line, e.g. `["append"]`
+/// from `import gleam/list.{append}` or `["List", "map"]` from
+/// `import gleam/list.{type List, map}`.
+fn import_items(line: String) -> List(String) {
+  case string.split_once(line, ".{") {
+    Error(_) -> []
+    Ok(#(_before, after)) -> {
+      let stripped = string.replace(after, each: "}", with: "")
+      stripped
+      |> string.split(",")
+      |> list.map(string.trim)
+      |> list.filter(fn(item) { item != "" })
+      |> list.map(fn(item) {
+        // `type List` -> `List`
+        case string.split_once(item, " ") {
+          Ok(#(_kw, name)) -> name
+          Error(_) -> item
+        }
+      })
+    }
+  }
+}
+
 /// The module path of an import (characters up to `.`, `{`, whitespace, or a
 /// paren), e.g. `gleam/io` from `gleam/io` or `gleam/list.{type List}`.
 fn import_path(rest: String) -> String {
@@ -957,6 +1669,13 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(arg_mutants(lines))
   |> list.append(arity_mutants(lines))
   |> list.append(negate_mutants(lines))
+  |> list.append(letpat_mutants(lines))
+  |> list.append(sigswap_mutants(lines))
+  |> list.append(pipe_mutants(lines))
+  |> list.append(casepat_mutants(lines))
+  |> list.append(typeparam_mutants(lines))
+  |> list.append(bitreorder_mutants(lines))
+  |> list.append(importfn_mutants(lines))
   |> list.append(import_mutants(lines))
 }
 
