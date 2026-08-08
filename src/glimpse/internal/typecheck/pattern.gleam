@@ -188,24 +188,40 @@ pub fn typecheck_pattern(
           {
             True -> Error(error.UnnecessarySpread)
             False -> {
-              // Resolve the constructor parameters but do not generalise them:
-              // any still-unbound inference variable must remain free so the
-              // argument patterns can constrain it (e.g. `Error(Nil)` binding
-              // the payload to `Nil`). Polymorphism of bound variables is
-              // handled by `bind_variable` at the binding boundary.
-              let resolved_parameters =
-                list.map(parameters, fn(parameter) {
-                  let #(_store, resolved) =
-                    types.resolve_keep_rigid(store, parameter)
-                  resolved
-                })
-              check_variant_arguments(
-                environment,
-                store,
-                arguments,
-                resolved_parameters,
-                position_labels,
-              )
+              // Without a spread the pattern must name every field; with one it
+              // may name fewer but never more than the constructor has.
+              case
+                !with_spread
+                && list.length(arguments) != list.length(parameters)
+                || with_spread
+                && list.length(arguments) > list.length(parameters)
+              {
+                True ->
+                  Error(error.InvalidPatternArity(
+                    list.length(parameters),
+                    list.length(arguments),
+                  ))
+                False -> {
+                  // Resolve the constructor parameters but do not generalise them:
+                  // any still-unbound inference variable must remain free so the
+                  // argument patterns can constrain it (e.g. `Error(Nil)` binding
+                  // the payload to `Nil`). Polymorphism of bound variables is
+                  // handled by `bind_variable` at the binding boundary.
+                  let resolved_parameters =
+                    list.map(parameters, fn(parameter) {
+                      let #(_store, resolved) =
+                        types.resolve_keep_rigid(store, parameter)
+                      resolved
+                    })
+                  check_variant_arguments(
+                    environment,
+                    store,
+                    arguments,
+                    resolved_parameters,
+                    position_labels,
+                  )
+                }
+              }
             }
           }
         }

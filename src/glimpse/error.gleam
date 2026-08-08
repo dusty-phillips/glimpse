@@ -92,6 +92,9 @@ pub type TypeCheckError {
   UnusedTypeParameter(name: String)
   /// Raised when a constructor pattern lists every field yet also uses `..`.
   UnnecessarySpread
+  /// Raised when a constructor pattern names the wrong number of fields, e.g.
+  /// `Some(x)` matched against a two-field constructor.
+  InvalidPatternArity(expected: Int, got: Int)
   /// Raised when a bit-string pattern assigns a variable twice, e.g.
   /// `<<a as b>>`.
   DoubleVariableAssignment
