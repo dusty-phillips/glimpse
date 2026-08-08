@@ -48,7 +48,9 @@ fn parse_extra_dir(argv: List(String)) -> option.Option(String) {
 /// package's own `src/` and `dev/`, returning the typecheck result. Prints
 /// nothing itself so callers (like the mutation harness) can run it in-process
 /// without noise.
-pub fn run_typecheck(extra_project: option.Option(String)) -> Result(Nil, String) {
+pub fn run_typecheck(
+  extra_project: option.Option(String),
+) -> Result(Nil, String) {
   use src_entries <- result.try(case extra_project {
     option.None -> scan_project_dir("src")
     option.Some(root) -> {
