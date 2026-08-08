@@ -309,6 +309,7 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "bitstring ",
     "literal ",
     "arg ",
+    "lblarg ",
     "arity ",
     "negate ",
     "letpat ",
@@ -1370,6 +1371,97 @@ fn find_use_arrow(line: String, index: Int) -> option.Option(Int) {
   }
 }
 
+/// Kind `lblarg`: swap the values of two labeled arguments in a call
+/// (`f(a: x, b: y)` -> `f(a: y, b: x)`). If the two values have different types
+/// the real compiler rejects. Complements the `arg` kind, which only matches
+/// unlabeled two-argument calls.
+fn lblarg_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_two_labeled_values(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        case first == second {
+          True -> []
+          False -> [#("lblarg swap", source_of(lines, idx, swapped))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find two labeled argument values in a call: `label: token, label: token`.
+/// Returns the offsets of the two value tokens.
+fn find_two_labeled_values(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case string.contains(line, ": ") && string.contains(line, ", ") {
+    False -> option.None
+    True -> {
+      // scan for `label: value, label: value`
+      case find_label_value(line, 0) {
+        option.None -> option.None
+        option.Some(#(first_start, first_end, next)) ->
+          case find_label_value(line, next) {
+            option.None -> option.None
+            option.Some(#(second_start, second_end, _next)) ->
+              option.Some(#(first_start, first_end, second_start, second_end))
+          }
+      }
+    }
+  }
+}
+
+/// Find `label: value` in `line` starting at `from`. Returns the offsets of the
+/// value token and the position after it (to continue scanning).
+fn find_label_value(
+  line: String,
+  from: Int,
+) -> option.Option(#(Int, Int, Int)) {
+  case find_substring_from(line, from, ":") {
+    option.None -> option.None
+    option.Some(colon) -> {
+      case skip_spaces(line, colon + 1) {
+        option.None -> option.None
+        option.Some(value_start) -> {
+          let value_end = simple_token_end(line, value_start)
+          case value_end == value_start {
+            True -> option.None
+            False -> option.Some(#(value_start, value_end, value_end))
+          }
+        }
+      }
+    }
+  }
+}
+
 /// Kind `guard`: swap the two operands of a guard comparison in a case clause
 /// (`x if a < b -> ...` becomes `x if b < a -> ...`). When the two operands
 /// have different types, the real compiler rejects the swapped guard.
@@ -2032,6 +2124,7 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(bitstring_mutants(lines))
   |> list.append(literal_mutants(lines))
   |> list.append(arg_mutants(lines))
+  |> list.append(lblarg_mutants(lines))
   |> list.append(arity_mutants(lines))
   |> list.append(negate_mutants(lines))
   |> list.append(letpat_mutants(lines))
