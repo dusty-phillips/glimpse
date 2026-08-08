@@ -272,7 +272,14 @@ pub fn typecheck_pattern(
             let refined_environment =
               types.Environment(
                 ..environment,
-                definitions: dict.insert(environment.definitions, name, refined),
+                scope: types.Scope(
+                  ..environment.scope,
+                  definitions: dict.insert(
+                    environment.scope.definitions,
+                    name,
+                    refined,
+                  ),
+                ),
               )
             Ok(#(store, refined_environment))
           })
@@ -494,7 +501,7 @@ fn lookup_constructor(
     option.None -> types.lookup_variable_type(environment, constructor)
     option.Some(module_name) -> {
       let definitions = fn(alias: String) {
-        case dict.get(environment.module_imports, alias) {
+        case dict.get(environment.imports.module_imports, alias) {
           Ok(types.NamespaceType(definitions, _custom_types)) ->
             option.Some(definitions)
           _ -> option.None

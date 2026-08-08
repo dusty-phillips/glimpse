@@ -1171,7 +1171,7 @@ fn module_field_type(
 ) -> error.TypeCheckResult(#(TypeStore, types.Type)) {
   case container {
     glance.Variable(_, name) ->
-      case dict.get(environment.module_imports, name) {
+      case dict.get(environment.imports.module_imports, name) {
         Ok(types.NamespaceType(nested_defs, _)) ->
           module_value(store, nested_defs, label)
         _ -> Error(error.InvalidName(name))
@@ -1201,11 +1201,11 @@ fn module_definitions(
   environment: Environment,
   module: String,
 ) -> error.TypeCheckResult(dict.Dict(String, types.Type)) {
-  case dict.get(environment.module_environments, module) {
+  case dict.get(environment.imports.module_environments, module) {
     Ok(other_env) ->
       Ok(
-        dict.filter(other_env.definitions, fn(name, _type_) {
-          set.contains(other_env.public_definitions, name)
+        dict.filter(other_env.scope.definitions, fn(name, _type_) {
+          set.contains(other_env.scope.public_definitions, name)
         }),
       )
     Error(_) -> Error(error.InvalidFieldAccess("", module))
@@ -1224,11 +1224,11 @@ fn field_access_type(
   case container_type {
     types.CustomType(module, name, _parameters, inferred_variant) -> {
       let definitions_result = case module == environment.current_module {
-        True -> Ok(environment.definitions)
+        True -> Ok(environment.scope.definitions)
         False -> {
-          case dict.get(environment.import_names, module) {
+          case dict.get(environment.imports.import_names, module) {
             Ok(namespace) ->
-              case dict.get(environment.module_imports, namespace) {
+              case dict.get(environment.imports.module_imports, namespace) {
                 Ok(types.NamespaceType(nested_defs, _)) -> Ok(nested_defs)
                 _ -> module_definitions(environment, module)
               }
@@ -1413,10 +1413,10 @@ fn record_update(
 
   let constructor_lookup = case module {
     option.None ->
-      dict.get(environment.definitions, constructor)
+      dict.get(environment.scope.definitions, constructor)
       |> result.replace_error(error.InvalidName(constructor))
     option.Some(module_name) -> {
-      case dict.get(environment.module_imports, module_name) {
+      case dict.get(environment.imports.module_imports, module_name) {
         Ok(types.NamespaceType(nested_defs, _)) ->
           dict.get(nested_defs, constructor)
           |> result.replace_error(error.InvalidName(constructor))
@@ -1676,11 +1676,11 @@ fn custom_type_variant_count(
     other -> types.module_access_name(environment, other)
   }
   let definitions = case source == environment.current_module {
-    True -> environment.definitions
+    True -> environment.scope.definitions
     False ->
-      case dict.get(environment.module_imports, source) {
+      case dict.get(environment.imports.module_imports, source) {
         Ok(types.NamespaceType(defs, _custom_types)) -> defs
-        _ -> environment.definitions
+        _ -> environment.scope.definitions
       }
   }
   let our = fn(type_) -> option.Option(Int) {
@@ -2240,11 +2240,11 @@ fn clause_body_type(
     list.try_fold(alternatives, store, fn(store, alternative) {
       let #(alternative_env, _refinements) = alternative
       dict.fold(
-        alternative_env.definitions,
+        alternative_env.scope.definitions,
         Ok(store),
         fn(result, name, alternative_type) {
           use store <- result.try(result)
-          case dict.get(pattern_env.definitions, name) {
+          case dict.get(pattern_env.scope.definitions, name) {
             Ok(body_type) ->
               types.unify(store, pattern_env, alternative_type, body_type)
             Error(_) -> Ok(store)
@@ -2373,7 +2373,7 @@ fn apply_variant_refinement(
   name: String,
   variant_index: Int,
 ) -> #(TypeStore, Environment) {
-  case dict.get(environment.definitions, name) {
+  case dict.get(environment.scope.definitions, name) {
     Ok(type_) -> {
       // The binding may still be an unlinked variable that only resolves to
       // the concrete custom type through the store (e.g. a case subject bound
@@ -2388,7 +2388,14 @@ fn apply_variant_refinement(
         store,
         Environment(
           ..environment,
-          definitions: dict.insert(environment.definitions, name, refined),
+          scope: types.Scope(
+            ..environment.scope,
+            definitions: dict.insert(
+              environment.scope.definitions,
+              name,
+              refined,
+            ),
+          ),
         ),
       )
     }

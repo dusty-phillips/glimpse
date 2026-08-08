@@ -596,7 +596,7 @@ fn signature_parameter_type(
     types.GenericTypeVariable(
       "t_" <> function_name <> "_" <> int.to_string(index),
     )
-  case dict.get(environment.definitions, function_name) {
+  case dict.get(environment.scope.definitions, function_name) {
     Ok(types.GenericCallableType(parameters, _, _, _)) ->
       parameter_at_index(parameters, index, fallback)
     Ok(types.CallableType(parameters, _, _)) ->

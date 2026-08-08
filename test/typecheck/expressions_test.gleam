@@ -473,7 +473,7 @@ pub fn zero_arg_variant_constructor_test() {
     helpers.ok_module_typecheck(
       "pub type Foo { Bar } pub fn main() -> Foo { Bar }",
     )
-  assert dict.get(env.definitions, "main")
+  assert dict.get(env.scope.definitions, "main")
     == Ok(types.CallableType(
       [],
       dict.new(),

@@ -10,22 +10,22 @@ import typecheck/helpers
 pub fn pub_constant_registers_int_test() {
   let #(_module, env) = helpers.ok_module_typecheck("pub const answer = 42")
 
-  assert dict.get(env.definitions, "answer") == Ok(types.IntType)
-  assert set.contains(env.public_definitions, "answer")
+  assert dict.get(env.scope.definitions, "answer") == Ok(types.IntType)
+  assert set.contains(env.scope.public_definitions, "answer")
 }
 
 pub fn private_constant_in_definitions_not_public_test() {
   let #(_module, env) = helpers.ok_module_typecheck("const secret = \"hello\"")
 
-  assert dict.get(env.definitions, "secret") == Ok(types.StringType)
-  assert set.contains(env.public_definitions, "secret") == False
+  assert dict.get(env.scope.definitions, "secret") == Ok(types.StringType)
+  assert set.contains(env.scope.public_definitions, "secret") == False
 }
 
 pub fn annotated_constant_matching_annotation_test() {
   let #(_module, env) = helpers.ok_module_typecheck("pub const x: Int = 5")
 
-  assert dict.get(env.definitions, "x") == Ok(types.IntType)
-  assert set.contains(env.public_definitions, "x")
+  assert dict.get(env.scope.definitions, "x") == Ok(types.IntType)
+  assert set.contains(env.scope.public_definitions, "x")
 }
 
 pub fn annotated_constant_mismatch_error_test() {
@@ -53,7 +53,7 @@ pub fn alias_used_in_annotation_test() {
     == Ok(types.TypeAlias([], types.IntType))
   assert set.contains(env.public_custom_types, "Temperature")
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
 
@@ -78,12 +78,12 @@ pub fn opaque_type_hides_constructor_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("pub opaque type Secret { Secret(x: Int) }")
 
-  assert dict.has_key(env.definitions, "Secret")
-  assert set.contains(env.public_definitions, "Secret") == False
+  assert dict.has_key(env.scope.definitions, "Secret")
+  assert set.contains(env.scope.public_definitions, "Secret") == False
 
   assert set.contains(env.public_custom_types, "Secret")
 
-  assert dict.get(env.definitions, "Secret")
+  assert dict.get(env.scope.definitions, "Secret")
     == Ok(types.CallableType(
       [types.IntType],
       dict.from_list([#("x", 0)]),
@@ -95,7 +95,7 @@ pub fn public_type_constructor_is_public_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("pub type Public { Public(x: Int) }")
 
-  assert set.contains(env.public_definitions, "Public")
+  assert set.contains(env.scope.public_definitions, "Public")
 }
 
 pub fn opaque_constructor_usable_in_same_module_test() {
@@ -105,8 +105,8 @@ pub fn opaque_constructor_usable_in_same_module_test() {
     fn make() -> Secret { Secret(1) }",
     )
 
-  assert dict.has_key(env.definitions, "Secret")
-  assert dict.get(env.definitions, "make")
+  assert dict.has_key(env.scope.definitions, "Secret")
+  assert dict.get(env.scope.definitions, "make")
     == Ok(types.CallableType(
       [],
       dict.new(),
@@ -118,7 +118,7 @@ pub fn generic_function_stored_as_generic_callable_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("fn identity(x: a) -> a { x }")
 
-  let assert Ok(identity_type) = dict.get(env.definitions, "identity")
+  let assert Ok(identity_type) = dict.get(env.scope.definitions, "identity")
   let assert types.GenericCallableType(parameters, labels, return, _original) =
     identity_type
 
@@ -134,7 +134,7 @@ pub fn generic_function_called_with_int_test() {
     fn foo() -> Int { identity(1) }",
     )
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
 
@@ -145,7 +145,7 @@ pub fn generic_function_called_with_string_test() {
     fn foo() -> String { identity(\"hi\") }",
     )
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType([], dict.new(), types.StringType))
 }
 
@@ -156,7 +156,7 @@ pub fn generic_swap_instantiation_test() {
     fn foo() -> #(String, Int) { swap(1, \"s\") }",
     )
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType(
       [],
       dict.new(),
@@ -180,7 +180,7 @@ pub fn generic_list_parameter_test() {
     fn foo() -> List(Int) { head([1, 2, 3]) }",
     )
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType(
       [],
       dict.new(),
@@ -191,5 +191,5 @@ pub fn generic_list_parameter_test() {
 pub fn todo_unifies_with_generic_return_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("fn head(xs: List(a)) -> a { todo }")
-  assert dict.has_key(env.definitions, "head")
+  assert dict.has_key(env.scope.definitions, "head")
 }

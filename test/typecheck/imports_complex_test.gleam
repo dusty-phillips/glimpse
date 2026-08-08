@@ -18,7 +18,7 @@ pub fn unqualified_value_import_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "bar")
+  assert dict.get(main_env.scope.definitions, "bar")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
 
@@ -36,7 +36,7 @@ pub fn unqualified_value_import_usable_in_body_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "main")
+  assert dict.get(main_env.scope.definitions, "main")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
 
@@ -51,7 +51,7 @@ pub fn imported_value_resolves_to_full_callable_type_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "map")
+  assert dict.get(main_env.scope.definitions, "map")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -70,7 +70,7 @@ pub fn aliased_module_import_field_access_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "main")
+  assert dict.get(main_env.scope.definitions, "main")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
 
@@ -102,7 +102,7 @@ pub fn unqualified_constructor_import_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "Foo")
+  assert dict.get(main_env.scope.definitions, "Foo")
     == Ok(types.CustomType("main_module", "Foo", [], option.Some(0)))
 }
 
@@ -116,8 +116,8 @@ pub fn renamed_unqualified_import_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.has_key(main_env.definitions, "Baz")
-  assert dict.has_key(main_env.definitions, "Foo") == False
+  assert dict.has_key(main_env.scope.definitions, "Baz")
+  assert dict.has_key(main_env.scope.definitions, "Foo") == False
 }
 
 pub fn combined_value_and_type_import_test() {
@@ -138,7 +138,7 @@ pub fn combined_value_and_type_import_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "f")
+  assert dict.get(main_env.scope.definitions, "f")
     == Ok(types.CallableType(
       [],
       dict.new(),

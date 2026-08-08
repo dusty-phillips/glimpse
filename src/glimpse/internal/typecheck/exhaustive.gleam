@@ -313,10 +313,10 @@ fn constructors_(
     other -> other
   }
   let definitions = case source == environment.current_module {
-    True -> environment.definitions
+    True -> environment.scope.definitions
     False -> {
       let from_namespace = fn(alias: String) {
-        dict.get(environment.module_imports, alias)
+        dict.get(environment.imports.module_imports, alias)
         |> result.map(fn(namespace) {
           case namespace {
             types.NamespaceType(nested_defs, _) -> nested_defs
@@ -331,7 +331,7 @@ fn constructors_(
           // for `import gleam/order`), so resolve the full module name carried
           // by the custom type through the import mapping.
           from_namespace(types.module_access_name(environment, source))
-          |> result.unwrap(environment.definitions)
+          |> result.unwrap(environment.scope.definitions)
       }
     }
   }

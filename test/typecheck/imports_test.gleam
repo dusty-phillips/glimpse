@@ -18,8 +18,9 @@ pub fn import_adds_function_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.size(main_env.definitions) == 7
-  let assert Ok(foo_namespace) = dict.get(main_env.module_imports, "foo")
+  assert dict.size(main_env.scope.definitions) == 7
+  let assert Ok(foo_namespace) =
+    dict.get(main_env.imports.module_imports, "foo")
   assert foo_namespace
     == types.NamespaceType(
       dict.from_list([
@@ -28,8 +29,8 @@ pub fn import_adds_function_to_env_test() {
       dict.new(),
     )
 
-  assert dict.size(main_env.import_names) == 1
-  let assert Ok(_) = dict.get(main_env.import_names, "foo")
+  assert dict.size(main_env.imports.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.imports.import_names, "foo")
 }
 
 pub fn import_no_add_private_function_to_env_test() {
@@ -42,12 +43,13 @@ pub fn import_no_add_private_function_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.size(main_env.definitions) == 7
-  let assert Ok(foo_namespace) = dict.get(main_env.module_imports, "foo")
+  assert dict.size(main_env.scope.definitions) == 7
+  let assert Ok(foo_namespace) =
+    dict.get(main_env.imports.module_imports, "foo")
   assert foo_namespace == types.NamespaceType(dict.new(), dict.new())
 
-  assert dict.size(main_env.import_names) == 1
-  let assert Ok(_) = dict.get(main_env.import_names, "foo")
+  assert dict.size(main_env.imports.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.imports.import_names, "foo")
 }
 
 pub fn import_adds_variant_to_env_test() {
@@ -60,8 +62,9 @@ pub fn import_adds_variant_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.size(main_env.definitions) == 7
-  let assert Ok(foo_namespace) = dict.get(main_env.module_imports, "foo")
+  assert dict.size(main_env.scope.definitions) == 7
+  let assert Ok(foo_namespace) =
+    dict.get(main_env.imports.module_imports, "foo")
   assert foo_namespace
     == types.NamespaceType(
       dict.from_list([
@@ -72,8 +75,8 @@ pub fn import_adds_variant_to_env_test() {
       ]),
     )
 
-  assert dict.size(main_env.import_names) == 1
-  let assert Ok(_) = dict.get(main_env.import_names, "foo")
+  assert dict.size(main_env.imports.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.imports.import_names, "foo")
 }
 
 pub fn import_no_add_private_variant_to_env_test() {
@@ -86,12 +89,13 @@ pub fn import_no_add_private_variant_to_env_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.size(main_env.definitions) == 7
-  let assert Ok(foo_namespace) = dict.get(main_env.module_imports, "foo")
+  assert dict.size(main_env.scope.definitions) == 7
+  let assert Ok(foo_namespace) =
+    dict.get(main_env.imports.module_imports, "foo")
   assert foo_namespace == types.NamespaceType(dict.from_list([]), dict.new())
 
-  assert dict.size(main_env.import_names) == 1
-  let assert Ok(_) = dict.get(main_env.import_names, "foo")
+  assert dict.size(main_env.imports.import_names) == 1
+  let assert Ok(_) = dict.get(main_env.imports.import_names, "foo")
 }
 
 pub fn import_call_function_field_access_test() {
@@ -113,8 +117,9 @@ pub fn import_call_function_field_access_test() {
       target.Erlang,
     )
 
-  assert dict.size(main_env.definitions) == 8
-  let assert Ok(foo_namespace) = dict.get(main_env.module_imports, "foo")
+  assert dict.size(main_env.scope.definitions) == 8
+  let assert Ok(foo_namespace) =
+    dict.get(main_env.imports.module_imports, "foo")
   assert foo_namespace
     == types.NamespaceType(
       dict.from_list([
@@ -123,7 +128,7 @@ pub fn import_call_function_field_access_test() {
       dict.new(),
     )
 
-  assert dict.size(main_env.import_names) == 1
+  assert dict.size(main_env.imports.import_names) == 1
 }
 
 pub fn variant_call_function_field_access_test() {
@@ -145,8 +150,9 @@ pub fn variant_call_function_field_access_test() {
       target.Erlang,
     )
 
-  assert dict.size(main_env.definitions) == 8
-  let assert Ok(foo_namespace) = dict.get(main_env.module_imports, "foo")
+  assert dict.size(main_env.scope.definitions) == 8
+  let assert Ok(foo_namespace) =
+    dict.get(main_env.imports.module_imports, "foo")
   assert foo_namespace
     == types.NamespaceType(
       dict.from_list([
@@ -157,5 +163,5 @@ pub fn variant_call_function_field_access_test() {
       ]),
     )
 
-  assert dict.size(main_env.import_names) == 1
+  assert dict.size(main_env.imports.import_names) == 1
 }

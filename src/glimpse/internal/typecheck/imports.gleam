@@ -49,7 +49,7 @@ pub fn fold_import_from_env(
             use _ <- result.try(
               case
                 add_namespace
-                && dict.has_key(environment.module_imports, namespace)
+                && dict.has_key(environment.imports.module_imports, namespace)
               {
                 True -> Error(error.DuplicateImport(namespace))
                 False -> Ok(Nil)
@@ -68,9 +68,9 @@ pub fn fold_import_from_env(
 
             let namespace_type =
               types.NamespaceType(
-                module_env.definitions
+                module_env.scope.definitions
                   |> dict.filter(fn(key, _) {
-                    set.contains(module_env.public_definitions, key)
+                    set.contains(module_env.scope.public_definitions, key)
                   }),
                 module_env.custom_types
                   |> dict.filter(fn(key, _) {
@@ -116,11 +116,11 @@ fn fold_values_into_env(
     environment,
     fn(environment, unqualified_import) {
       let glance.UnqualifiedImport(name, import_alias) = unqualified_import
-      case set.contains(module_env.public_definitions, name) {
+      case set.contains(module_env.scope.public_definitions, name) {
         False -> Error(error.InvalidName(name))
         True -> {
           let scope_name = option.unwrap(import_alias, name)
-          case dict.get(module_env.definitions, name) {
+          case dict.get(module_env.scope.definitions, name) {
             Error(_) -> Error(error.InvalidName(name))
             Ok(type_) ->
               Ok(types.add_or_update_def_in_env(environment, scope_name, type_))

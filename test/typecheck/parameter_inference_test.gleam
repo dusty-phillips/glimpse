@@ -10,7 +10,7 @@ const unknown_span = glance.Span(-1, -1)
 pub fn private_function_unannotated_param_test() {
   let #(module, env) = helpers.ok_module_typecheck("fn double(x) { x * 2 }")
 
-  assert dict.get(env.definitions, "double")
+  assert dict.get(env.scope.definitions, "double")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 
   let assert [double_def] = module.module.functions
@@ -29,7 +29,7 @@ pub fn private_function_unannotated_param_test() {
 pub fn private_function_multiple_unannotated_params_test() {
   let #(module, env) = helpers.ok_module_typecheck("fn add(x, y) { x + y }")
 
-  assert dict.get(env.definitions, "add")
+  assert dict.get(env.scope.definitions, "add")
     == Ok(types.CallableType(
       [types.IntType, types.IntType],
       dict.new(),
@@ -58,7 +58,7 @@ pub fn private_function_mixed_annotated_unannotated_test() {
   let #(module, env) =
     helpers.ok_module_typecheck("fn foo(x: Int, y) { x + y }")
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType(
       [types.IntType, types.IntType],
       dict.new(),
@@ -87,7 +87,7 @@ pub fn private_function_generic_inference_test() {
   let #(module, env) = helpers.ok_module_typecheck("fn id(x) { x }")
 
   // Check the type signature in the environment
-  let id_type = dict.get(env.definitions, "id")
+  let id_type = dict.get(env.scope.definitions, "id")
   let assert Ok(apply_type) = id_type
   let assert types.GenericCallableType(_, _, _, _) = apply_type
 
@@ -116,7 +116,7 @@ pub fn private_function_generic_inference_test() {
 pub fn private_function_generic_multiple_params_test() {
   let #(module, env) = helpers.ok_module_typecheck("fn pair(x, y) { #(x, y) }")
 
-  let pair_type = dict.get(env.definitions, "pair")
+  let pair_type = dict.get(env.scope.definitions, "pair")
   let assert Ok(types.GenericCallableType(parameters, labels, return_, _)) =
     pair_type
   assert parameters
@@ -161,7 +161,7 @@ pub fn private_function_generic_multiple_params_test() {
 pub fn private_function_discard_param_test() {
   let #(module, env) = helpers.ok_module_typecheck("fn foo(_) { 1 }")
 
-  let foo_type = dict.get(env.definitions, "foo")
+  let foo_type = dict.get(env.scope.definitions, "foo")
   let assert Ok(types.GenericCallableType(parameters, labels, return_, _)) =
     foo_type
   assert parameters == [types.GenericTypeVariable("t_foo_0")]
@@ -199,7 +199,7 @@ pub fn private_function_recursive_inference_test() {
       }",
     )
 
-  assert dict.get(env.definitions, "fact")
+  assert dict.get(env.scope.definitions, "fact")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 
   let assert [fact_def] = module.module.functions
@@ -219,7 +219,7 @@ pub fn private_function_unannotated_string_ops_test() {
   let #(module, env) =
     helpers.ok_module_typecheck("fn greet(name) { \"Hello, \" <> name }")
 
-  assert dict.get(env.definitions, "greet")
+  assert dict.get(env.scope.definitions, "greet")
     == Ok(types.CallableType([types.StringType], dict.new(), types.StringType))
 
   let assert [greet_def] = module.module.functions
@@ -236,7 +236,7 @@ pub fn private_function_unannotated_string_ops_test() {
 pub fn private_function_unannotated_bool_ops_test() {
   let #(_module, env) = helpers.ok_module_typecheck("fn not_it(b) { !b }")
 
-  assert dict.get(env.definitions, "not_it")
+  assert dict.get(env.scope.definitions, "not_it")
     == Ok(types.CallableType([types.BoolType], dict.new(), types.BoolType))
 }
 
@@ -244,7 +244,7 @@ pub fn private_function_unannotated_float_ops_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("fn double_it(f) { f *. 2.0 }")
 
-  assert dict.get(env.definitions, "double_it")
+  assert dict.get(env.scope.definitions, "double_it")
     == Ok(types.CallableType([types.FloatType], dict.new(), types.FloatType))
 }
 
@@ -252,7 +252,7 @@ pub fn public_function_unannotated_params_inferred_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("pub fn add(x, y) { x + y }")
 
-  assert dict.get(env.definitions, "add")
+  assert dict.get(env.scope.definitions, "add")
     == Ok(types.CallableType(
       [types.IntType, types.IntType],
       dict.new(),
@@ -264,7 +264,7 @@ pub fn public_function_mixed_unannotated_params_inferred_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck("pub fn foo(x: Int, y) { x + y }")
 
-  assert dict.get(env.definitions, "foo")
+  assert dict.get(env.scope.definitions, "foo")
     == Ok(types.CallableType(
       [types.IntType, types.IntType],
       dict.new(),
@@ -284,7 +284,7 @@ pub fn private_function_unannotated_then_used_polymorphically_test() {
     )
 
   // id should be generic
-  let id_type = dict.get(env.definitions, "id")
+  let id_type = dict.get(env.scope.definitions, "id")
   let assert Ok(apply_type) = id_type
   let assert types.GenericCallableType(
     [types.GenericTypeVariable("t_id_0")],
@@ -294,7 +294,7 @@ pub fn private_function_unannotated_then_used_polymorphically_test() {
   ) = apply_type
 
   // use_id should typecheck - its return type is String (last expression)
-  assert dict.get(env.definitions, "use_id")
+  assert dict.get(env.scope.definitions, "use_id")
     == Ok(types.CallableType([], dict.new(), types.StringType))
 }
 
@@ -308,7 +308,7 @@ pub fn private_function_calls_inferred_function_test() {
     )
 
   // add should be Int, Int -> Int
-  assert dict.get(env.definitions, "add")
+  assert dict.get(env.scope.definitions, "add")
     == Ok(types.CallableType(
       [types.IntType, types.IntType],
       dict.new(),
@@ -316,6 +316,6 @@ pub fn private_function_calls_inferred_function_test() {
     ))
 
   // use_add should be Int (result of add(1, 2))
-  assert dict.get(env.definitions, "use_add")
+  assert dict.get(env.scope.definitions, "use_add")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }

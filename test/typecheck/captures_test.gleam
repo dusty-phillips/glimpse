@@ -14,7 +14,7 @@ pub fn capture_partial_application_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -28,7 +28,7 @@ pub fn capture_second_argument_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -42,7 +42,7 @@ pub fn capture_more_arguments_after_hole_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType(
       [types.IntType, types.IntType],
       dict.new(),
@@ -60,7 +60,7 @@ pub fn capture_no_arguments_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -72,7 +72,7 @@ pub fn capture_as_callback_test() {
     fn g(x: Int) -> Int { apply(f(1, _), x) }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -87,7 +87,7 @@ pub fn capture_generic_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -101,7 +101,7 @@ pub fn capture_labeled_hole_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "g")
+  assert dict.get(env.scope.definitions, "g")
     == Ok(types.CallableType([], dict.new(), types.IntType))
 }
 
@@ -143,7 +143,7 @@ pub fn capture_lambda_in_pipe_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "build")
+  assert dict.get(env.scope.definitions, "build")
     == Ok(types.CallableType(
       [
         types.CustomType(

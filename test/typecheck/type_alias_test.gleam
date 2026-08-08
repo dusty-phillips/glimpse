@@ -13,7 +13,7 @@ pub fn parameterized_alias_in_annotation_test() {
     fn f(xs: Wrap(Int)) -> List(Int) { xs }",
     )
 
-  assert dict.get(env.definitions, "f")
+  assert dict.get(env.scope.definitions, "f")
     == Ok(types.CallableType(
       [types.CustomType("gleam", "List", [types.IntType], option.None)],
       dict.new(),
@@ -82,6 +82,6 @@ pub fn alias_in_function_param_test() {
     fn adult(age: Age) -> Bool { age >= 18 }",
     )
 
-  assert dict.get(env.definitions, "adult")
+  assert dict.get(env.scope.definitions, "adult")
     == Ok(types.CallableType([types.IntType], dict.new(), types.BoolType))
 }

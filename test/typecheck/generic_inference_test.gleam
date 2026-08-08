@@ -8,7 +8,7 @@ pub fn higher_order_apply_test() {
   let #(module, env) =
     helpers.ok_module_typecheck("fn apply(f: fn(a) -> b, x: a) -> b { f(x) }")
 
-  let assert Ok(apply_type) = dict.get(env.definitions, "apply")
+  let assert Ok(apply_type) = dict.get(env.scope.definitions, "apply")
   let assert types.GenericCallableType(parameters, labels, return, _) =
     apply_type
 
@@ -38,7 +38,7 @@ pub fn higher_order_apply_concrete_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "use_it")
+  assert dict.get(env.scope.definitions, "use_it")
     == Ok(types.CallableType([], dict.new(), types.StringType))
 
   let assert [use_it_def, _] = module.module.functions
@@ -57,7 +57,7 @@ pub fn recursive_generic_map_list_test() {
     }",
     )
 
-  let assert Ok(map_list_type) = dict.get(env.definitions, "map_list")
+  let assert Ok(map_list_type) = dict.get(env.scope.definitions, "map_list")
   let assert types.GenericCallableType(parameters, labels, return, _) =
     map_list_type
 
@@ -101,7 +101,7 @@ pub fn parametric_type_generic_test() {
     fn use_it(x: Int) -> Box(Int) { make(x) }",
     )
 
-  let assert Ok(make_type) = dict.get(env.definitions, "make")
+  let assert Ok(make_type) = dict.get(env.scope.definitions, "make")
   let assert types.GenericCallableType(parameters, labels, return, _) =
     make_type
 
@@ -115,7 +115,7 @@ pub fn parametric_type_generic_test() {
       option.None,
     )
 
-  assert dict.get(env.definitions, "use_it")
+  assert dict.get(env.scope.definitions, "use_it")
     == Ok(types.CallableType(
       [types.IntType],
       dict.new(),

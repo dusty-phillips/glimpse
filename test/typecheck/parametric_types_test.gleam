@@ -21,7 +21,7 @@ pub fn parametric_custom_type_def_test() {
       option.None,
     ))
 
-  assert dict.get(env.definitions, "Box")
+  assert dict.get(env.scope.definitions, "Box")
     == Ok(types.GenericCallableType(
       [types.GenericTypeVariable("a")],
       dict.from_list([#("value", 0)]),
@@ -87,7 +87,7 @@ pub fn parametric_pattern_resolves_field_type_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "unbox")
+  assert dict.get(env.scope.definitions, "unbox")
     == Ok(types.CallableType(
       [types.CustomType("main_module", "Box", [types.IntType], option.None)],
       dict.new(),
@@ -127,7 +127,7 @@ pub fn parametric_generic_identity_test() {
     }",
     )
 
-  assert dict.get(env.definitions, "use_it")
+  assert dict.get(env.scope.definitions, "use_it")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
@@ -208,7 +208,7 @@ pub fn parametric_unqualified_cross_module_test() {
     glimpse.Module("main_module", parsed_module, ["foo"])
     |> typecheck.module(other_envs, target.Erlang)
 
-  assert dict.get(main_env.definitions, "use_it")
+  assert dict.get(main_env.scope.definitions, "use_it")
     == Ok(types.CallableType(
       [types.CustomType("main_module", "Box", [types.IntType], option.None)],
       dict.new(),

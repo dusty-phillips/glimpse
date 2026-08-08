@@ -1052,14 +1052,18 @@ fn do_generalise(
 pub type TypeResult =
   error.TypeCheckResult(Type)
 
-pub type Environment {
-  Environment(
-    // Full absolute path. Used to identify and construct custom types
-    current_module: String,
+/// The names a module exposes: its value definitions and which are public.
+pub type Scope {
+  Scope(
     definitions: dict.Dict(String, Type),
     public_definitions: set.Set(String),
-    custom_types: dict.Dict(String, Type),
-    public_custom_types: set.Set(String),
+  )
+}
+
+/// How a module reaches other modules: local aliases, imported namespaces, and
+/// complete module environments.
+pub type Imports {
+  Imports(
     // absolute path to whatever the relative name is in this env
     import_names: dict.Dict(String, String),
     // imported module namespaces keyed by their local alias. Kept separate
@@ -1069,6 +1073,17 @@ pub type Environment {
     // other environments that could be imported from this one
     // (actually imported envs will be in definitions)
     module_environments: dict.Dict(String, Environment),
+  )
+}
+
+pub type Environment {
+  Environment(
+    // Full absolute path. Used to identify and construct custom types
+    current_module: String,
+    scope: Scope,
+    custom_types: dict.Dict(String, Type),
+    public_custom_types: set.Set(String),
+    imports: Imports,
     // During the first function-body pass, same-module callees defined earlier
     // in source order still carry `InferredReturn` placeholders. Type-directed
     // lookups on such unknown types defer instead of erroring; the second pass
@@ -1129,13 +1144,17 @@ pub type EnvironmentFold =
 pub fn new_env(current_module: String) -> Environment {
   Environment(
     current_module:,
-    definitions: prelude_definitions(),
-    public_definitions: set.new(),
+    scope: Scope(
+      definitions: prelude_definitions(),
+      public_definitions: set.new(),
+    ),
     custom_types: prelude_custom_types(),
     public_custom_types: set.new(),
-    import_names: dict.new(),
-    module_imports: dict.new(),
-    module_environments: dict.new(),
+    imports: Imports(
+      import_names: dict.new(),
+      module_imports: dict.new(),
+      module_environments: dict.new(),
+    ),
     defer_unknown: False,
     generic_edges: dict.new(),
   )
@@ -1147,15 +1166,20 @@ pub fn new_env(current_module: String) -> Environment {
 /// constructor into scope), mirroring real Gleam.
 pub fn prelude_module_env(module_name: String) -> Environment {
   let custom_types = prelude_custom_types()
+  let definitions = prelude_definitions()
   Environment(
     current_module: module_name,
-    definitions: prelude_definitions(),
-    public_definitions: dict.keys(prelude_definitions()) |> set.from_list,
+    scope: Scope(
+      definitions: definitions,
+      public_definitions: dict.keys(definitions) |> set.from_list,
+    ),
     custom_types: custom_types,
     public_custom_types: dict.keys(custom_types) |> set.from_list,
-    import_names: dict.new(),
-    module_imports: dict.new(),
-    module_environments: dict.new(),
+    imports: Imports(
+      import_names: dict.new(),
+      module_imports: dict.new(),
+      module_environments: dict.new(),
+    ),
     defer_unknown: False,
     generic_edges: dict.new(),
   )
@@ -1343,7 +1367,10 @@ pub fn add_or_update_def_in_env(
 ) -> Environment {
   Environment(
     ..environment,
-    definitions: dict.insert(environment.definitions, name, type_),
+    scope: Scope(
+      ..environment.scope,
+      definitions: dict.insert(environment.scope.definitions, name, type_),
+    ),
   )
 }
 
@@ -1355,7 +1382,10 @@ pub fn publish_def_in_env(
 ) -> Environment {
   Environment(
     ..environment,
-    public_definitions: set.insert(environment.public_definitions, name),
+    scope: Scope(
+      ..environment.scope,
+      public_definitions: set.insert(environment.scope.public_definitions, name),
+    ),
   )
 }
 
@@ -1414,7 +1444,14 @@ pub fn add_or_update_namespace_in_env(
 ) -> Environment {
   Environment(
     ..environment,
-    module_imports: dict.insert(environment.module_imports, name, namespace),
+    imports: Imports(
+      ..environment.imports,
+      module_imports: dict.insert(
+        environment.imports.module_imports,
+        name,
+        namespace,
+      ),
+    ),
   )
 }
 
@@ -1425,10 +1462,13 @@ pub fn add_import_mapping_to_env(
 ) -> Environment {
   Environment(
     ..environment,
-    import_names: dict.insert(
-      environment.import_names,
-      absolute_name,
-      relative_name,
+    imports: Imports(
+      ..environment.imports,
+      import_names: dict.insert(
+        environment.imports.import_names,
+        absolute_name,
+        relative_name,
+      ),
     ),
   )
 }
@@ -1440,7 +1480,7 @@ pub fn module_access_name(
   environment: Environment,
   module_name: String,
 ) -> String {
-  dict.get(environment.import_names, module_name)
+  dict.get(environment.imports.import_names, module_name)
   |> result.unwrap(module_name)
 }
 
@@ -1448,7 +1488,7 @@ pub fn lookup_variable_type(
   environment: Environment,
   name: String,
 ) -> TypeResult {
-  dict.get(environment.definitions, name)
+  dict.get(environment.scope.definitions, name)
   |> result.replace_error(error.InvalidName(name))
 }
 
@@ -1823,7 +1863,7 @@ fn lookup_named_type(
   case module {
     option.None -> lookup_custom_type(environment, name)
     option.Some(module_name) -> {
-      case dict.get(environment.module_imports, module_name) {
+      case dict.get(environment.imports.module_imports, module_name) {
         Ok(NamespaceType(_, custom_types)) ->
           dict.get(custom_types, name)
           |> result.replace_error(error.InvalidFieldAccess(module_name, name))
@@ -1918,7 +1958,7 @@ pub fn can_render(environment: Environment, type_: Type) -> Bool {
 fn is_renderable_module(environment: Environment, module: String) -> Bool {
   module == environment.current_module
   || is_prelude_module(module)
-  || dict.has_key(environment.import_names, module)
+  || dict.has_key(environment.imports.import_names, module)
 }
 
 pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
@@ -1940,7 +1980,7 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
         True ->
           glance.NamedType(unknown_span, name, option.None, glance_parameters)
         False -> {
-          case dict.get(environment.import_names, module) {
+          case dict.get(environment.imports.import_names, module) {
             Ok(relative) ->
               glance.NamedType(
                 unknown_span,

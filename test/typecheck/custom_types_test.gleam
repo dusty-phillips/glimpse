@@ -16,9 +16,9 @@ pub fn no_field_custom_type_test() {
   assert dict.get(env.custom_types, "MyType")
     == Ok(types.CustomType(env.current_module, "MyType", [], option.None))
 
-  assert dict.size(env.definitions) == 8
+  assert dict.size(env.scope.definitions) == 8
 
-  assert dict.get(env.definitions, "MyTypeConstructor")
+  assert dict.get(env.scope.definitions, "MyTypeConstructor")
     == Ok(types.CustomType("main_module", "MyType", [], option.Some(0)))
 }
 
@@ -34,9 +34,9 @@ pub fn single_param_custom_type_test() {
   assert dict.get(env.custom_types, "MyType")
     == Ok(types.CustomType(env.current_module, "MyType", [], option.None))
 
-  assert dict.size(env.definitions) == 8
+  assert dict.size(env.scope.definitions) == 8
 
-  assert dict.get(env.definitions, "MyTypeConstructor")
+  assert dict.get(env.scope.definitions, "MyTypeConstructor")
     == Ok(types.CallableType(
       [types.StringType],
       dict.from_list([#("name", 0)]),
@@ -56,9 +56,9 @@ pub fn positional_variant_custom_type_test() {
   assert dict.get(env.custom_types, "MyType")
     == Ok(types.CustomType(env.current_module, "MyType", [], option.None))
 
-  assert dict.size(env.definitions) == 8
+  assert dict.size(env.scope.definitions) == 8
 
-  assert dict.get(env.definitions, "MyTypeConstructor")
+  assert dict.get(env.scope.definitions, "MyTypeConstructor")
     == Ok(types.CallableType(
       [types.StringType],
       dict.from_list([]),
@@ -79,16 +79,16 @@ pub fn multi_variant_custom_type_test() {
   assert dict.get(env.custom_types, "MyType")
     == Ok(types.CustomType(env.current_module, "MyType", [], option.None))
 
-  assert dict.size(env.definitions) == 9
+  assert dict.size(env.scope.definitions) == 9
 
-  assert dict.get(env.definitions, "MyTypeConstructor")
+  assert dict.get(env.scope.definitions, "MyTypeConstructor")
     == Ok(types.CallableType(
       [types.StringType],
       dict.from_list([#("name", 0)]),
       types.CustomType("main_module", "MyType", [], option.Some(0)),
     ))
 
-  assert dict.get(env.definitions, "NumberConstructor")
+  assert dict.get(env.scope.definitions, "NumberConstructor")
     == Ok(types.CallableType(
       [types.IntType],
       dict.from_list([#("number", 0)]),
@@ -110,10 +110,10 @@ pub fn multi_variant_no_fields_custom_type_test() {
   assert dict.get(env.custom_types, "MyType")
     == Ok(types.CustomType(env.current_module, "MyType", [], option.None))
 
-  assert dict.size(env.definitions) == 10
+  assert dict.size(env.scope.definitions) == 10
 
   use constructor_name, variant <- list.index_map(["C1", "C2", "C3"])
-  assert dict.get(env.definitions, constructor_name)
+  assert dict.get(env.scope.definitions, constructor_name)
     == Ok(types.CustomType("main_module", "MyType", [], option.Some(variant)))
 }
 
@@ -130,16 +130,16 @@ pub fn recursive_custom_type_test() {
   assert dict.get(env.custom_types, "MyType")
     == Ok(types.CustomType(env.current_module, "MyType", [], option.None))
 
-  assert dict.size(env.definitions) == 9
+  assert dict.size(env.scope.definitions) == 9
 
-  assert dict.get(env.definitions, "MyTypeConstructor")
+  assert dict.get(env.scope.definitions, "MyTypeConstructor")
     == Ok(types.CallableType(
       [types.StringType],
       dict.from_list([#("name", 0)]),
       types.CustomType("main_module", "MyType", [], option.Some(0)),
     ))
 
-  assert dict.get(env.definitions, "RecursiveConstructor")
+  assert dict.get(env.scope.definitions, "RecursiveConstructor")
     == Ok(types.CallableType(
       [types.CustomType("main_module", "MyType", [], option.None)],
       dict.from_list([#("next", 0)]),
@@ -166,16 +166,16 @@ pub fn custom_type_from_module_test() {
   assert dict.get(env.custom_types, "MyOtherType")
     == Ok(types.CustomType(env.current_module, "MyOtherType", [], option.None))
 
-  assert dict.size(env.definitions) == 9
+  assert dict.size(env.scope.definitions) == 9
 
-  assert dict.get(env.definitions, "MyTypeConstructor")
+  assert dict.get(env.scope.definitions, "MyTypeConstructor")
     == Ok(types.CallableType(
       [types.StringType],
       dict.from_list([#("name", 0)]),
       types.CustomType("main_module", "MyType", [], option.Some(0)),
     ))
 
-  assert dict.get(env.definitions, "MyOtherType")
+  assert dict.get(env.scope.definitions, "MyOtherType")
     == Ok(types.CallableType(
       [types.StringType],
       dict.from_list([#("name", 0)]),

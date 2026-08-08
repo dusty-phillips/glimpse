@@ -160,7 +160,13 @@ pub fn module(
   // resolve constructors of types from modules that were not explicitly
   // imported (the real compiler reads them from its `importable_modules`).
   let environment =
-    types.Environment(..environment, module_environments: module_envs)
+    types.Environment(
+      ..environment,
+      imports: types.Imports(
+        ..environment.imports,
+        module_environments: module_envs,
+      ),
+    )
 
   use environment <- result.try(
     glimpse_module.module.custom_types
@@ -632,7 +638,13 @@ fn custom_type_constructors_(
       list.fold(custom_type.variants, environment, fn(env, variant) {
         types.Environment(
           ..env,
-          public_definitions: set.delete(env.public_definitions, variant.name),
+          scope: types.Scope(
+            ..env.scope,
+            public_definitions: set.delete(
+              env.scope.public_definitions,
+              variant.name,
+            ),
+          ),
         )
       })
     False -> environment
