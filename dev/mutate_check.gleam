@@ -316,6 +316,7 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "pipe ",
     "casepat ",
     "clausepat ",
+    "guard ",
     "typeparam ",
     "bitreorder ",
     "letswap ",
@@ -1369,6 +1370,141 @@ fn find_use_arrow(line: String, index: Int) -> option.Option(Int) {
   }
 }
 
+/// Kind `guard`: swap the two operands of a guard comparison in a case clause
+/// (`x if a < b -> ...` becomes `x if b < a -> ...`). When the two operands
+/// have different types, the real compiler rejects the swapped guard.
+fn guard_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_guard_comparison(line) {
+      option.None -> []
+      option.Some(#(
+        op_start,
+        op_end,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
+      )) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        let swapped =
+          string.slice(line, at_index: 0, length: first_start)
+          <> second
+          <> string.slice(
+            line,
+            at_index: first_end,
+            length: second_start - first_end,
+          )
+          <> first
+          <> string.slice(
+            line,
+            at_index: second_end,
+            length: string.length(line) - second_end,
+          )
+        let _ = op_start
+        let _ = op_end
+        case first == second {
+          True -> []
+          False -> [#("guard swap", source_of(lines, idx, swapped))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find `if a OP b` in a case-clause guard where both operands are simple
+/// tokens. Returns the offsets of the operator and both operands.
+fn find_guard_comparison(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int, Int, Int)) {
+  case string.contains(line, " if ") {
+    False -> option.None
+    True -> {
+      let operators = [" == ", " != ", " < ", " > ", " <= ", " >= "]
+      find_guard_operator(line, operators)
+    }
+  }
+}
+
+fn find_guard_operator(
+  line: String,
+  operators: List(String),
+) -> option.Option(#(Int, Int, Int, Int, Int, Int)) {
+  case operators {
+    [] -> option.None
+    [op, ..rest] ->
+      case find_substring(line, op) {
+        option.None -> find_guard_operator(line, rest)
+        option.Some(op_index) -> {
+          let op_end = op_index + string.length(op)
+          case find_token_before(line, op_index) {
+            option.None -> find_guard_operator(line, rest)
+            option.Some(#(first_start, first_end)) ->
+              case find_token_after(line, op_end) {
+                option.None -> find_guard_operator(line, rest)
+                option.Some(#(second_start, second_end)) ->
+                  option.Some(#(
+                    op_index,
+                    op_end,
+                    first_start,
+                    first_end,
+                    second_start,
+                    second_end,
+                  ))
+              }
+          }
+        }
+      }
+  }
+}
+
+fn find_token_after(line: String, from: Int) -> option.Option(#(Int, Int)) {
+  case first_simple_start(line, from) {
+    option.None -> option.None
+    option.Some(start) -> {
+      let end = simple_token_end(line, start)
+      case end == start {
+        True -> option.None
+        False -> option.Some(#(start, end))
+      }
+    }
+  }
+}
+
+fn find_substring(line: String, target: String) -> option.Option(Int) {
+  find_substring_from(line, 0, target)
+}
+
+fn find_substring_from(
+  line: String,
+  index: Int,
+  target: String,
+) -> option.Option(Int) {
+  case index + string.length(target) > string.length(line) {
+    True -> option.None
+    False ->
+      case
+        string.slice(line, at_index: index, length: string.length(target))
+        == target
+      {
+        True -> option.Some(index)
+        False -> find_substring_from(line, index + 1, target)
+      }
+  }
+}
+
 fn casepat_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     let line = fetch(lines, idx)
@@ -1903,6 +2039,7 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(pipe_mutants(lines))
   |> list.append(casepat_mutants(lines))
   |> list.append(clausepat_mutants(lines))
+  |> list.append(guard_mutants(lines))
   |> list.append(typeparam_mutants(lines))
   |> list.append(bitreorder_mutants(lines))
   |> list.append(letswap_mutants(lines))
