@@ -1383,7 +1383,8 @@ fn find_type_params(line: String) -> option.Option(#(Int, Int, Int, Int)) {
   }
 }
 
-/// Read `a, b)` after a `(` where both are simple single-letter tokens.
+/// Read `a, b)` after a `(` where both are simple tokens (parameter names may
+/// be multi-letter, e.g. `Dict(key, value)`).
 fn read_two_params(
   line: String,
   open_index: Int,
@@ -1392,33 +1393,25 @@ fn read_two_params(
     option.None -> option.None
     option.Some(first_start) -> {
       let first_end = simple_token_end(line, first_start)
-      case first_end - first_start != 1 {
-        True -> option.None
-        False ->
-          case string.slice(line, at_index: first_end, length: 1) {
-            "," ->
-              case skip_spaces(line, first_end + 1) {
-                option.Some(second_start) -> {
-                  let second_end = simple_token_end(line, second_start)
-                  case second_end - second_start != 1 {
-                    True -> option.None
-                    False ->
-                      case string.slice(line, at_index: second_end, length: 1) {
-                        ")" ->
-                          option.Some(#(
-                            first_start,
-                            first_end,
-                            second_start,
-                            second_end,
-                          ))
-                        _ -> option.None
-                      }
-                  }
-                }
-                option.None -> option.None
+      case string.slice(line, at_index: first_end, length: 1) {
+        "," ->
+          case skip_spaces(line, first_end + 1) {
+            option.Some(second_start) -> {
+              let second_end = simple_token_end(line, second_start)
+              case string.slice(line, at_index: second_end, length: 1) {
+                ")" ->
+                  option.Some(#(
+                    first_start,
+                    first_end,
+                    second_start,
+                    second_end,
+                  ))
+                _ -> option.None
               }
-            _ -> option.None
+            }
+            option.None -> option.None
           }
+        _ -> option.None
       }
     }
   }
