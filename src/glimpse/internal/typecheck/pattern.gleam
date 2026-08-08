@@ -181,26 +181,28 @@ pub fn typecheck_pattern(
             expected_type,
             constructor_return,
           ))
-          // A `..` spread is only needed when it covers fields the pattern does
-          // not name. Listing every field *and* spreading is an error.
+          // A `..` spread that redundantly names every field of a constructor
+          // with labelled fields is "unnecessary" in real Gleam, but for an
+          // unlabelled constructor the same pattern is accepted. An excess of
+          // fields (spread or not) or a shortage without a spread is always an
+          // error.
           case
-            with_spread && list.length(arguments) == list.length(parameters)
+            list.length(arguments) > list.length(parameters)
+            || !with_spread
+            && list.length(arguments) != list.length(parameters)
           {
-            True -> Error(error.UnnecessarySpread)
-            False -> {
-              // Without a spread the pattern must name every field; with one it
-              // may name fewer but never more than the constructor has.
+            True ->
+              Error(error.InvalidPatternArity(
+                list.length(parameters),
+                list.length(arguments),
+              ))
+            False ->
               case
-                !with_spread
-                && list.length(arguments) != list.length(parameters)
-                || with_spread
-                && list.length(arguments) > list.length(parameters)
+                with_spread
+                && list.length(arguments) == list.length(parameters)
+                && dict.size(position_labels) > 0
               {
-                True ->
-                  Error(error.InvalidPatternArity(
-                    list.length(parameters),
-                    list.length(arguments),
-                  ))
+                True -> Error(error.UnnecessarySpread)
                 False -> {
                   // Resolve the constructor parameters but do not generalise them:
                   // any still-unbound inference variable must remain free so the
@@ -222,7 +224,6 @@ pub fn typecheck_pattern(
                   )
                 }
               }
-            }
           }
         }
         // Zero-field constructors (e.g. `True`, `Nil`, `None`) resolve directly
