@@ -8,9 +8,12 @@ import gleam/set
 import gleam/string
 import glimpse/error
 import glimpse/internal/typecheck/bit_string_segment
+import glimpse/internal/typecheck/calls
+import glimpse/internal/typecheck/capture
 import glimpse/internal/typecheck/exhaustive
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/pattern
+import glimpse/internal/typecheck/pipe
 import glimpse/internal/typecheck/types.{
   type Environment, type Type, type TypeStore, Environment,
 }
@@ -173,35 +176,6 @@ fn type_name(pat: glance.Pattern) -> String {
     glance.PatternVariable(_, name) -> name
     glance.PatternDiscard(_, name) -> name
     _ -> ""
-  }
-}
-
-/// Extract the parameters, labels, and return type of a call target, so a call
-/// can be checked against them. A target that is a bare unbound variable (an
-/// unannotated higher-order parameter) is constrained to a fresh callable
-/// taking the given number of arguments.
-fn callable_parts(
-  environment: Environment,
-  store: TypeStore,
-  target: types.Type,
-  argument_count: Int,
-) -> error.TypeCheckResult(
-  #(TypeStore, List(types.Type), dict.Dict(String, Int), types.Type),
-) {
-  case target {
-    types.CallableType(_, _, _) | types.GenericCallableType(_, _, _, _) -> {
-      let #(store, parameters, labels, return) =
-        types.instantiate_callable(store, target)
-      Ok(#(store, parameters, labels, return))
-    }
-    types.Var(_) | types.InferredReturn -> {
-      let #(store, parameters) = types.fresh_vars(store, argument_count)
-      let #(store, return) = types.fresh_var(store)
-      let callable = types.CallableType(parameters, dict.new(), return)
-      types.unify(store, environment, target, callable)
-      |> result.map(fn(store) { #(store, parameters, dict.new(), return) })
-    }
-    _ -> Error(error.NotCallable(types.to_string(environment, target)))
   }
 }
 
@@ -810,7 +784,7 @@ fn typecheck_with_expected(
               parameters,
               labels,
               arguments_before,
-              CaptureState(set.new(), [], 0),
+              capture.CaptureState(set.new(), [], 0),
             ),
           )
 
@@ -824,13 +798,16 @@ fn typecheck_with_expected(
                 )
               })
             option.None ->
-              Ok(next_free_slot(before_state.claimed, before_state.counter))
+              Ok(capture.next_free_slot(
+                before_state.claimed,
+                before_state.counter,
+              ))
           }
 
           use hole_position <- result.try(hole_position)
 
           let with_hole =
-            CaptureState(
+            capture.CaptureState(
               claimed: set.insert(before_state.claimed, hole_position),
               consumed: before_state.consumed,
               counter: before_state.counter,
@@ -847,7 +824,7 @@ fn typecheck_with_expected(
             ),
           )
 
-          fn_capture(
+          capture.fn_capture(
             environment,
             store,
             parameters,
@@ -2426,7 +2403,7 @@ pub fn call(
     target,
   ))
 
-  use #(store, parameters, labels, return) <- result.try(callable_parts(
+  use #(store, parameters, labels, return) <- result.try(calls.callable_parts(
     environment,
     store,
     glimpse_target,
@@ -2449,11 +2426,11 @@ pub fn call(
   use #(store, return) <- result.try(case target {
     glance.Variable(_, callee) -> {
       let constraints = {
-        record_generic_constraints(environment, store, callee, arguments)
+        calls.record_generic_constraints(environment, store, callee, arguments)
       }
       constraints
       |> result.map(fn(store) {
-        case placeholder_callee(environment, callee) {
+        case calls.placeholder_callee(environment, callee) {
           True -> types.fresh_var_with_source(store, "r_" <> callee)
           False -> #(store, return)
         }
@@ -2463,124 +2440,6 @@ pub fn call(
   })
 
   Ok(#(store, return))
-}
-
-/// Record how a same-module callee's generic parameters are constrained by the
-/// arguments at this call site, so a cycle of embedding constraints across
-/// functions is reported as a recursive type.
-fn record_generic_constraints(
-  environment: Environment,
-  store: TypeStore,
-  callee: String,
-  arguments: List(glance.Field(glance.Expression)),
-) -> Result(TypeStore, error.TypeCheckError) {
-  case dict.get(environment.definitions, callee) {
-    Ok(types.GenericCallableType(parameters, _, return_, _)) ->
-      case is_placeholder_return(return_) {
-        False -> Ok(store)
-        True ->
-          list.try_fold(
-            list.zip(
-              parameters,
-              list.map(arguments, fn(field) {
-                case field {
-                  glance.UnlabelledField(expr) -> expr
-                  glance.LabelledField(_, _, expr) -> expr
-                  glance.ShorthandField(_, _) ->
-                    glance.Int(glance.Span(-1, -1), "0")
-                }
-              }),
-            ),
-            store,
-            fn(store, pair) {
-              let #(parameter, argument) = pair
-              case parameter {
-                types.GenericTypeVariable(name) ->
-                  types.record_generic_edge(
-                    store,
-                    name,
-                    argument_named_vars(environment, store, argument),
-                  )
-                _ -> Ok(store)
-              }
-            },
-          )
-      }
-    _ -> Ok(store)
-  }
-}
-
-/// The named generic variables an argument expression can embed, from the
-/// bindings its sub-expressions resolve to. Only names that appear directly
-/// (variable lookups, constructor arguments, list/tuple elements) are counted;
-/// the argument is not typechecked here.
-fn argument_named_vars(
-  environment: Environment,
-  store: TypeStore,
-  argument: glance.Expression,
-) -> List(String) {
-  case argument {
-    glance.Variable(_, name) ->
-      case dict.get(environment.definitions, name) {
-        Ok(type_) -> types.named_vars_including_sources(store, type_)
-        Error(_) -> []
-      }
-    glance.List(_, elements, tail) ->
-      list.append(
-        elements
-          |> list.map(fn(element) {
-            argument_named_vars(environment, store, element)
-          })
-          |> list.flatten,
-        case tail {
-          option.Some(tail_expr) ->
-            argument_named_vars(environment, store, tail_expr)
-          option.None -> []
-        },
-      )
-    glance.Tuple(_, elements) ->
-      elements
-      |> list.map(fn(element) {
-        argument_named_vars(environment, store, element)
-      })
-      |> list.flatten
-    glance.Call(_, _, fields) ->
-      fields
-      |> list.map(fn(field) {
-        case field {
-          glance.UnlabelledField(expr) ->
-            argument_named_vars(environment, store, expr)
-          glance.LabelledField(_, _, expr) ->
-            argument_named_vars(environment, store, expr)
-          glance.ShorthandField(_, _) -> []
-        }
-      })
-      |> list.flatten
-    glance.BitString(_, segments) ->
-      segments
-      |> list.map(fn(segment) {
-        let #(value_expr, _options) = segment
-        argument_named_vars(environment, store, value_expr)
-      })
-      |> list.flatten
-    _ -> []
-  }
-}
-
-fn placeholder_callee(environment: Environment, callee: String) -> Bool {
-  case dict.get(environment.definitions, callee) {
-    Ok(types.GenericCallableType(_, _, return_, _)) ->
-      is_placeholder_return(return_)
-    _ -> False
-  }
-}
-
-fn is_placeholder_return(type_: Type) -> Bool {
-  case type_ {
-    types.InferredReturn -> True
-    types.GenericTypeVariable("todo") -> True
-    _ -> False
-  }
 }
 
 /// Type-check call arguments against their parameter types.
@@ -2646,7 +2505,7 @@ fn check_arguments(
     }
 
     True -> {
-      use ordered_fields <- result.try(align_argument_fields(
+      use ordered_fields <- result.try(calls.align_argument_fields(
         fields,
         position_labels,
         param_count,
@@ -2723,430 +2582,6 @@ fn field_expression_type(
   }
 }
 
-/// Build `[0, 1, ..., n-1]`. The stdlib has no `list.range`, so the range is
-/// produced by indexing a list of n units.
-fn index_range(count: Int) -> List(Int) {
-  list.repeat(Nil, count) |> list.index_map(fn(_, i) { i })
-}
-
-/// Align argument fields to parameter positions by label (for labelled and
-/// shorthand fields) and position (for unlabelled fields), returning the fields
-/// in parameter order. Reports `InvalidArgumentLabel` for unknown labels.
-/// Argument count equality must be established by the caller.
-fn align_argument_fields(
-  fields: List(glance.Field(glance.Expression)),
-  position_labels: dict.Dict(String, Int),
-  param_count: Int,
-) -> error.TypeCheckResult(List(glance.Field(glance.Expression))) {
-  // A positional argument may not follow a labelled one in source order.
-  case positional_argument_after_labelled(fields) {
-    True -> Error(error.PositionalArgumentAfterLabelled)
-    False -> align_argument_fields_(fields, position_labels, param_count)
-  }
-}
-
-fn align_argument_fields_(
-  fields: List(glance.Field(glance.Expression)),
-  position_labels: dict.Dict(String, Int),
-  param_count: Int,
-) -> error.TypeCheckResult(List(glance.Field(glance.Expression))) {
-  let #(positional, labelled) =
-    list.fold(fields, #([], dict.new()), fn(state, field) {
-      let #(positional, labelled) = state
-      case field {
-        glance.UnlabelledField(_) -> #([field, ..positional], labelled)
-        glance.LabelledField(label, _, _) -> #(
-          positional,
-          dict.insert(labelled, label, field),
-        )
-        glance.ShorthandField(label, _) -> #(
-          positional,
-          dict.insert(labelled, label, field),
-        )
-      }
-    })
-  let positional = list.reverse(positional)
-
-  // Place labelled/shorthand fields at their labelled parameter position,
-  // surfacing an `InvalidArgumentLabel` error for any label the callable does
-  // not declare.
-  use by_position <- result.try(
-    list.try_fold(dict.to_list(labelled), dict.new(), fn(by_position, pair) {
-      let #(label, field) = pair
-      use position <- result.try(
-        dict.get(position_labels, label)
-        |> result.replace_error(error.InvalidArgumentLabel(
-          "("
-            <> position_labels
-          |> dict.keys
-          |> list.sort(string.compare)
-          |> string.join(", ")
-            <> ")",
-          label,
-        )),
-      )
-      Ok(dict.insert(by_position, position, field))
-    }),
-  )
-
-  // Fill the remaining (unlabelled) parameter positions with positional
-  // arguments, in source order. A label error already short-circuited above;
-  // here a count mismatch means too few positional arguments, which the
-  // caller's arity check should have ruled out, but guard defensively.
-  let #(_, acc) =
-    list.fold_until(
-      index_range(param_count),
-      #(positional, []),
-      fn(state, position) {
-        let #(remaining, acc) = state
-        case dict.get(by_position, position) {
-          Ok(field) -> list.Continue(#(remaining, [field, ..acc]))
-          Error(_) ->
-            case remaining {
-              [] -> list.Stop(#([], acc))
-              [field, ..rest] -> list.Continue(#(rest, [field, ..acc]))
-            }
-        }
-      },
-    )
-  Ok(list.reverse(acc))
-}
-
-/// Whether a list of argument fields contains a positional argument that
-/// appears after a labelled one, which the language forbids.
-fn positional_argument_after_labelled(
-  fields: List(glance.Field(glance.Expression)),
-) -> Bool {
-  let #(_seen_labelled, found) =
-    list.fold(fields, #(False, False), fn(state, field) {
-      let #(seen_labelled, found) = state
-      case field {
-        glance.LabelledField(_, _, _) | glance.ShorthandField(_, _) -> #(
-          True,
-          found,
-        )
-        glance.UnlabelledField(_) -> #(seen_labelled, found || seen_labelled)
-      }
-    })
-  found
-}
-
-type CaptureState {
-  CaptureState(
-    claimed: set.Set(Int),
-    /// (position, argument type) pairs, kept in reverse order
-    consumed: List(#(Int, Type)),
-    /// Next candidate position for an unlabelled argument
-    counter: Int,
-  )
-}
-
-/// Typecheck a function capture (`f(1, _)`). The target is instantiated, the
-/// provided arguments are unified against the parameter positions they consume,
-/// and the remaining positions become the parameters of the partial callable.
-fn fn_capture(
-  environment: Environment,
-  store: TypeStore,
-  parameters: List(Type),
-  labels: dict.Dict(String, Int),
-  return: Type,
-  hole_label: option.Option(String),
-  typed_before: List(glance.Field(Type)),
-  typed_after: List(glance.Field(Type)),
-) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  let parameter_count = list.length(parameters)
-  let all_fields = list.append(typed_before, typed_after)
-  let provided_types = list.map(all_fields, field_type)
-  let too_many = too_many_arguments(environment, parameters, provided_types)
-
-  use before_state <- result.try(
-    list.try_fold(
-      typed_before,
-      CaptureState(set.new(), [], 0),
-      fn(state, field) {
-        capture_field(labels, parameter_count, too_many, state, field)
-      },
-    ),
-  )
-
-  let hole_position = case hole_label {
-    option.Some(label) ->
-      dict.get(labels, label)
-      |> result.map_error(fn(_) {
-        error.InvalidArgumentLabel(
-          "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-          label,
-        )
-      })
-    option.None ->
-      Ok(next_free_slot(before_state.claimed, before_state.counter))
-  }
-
-  use hole_position <- result.try(hole_position)
-
-  case hole_position >= parameter_count {
-    True -> Error(too_many)
-    False -> {
-      let with_hole =
-        CaptureState(
-          claimed: set.insert(before_state.claimed, hole_position),
-          consumed: before_state.consumed,
-          counter: before_state.counter,
-        )
-
-      use after_state <- result.try(
-        list.try_fold(typed_after, with_hole, fn(state, field) {
-          capture_field(labels, parameter_count, too_many, state, field)
-        }),
-      )
-
-      let consumed = list.reverse(after_state.consumed)
-
-      use store <- result.try(
-        list.try_fold(consumed, store, fn(store, pair) {
-          let #(position, arg_type) = pair
-          let param_type =
-            list.drop(parameters, up_to: position)
-            |> list.first
-            |> result.unwrap(types.GenericTypeVariable("todo"))
-          types.unify(store, environment, arg_type, param_type)
-        }),
-      )
-
-      let consumed_positions =
-        list.fold(consumed, set.new(), fn(positions, pair) {
-          let #(position, _) = pair
-          set.insert(positions, position)
-        })
-
-      let #(remaining_reversed, reindexed_labels) =
-        list.index_map(parameters, fn(param, index) { #(param, index) })
-        |> list.fold(#([], dict.new()), fn(state, pair) {
-          let #(reversed_params, new_labels) = state
-          let #(param, index) = pair
-          case set.contains(consumed_positions, index) {
-            True -> state
-            False -> {
-              let consumed_before =
-                set.fold(consumed_positions, 0, fn(count, position) {
-                  case position < index {
-                    True -> count + 1
-                    False -> count
-                  }
-                })
-              let new_position = index - consumed_before
-              let new_labels =
-                dict.fold(labels, new_labels, fn(acc, label, label_position) {
-                  case label_position == index {
-                    True -> dict.insert(acc, label, new_position)
-                    False -> acc
-                  }
-                })
-              #([param, ..reversed_params], new_labels)
-            }
-          }
-        })
-
-      let #(_, resolved_return) = types.resolve(store, return)
-      let generalised =
-        types.generalise(
-          store,
-          types.CallableType(
-            list.reverse(remaining_reversed),
-            reindexed_labels,
-            resolved_return,
-          ),
-        )
-
-      let capture_type = case generalised {
-        types.CallableType(parameters, labels, return) ->
-          case
-            functions.has_generic_types(parameters)
-            || functions.is_generic_type(return)
-          {
-            True ->
-              types.GenericCallableType(
-                parameters,
-                labels,
-                return,
-                functions.dummy_function(),
-              )
-            False -> generalised
-          }
-        other -> other
-      }
-
-      Ok(#(store, capture_type))
-    }
-  }
-}
-
-/// Assign a single capture argument to the parameter position it consumes,
-/// threading the walk state. The argument is appended to `consumed`; the
-/// position is marked claimed so later arguments and the hole can't reuse it.
-fn capture_field(
-  labels: dict.Dict(String, Int),
-  parameter_count: Int,
-  too_many: error.TypeCheckError,
-  state: CaptureState,
-  field: glance.Field(Type),
-) -> Result(CaptureState, error.TypeCheckError) {
-  case field {
-    glance.LabelledField(label, _, type_) ->
-      dict.get(labels, label)
-      |> result.map_error(fn(_) {
-        error.InvalidArgumentLabel(
-          "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-          label,
-        )
-      })
-      |> result.try(fn(position) {
-        case
-          position >= parameter_count || set.contains(state.claimed, position)
-        {
-          True -> Error(too_many)
-          False ->
-            Ok(CaptureState(
-              set.insert(state.claimed, position),
-              [#(position, type_), ..state.consumed],
-              state.counter,
-            ))
-        }
-      })
-    glance.UnlabelledField(type_) -> {
-      let position = next_free_slot(state.claimed, state.counter)
-      case position >= parameter_count {
-        True -> Error(too_many)
-        False ->
-          Ok(CaptureState(
-            set.insert(state.claimed, position),
-            [#(position, type_), ..state.consumed],
-            position + 1,
-          ))
-      }
-    }
-    glance.ShorthandField(label, _) -> Error(error.InvalidName(label))
-  }
-}
-
-/// Smallest position at or after `counter` not already claimed.
-fn next_free_slot(claimed: set.Set(Int), counter: Int) -> Int {
-  case set.contains(claimed, counter) {
-    True -> next_free_slot(claimed, counter + 1)
-    False -> counter
-  }
-}
-
-fn field_type(field: glance.Field(Type)) -> Type {
-  case field {
-    glance.LabelledField(_, _, type_) -> type_
-    glance.UnlabelledField(type_) -> type_
-    glance.ShorthandField(_, _) -> types.GenericTypeVariable("todo")
-  }
-}
-
-fn too_many_arguments(
-  environment: Environment,
-  parameters: List(Type),
-  provided: List(Type),
-) -> error.TypeCheckError {
-  error.InvalidArguments(
-    "(" <> types.list_to_string(parameters, environment) <> ")",
-    "(" <> types.list_to_string(provided, environment) <> ")",
-  )
-}
-
-/// Typecheck the explicit arguments of a function capture against the
-/// parameter positions they consume. Each argument is checked against the
-/// expected type of its parameter so that anonymous function arguments (like
-/// the callback of `list.fold(xs, _, fn(acc, x) { .. })`) get their parameter
-/// types before their bodies are typechecked. Returns the typed fields and the
-/// capture state describing the claimed positions.
-fn typecheck_capture_arguments(
-  environment: Environment,
-  store: TypeStore,
-  parameters: List(Type),
-  labels: dict.Dict(String, Int),
-  fields: List(glance.Field(glance.Expression)),
-  state: CaptureState,
-) -> Result(
-  #(TypeStore, List(glance.Field(Type)), CaptureState),
-  error.TypeCheckError,
-) {
-  let parameter_count = list.length(parameters)
-
-  list.try_fold(fields, #(store, [], state), fn(acc, field) {
-    let #(store, reversed, state) = acc
-    let label_of = case field {
-      glance.LabelledField(label, _, _) | glance.ShorthandField(label, _) ->
-        option.Some(label)
-      glance.UnlabelledField(_) -> option.None
-    }
-    let position_result = case label_of {
-      option.Some(label) ->
-        dict.get(labels, label)
-        |> result.map_error(fn(_) {
-          error.InvalidArgumentLabel(
-            "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-            label,
-          )
-        })
-      option.None -> Ok(next_free_slot(state.claimed, state.counter))
-    }
-
-    use position <- result.try(position_result)
-
-    case position >= parameter_count || set.contains(state.claimed, position) {
-      True ->
-        Error(too_many_arguments(
-          environment,
-          parameters,
-          list.reverse(reversed) |> list.map(field_type),
-        ))
-      False -> {
-        let expected =
-          list.drop(parameters, up_to: position)
-          |> list.first
-          |> result.unwrap(types.GenericTypeVariable("todo"))
-        use #(store, arg_type) <- result.try(field_expression_type(
-          environment,
-          store,
-          field,
-          option.Some(expected),
-        ))
-        let #(store, arg_type) = types.instantiate(store, arg_type)
-        use store <- result.try(types.unify(
-          store,
-          environment,
-          arg_type,
-          expected,
-        ))
-        let typed_field = case field {
-          glance.LabelledField(label, label_location, _) ->
-            glance.LabelledField(label, label_location, arg_type)
-          glance.UnlabelledField(_) -> glance.UnlabelledField(arg_type)
-          glance.ShorthandField(label, _) ->
-            glance.LabelledField(label, glance.Span(0, 0), arg_type)
-        }
-        let new_state =
-          CaptureState(
-            claimed: set.insert(state.claimed, position),
-            consumed: [#(position, field_type(typed_field)), ..state.consumed],
-            counter: case field {
-              glance.UnlabelledField(_) -> position + 1
-              _ -> state.counter
-            },
-          )
-        Ok(#(store, [typed_field, ..reversed], new_state))
-      }
-    }
-  })
-  |> result.map(fn(state) {
-    let #(store, fields, state) = state
-    #(store, list.reverse(fields), state)
-  })
-}
-
 /// Typecheck a binary operator expression. Operands are unified against the
 /// expected operand type so that unannotated values (e.g. inferred function
 /// parameters) are constrained by their use.
@@ -3169,10 +2604,10 @@ pub fn binop(
 
       case operator {
         glance.And | glance.Or ->
-          check_operands(
+          pipe.check_operands(
             environment,
             store,
-            operator_string(operator),
+            pipe.operator_string(operator),
             left_type,
             right_type,
             "two Bools",
@@ -3186,7 +2621,7 @@ pub fn binop(
               let #(store, resolved_left) = types.resolve(store, left_type)
               let #(_store, resolved_right) = types.resolve(store, right_type)
               Error(error.InvalidBinOp(
-                operator_string(operator),
+                pipe.operator_string(operator),
                 types.to_string(environment, resolved_left),
                 types.to_string(environment, resolved_right),
                 "same type",
@@ -3196,10 +2631,10 @@ pub fn binop(
         }
 
         glance.LtInt | glance.LtEqInt | glance.GtEqInt | glance.GtInt ->
-          check_comparison_operands(
+          pipe.check_comparison_operands(
             environment,
             store,
-            operator_string(operator),
+            pipe.operator_string(operator),
             left_type,
             right_type,
             "two Ints",
@@ -3211,10 +2646,10 @@ pub fn binop(
         | glance.MultInt
         | glance.DivInt
         | glance.RemainderInt ->
-          check_operands(
+          pipe.check_operands(
             environment,
             store,
-            operator_string(operator),
+            pipe.operator_string(operator),
             left_type,
             right_type,
             "two Ints",
@@ -3222,10 +2657,10 @@ pub fn binop(
           )
 
         glance.LtFloat | glance.LtEqFloat | glance.GtEqFloat | glance.GtFloat ->
-          check_comparison_operands(
+          pipe.check_comparison_operands(
             environment,
             store,
-            operator_string(operator),
+            pipe.operator_string(operator),
             left_type,
             right_type,
             "two Floats",
@@ -3236,10 +2671,10 @@ pub fn binop(
         | glance.SubFloat
         | glance.MultFloat
         | glance.DivFloat ->
-          check_operands(
+          pipe.check_operands(
             environment,
             store,
-            operator_string(operator),
+            pipe.operator_string(operator),
             left_type,
             right_type,
             "two Floats",
@@ -3247,10 +2682,10 @@ pub fn binop(
           )
 
         glance.Concatenate ->
-          check_operands(
+          pipe.check_operands(
             environment,
             store,
-            "<>",
+            pipe.operator_string(operator),
             left_type,
             right_type,
             "two Strings",
@@ -3262,88 +2697,6 @@ pub fn binop(
         glance.Pipe -> pipe(environment, store, left, right)
       }
     }
-  }
-}
-
-/// Unify both operands against the expected operand type, returning `Bool`
-/// (the result of a comparison operator) if they both match.
-fn check_comparison_operands(
-  environment: Environment,
-  store: TypeStore,
-  operator: String,
-  left: Type,
-  right: Type,
-  expected: String,
-  expected_type: Type,
-) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  check_operands(
-    environment,
-    store,
-    operator,
-    left,
-    right,
-    expected,
-    expected_type,
-  )
-  |> result.map(fn(state) {
-    let #(store, _) = state
-    #(store, types.BoolType)
-  })
-}
-
-/// Unify both operands against the expected operand type, returning that type
-/// if they both match. Errors use the original operand types in the message.
-fn check_operands(
-  environment: Environment,
-  store: TypeStore,
-  operator: String,
-  left: Type,
-  right: Type,
-  expected: String,
-  expected_type: Type,
-) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  types.unify(store, environment, left, expected_type)
-  |> result.try(fn(store) {
-    types.unify(store, environment, right, expected_type)
-  })
-  |> result.map(fn(store) { #(store, expected_type) })
-  |> result.map_error(fn(_) {
-    let #(store, resolved_left) = types.resolve(store, left)
-    let #(_store, resolved_right) = types.resolve(store, right)
-    error.InvalidBinOp(
-      operator,
-      types.to_string(environment, resolved_left),
-      types.to_string(environment, resolved_right),
-      expected,
-    )
-  })
-}
-
-fn operator_string(operator: glance.BinaryOperator) -> String {
-  case operator {
-    glance.And -> "&&"
-    glance.Or -> "||"
-    glance.Eq -> "=="
-    glance.NotEq -> "!="
-    glance.LtInt -> "<"
-    glance.LtEqInt -> "<="
-    glance.GtEqInt -> ">="
-    glance.GtInt -> ">"
-    glance.LtFloat -> "<."
-    glance.LtEqFloat -> "<=."
-    glance.GtEqFloat -> ">=."
-    glance.GtFloat -> ">."
-    glance.AddInt -> "+"
-    glance.AddFloat -> "+."
-    glance.SubInt -> "-"
-    glance.SubFloat -> "-."
-    glance.MultInt -> "*"
-    glance.MultFloat -> "*."
-    glance.DivInt -> "/"
-    glance.DivFloat -> "/."
-    glance.RemainderInt -> "%"
-    glance.Concatenate -> "<>"
-    glance.Pipe -> "|>"
   }
 }
 
@@ -3445,7 +2798,7 @@ fn pipe_value_into_callable(
   // The piped value occupies a parameter slot, so there is one more argument
   // than the explicit ones. `callable_parts` also shapes an unbound target
   // (an unannotated parameter, e.g. `request |> service`) into a fresh callable.
-  use #(store, parameters, labels, return) <- result.try(callable_parts(
+  use #(store, parameters, labels, return) <- result.try(calls.callable_parts(
     environment,
     store,
     glimpse_target,
@@ -3492,7 +2845,7 @@ fn pipe_value_into_callable(
         parameters,
         labels,
       ))
-      pipe_value_into_result(environment, store, left_type, return)
+      pipe.pipe_value_into_result(environment, store, left_type, return)
     }
     False -> {
       case
@@ -3538,28 +2891,94 @@ fn pipe_value_into_callable(
   }
 }
 
-/// The call's arguments already fill every parameter, so the piped value is
-/// applied to the value the call returns, which must itself be a function.
-fn pipe_value_into_result(
+/// Typecheck the explicit arguments of a function capture against the
+/// parameter positions they consume. Each argument is checked against the
+/// expected type of its parameter so that anonymous function arguments (like
+/// the callback of `list.fold(xs, _, fn(acc, x) { .. })`) get their parameter
+/// types before their bodies are typechecked. Returns the typed fields and the
+/// capture state describing the claimed positions.
+fn typecheck_capture_arguments(
   environment: Environment,
   store: TypeStore,
-  left_type: Type,
-  return: Type,
-) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  use #(store, parameters, _labels, result_return) <- result.try(
-    callable_parts(environment, store, return, 1)
-    |> result.map_error(fn(_) { error.InvalidArguments("()", "a piped value") }),
-  )
-  case parameters {
-    [] -> Error(error.InvalidArguments("()", "a piped value"))
-    [first_param, ..] -> {
-      use store <- result.try(types.unify(
-        store,
-        environment,
-        left_type,
-        first_param,
-      ))
-      Ok(types.resolve(store, result_return))
+  parameters: List(Type),
+  labels: dict.Dict(String, Int),
+  fields: List(glance.Field(glance.Expression)),
+  state: capture.CaptureState,
+) -> Result(
+  #(TypeStore, List(glance.Field(Type)), capture.CaptureState),
+  error.TypeCheckError,
+) {
+  let parameter_count = list.length(parameters)
+
+  list.try_fold(fields, #(store, [], state), fn(acc, field) {
+    let #(store, reversed, state) = acc
+    let label_of = case field {
+      glance.LabelledField(label, _, _) | glance.ShorthandField(label, _) ->
+        option.Some(label)
+      glance.UnlabelledField(_) -> option.None
     }
-  }
+    let position_result = case label_of {
+      option.Some(label) ->
+        dict.get(labels, label)
+        |> result.map_error(fn(_) {
+          error.InvalidArgumentLabel(
+            "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+            label,
+          )
+        })
+      option.None -> Ok(capture.next_free_slot(state.claimed, state.counter))
+    }
+
+    use position <- result.try(position_result)
+
+    case position >= parameter_count || set.contains(state.claimed, position) {
+      True ->
+        Error(capture.too_many_arguments(
+          environment,
+          parameters,
+          list.reverse(reversed) |> list.map(capture.field_type),
+        ))
+      False -> {
+        let assert Ok(expected) =
+          list.drop(parameters, up_to: position) |> list.first
+        use #(store, arg_type) <- result.try(field_expression_type(
+          environment,
+          store,
+          field,
+          option.Some(expected),
+        ))
+        let #(store, arg_type) = types.instantiate(store, arg_type)
+        use store <- result.try(types.unify(
+          store,
+          environment,
+          arg_type,
+          expected,
+        ))
+        let typed_field = case field {
+          glance.LabelledField(label, label_location, _) ->
+            glance.LabelledField(label, label_location, arg_type)
+          glance.UnlabelledField(_) -> glance.UnlabelledField(arg_type)
+          glance.ShorthandField(label, _) ->
+            glance.LabelledField(label, glance.Span(0, 0), arg_type)
+        }
+        let new_state =
+          capture.CaptureState(
+            claimed: set.insert(state.claimed, position),
+            consumed: [
+              #(position, capture.field_type(typed_field)),
+              ..state.consumed
+            ],
+            counter: case field {
+              glance.UnlabelledField(_) -> position + 1
+              _ -> state.counter
+            },
+          )
+        Ok(#(store, [typed_field, ..reversed], new_state))
+      }
+    }
+  })
+  |> result.map(fn(state) {
+    let #(store, fields, state) = state
+    #(store, list.reverse(fields), state)
+  })
 }
