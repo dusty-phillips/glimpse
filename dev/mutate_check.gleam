@@ -38,11 +38,14 @@ import simplifile
 /// Ground truth is always the real compiler, so any mutation that is not a real
 /// error is simply not counted. This makes it safe to over-generate mutants.
 ///
-/// Every mutant runs two subprocess compiles (`gleam check` plus, on
-/// rejection, glimpse `dev_check`), which dominate the runtime. To overlap
-/// them, the harness spawns a worker pool with `--jobs <n>` parallelism; each
-/// worker checks against its own copy of the project so the compiles truly run
+/// The real `gleam check` subprocess per mutant dominates the runtime, so the
+/// harness spawns a worker pool with `--jobs <n>` parallelism; each worker
+/// checks against its own copy of the project so the compiles truly run
 /// concurrently. The original project is left untouched.
+///
+/// glimpse's side is amortised with a baseline: the whole project is
+/// typechecked once up front and only the mutated module (plus its importers)
+/// is re-typechecked per mutant, in-process.
 ///
 /// Run as:
 ///   `gleam run -m dev/mutate_check -- --root <work_root> --src <src_rel> [--jobs <n>] [--kind <kind>] [--count]`
@@ -137,8 +140,41 @@ fn run(opts: Options) {
           )
           io.println(counts_by_kind(mutants))
         }
-        False ->
-          check_all(root, path, src, original, mutants, jobs, worker_token())
+        False -> {
+          // Typecheck the untouched project once so per-mutant glimpse checks
+          // only re-run the mutated module and its importers. If the project
+          // does not baseline-cleanly, fall back to scanning everything per
+          // mutant (still correct, just slower). The baseline is stored in a
+          // persistent_term keyed by the worker token: it is huge (each module
+          // environment embeds the full map of module environments), and
+          // `process.spawn` copies captured variables into each worker's heap,
+          // so passing the value through closures would balloon memory.
+          let token = worker_token()
+          let baseline_key = case dev_check.build_baseline(option.Some(root)) {
+            Ok(b) -> {
+              let key = "glimpse_baseline_" <> token
+              let _ = dev_check.store_baseline(key, b)
+              option.Some(key)
+            }
+            Error(msg) -> {
+              io.println_error(
+                "baseline typecheck failed, falling back to per-mutant scans: "
+                <> msg,
+              )
+              option.None
+            }
+          }
+          check_all(
+            root,
+            path,
+            src,
+            original,
+            mutants,
+            jobs,
+            token,
+            baseline_key,
+          )
+        }
       }
     }
   }
@@ -160,6 +196,7 @@ fn check_all(
   mutants: List(Mutant),
   jobs: Int,
   token: String,
+  baseline_key: option.Option(String),
 ) {
   io.println(
     string.inspect(list.length(mutants))
@@ -174,7 +211,7 @@ fn check_all(
   let _ =
     list.index_map(batches, fn(batch, i) {
       let worker_root = worker_dir(root, src, token, i)
-      // A previous run may have left a copy at this path; `cp -r` into an
+      // A previous run may have left a copy at this path; copying into an
       // existing directory would nest, so clear it first.
       let _ =
         shellout.command(
@@ -183,18 +220,42 @@ fn check_all(
           in: ".",
           opt: [],
         )
-      let _ =
+      // Clone the project (build cache and all) copy-on-write so the worker's
+      // first `gleam check` already has a warm cache; fall back to a plain
+      // recursive copy where clonefile is unavailable.
+      let _ = case
         shellout.command(
           run: "cp",
-          with: ["-r", root, worker_root],
+          with: ["-c", "-R", root, worker_root],
           in: ".",
           opt: [],
         )
+      {
+        Ok(_) -> Nil
+        Error(_) -> {
+          let _ =
+            shellout.command(
+              run: "cp",
+              with: ["-r", root, worker_root],
+              in: ".",
+              opt: [],
+            )
+          Nil
+        }
+      }
       process.spawn(fn() {
+        // The real `gleam check` only judges the module set glimpse sees
+        // (`src/` + deps), so the project's own `test/` directory is hidden
+        // for the whole batch rather than per mutant.
+        // Fetching the baseline by key shares the stored term instead of
+        // copying it into this worker's heap.
+        let baseline = option.map(baseline_key, dev_check.fetch_baseline)
+        hide_test_dir(worker_root)
         let results =
           list.map(batch, fn(mut) {
-            check_one_worker(i, worker_root, src, original, mut)
+            check_one_worker(i, worker_root, src, original, mut, baseline)
           })
+        show_test_dir(worker_root)
         process.send(subject, #(i, results))
       })
     })
@@ -209,6 +270,24 @@ fn check_all(
   let results = combine_results(collected, list.length(mutants))
   let false_negatives =
     list.filter(results, fn(r) { string.starts_with(r, "FALSE-NEG") })
+
+  let _ = option.map(baseline_key, dev_check.erase_baseline)
+
+  // Every worker has reported back, so this run's copies are done with. A
+  // concurrent invocation against the same root uses a different token, so its
+  // worker dirs are untouched.
+  let _ =
+    indices(workers)
+    |> list.map(fn(i) {
+      let _ =
+        shellout.command(
+          run: "rm",
+          with: ["-rf", worker_dir(root, src, token, i)],
+          in: ".",
+          opt: [],
+        )
+      Nil
+    })
 
   let _ = list.each(results, fn(r) { io.println(r) })
 
@@ -292,13 +371,14 @@ fn check_one_worker(
   src: String,
   original: String,
   mut: Mutant,
+  baseline: option.Option(dev_check.Baseline),
 ) -> String {
   let path = "/" <> string.join([worker_root, src], "/")
   write(path, mut.1)
   let result = case real_check(worker_root) {
     Ok(_) -> "real-accepts :: " <> mut.0
     Error(_) ->
-      case glimpse_check(worker_root) {
+      case glimpse_check(worker_root, src, baseline) {
         True -> {
           let record = "FALSE-NEG :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
           let _ =
@@ -3184,18 +3264,29 @@ fn write(path: String, contents: String) {
 }
 
 /// Run the real `gleam check`; Ok if it accepted the code, Error if rejected.
-/// The project's `test/` directory is temporarily hidden so the real compiler
-/// judges the same module set glimpse sees (glimpse only scans `src/` + deps).
+/// The caller hides the project's `test/` directory so the real compiler judges
+/// the same module set glimpse sees (glimpse only scans `src/` + deps).
 fn real_check(root: String) -> Result(String, String) {
+  case shellout.command(run: "gleam", with: ["check"], in: root, opt: []) {
+    Ok(out) -> Ok(out)
+    Error(_) -> Error("real gleam rejected")
+  }
+}
+
+fn hide_test_dir(root: String) {
   let test_dir = "/" <> string.join([root, "test"], "/")
-  let hide =
+  let _ =
     shellout.command(
       run: "mv",
       with: [test_dir, test_dir <> ".bak"],
       in: "/",
       opt: [],
     )
-  let check = shellout.command(run: "gleam", with: ["check"], in: root, opt: [])
+  Nil
+}
+
+fn show_test_dir(root: String) {
+  let test_dir = "/" <> string.join([root, "test"], "/")
   let _ =
     shellout.command(
       run: "mv",
@@ -3203,23 +3294,29 @@ fn real_check(root: String) -> Result(String, String) {
       in: "/",
       opt: [],
     )
-  case hide {
-    Error(_) -> Error("could not hide test dir")
-    Ok(_) ->
-      case check {
-        Ok(out) -> Ok(out)
-        Error(_) -> Error("real gleam rejected")
-      }
-  }
+  Nil
 }
 
-/// Whether glimpse's dev_check reports all modules typechecked. Runs in-process
-/// (no `gleam run -m dev_check` subprocess) so the worker's Erlang VM and the
-/// project's cached build are reused across mutants instead of booting a fresh
-/// process and re-running the build graph check each time.
-fn glimpse_check(root: String) -> Bool {
-  case dev_check.run_typecheck(option.Some(root)) {
-    Ok(_) -> True
-    Error(_) -> False
+/// Whether glimpse reports all modules typechecked. Runs in-process (no
+/// `gleam run -m dev_check` subprocess) so the worker's Erlang VM is reused
+/// across mutants instead of booting a fresh process each time. When a
+/// [dev_check.Baseline] is available, only the mutated module and its
+/// importers are re-typechecked; otherwise the whole project is re-scanned.
+fn glimpse_check(
+  root: String,
+  src: String,
+  baseline: option.Option(dev_check.Baseline),
+) -> Bool {
+  case baseline {
+    option.Some(b) ->
+      case dev_check.recheck_mutated(b, root, src) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
+    option.None ->
+      case dev_check.run_typecheck(option.Some(root)) {
+        Ok(_) -> True
+        Error(_) -> False
+      }
   }
 }

@@ -196,13 +196,18 @@ labelled arguments and record fields, tuple indexes, case patterns,
 `Ok`/`Error` variants, bit-string options, imports, `use` expressions, pipes,
 guards, and more.
 
-Each mutant runs two subprocess compiles, which dominate the runtime, so the
+The real `gleam check` subprocess per mutant dominates the runtime, so the
 harness spawns a worker pool (`--jobs <n>`, default 16). Each worker checks
-against its own private copy of the project (`<root>.w<i>`), so the compiles
-truly run concurrently and the original checkout is left untouched. The worker
-copies are keyed only by the root path, so two concurrent invocations against
-the *same* root would overwrite each other's files — run sweeps sequentially,
-one root at a time.
+against its own copy-on-write clone of the project, so the compiles truly run
+concurrently and the original checkout is left untouched. glimpse's side is
+amortised: the whole project is typechecked once up front, and each mutant only
+re-typechecks the mutated module and its importers in-process. The baseline is
+shared with the workers through an Erlang `persistent_term` (passing it through
+closures would copy it into every worker's heap). The worker copies are keyed
+by the root path, the source file, and a per-invocation token, so concurrent
+invocations against the *same* root get disjoint worker dirs — run sweeps
+sequentially, one root at a time. Each run's worker dirs are removed once it
+finishes.
 
 Flags:
 

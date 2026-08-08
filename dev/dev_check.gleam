@@ -44,6 +44,37 @@ fn parse_extra_dir(argv: List(String)) -> option.Option(String) {
   }
 }
 
+/// The precomputed, immutable result of typechecking a whole project once. The
+/// mutation harness builds this once per invocation and re-checks individual
+/// mutated modules against it, so unchanged modules (and their parsed sources)
+/// are never re-read, re-parsed, or re-typechecked.
+pub type Baseline {
+  Baseline(
+    package_name: String,
+    modules: dict.Dict(String, glimpse.Module),
+    envs: dict.Dict(String, types.Environment),
+    ordered: List(String),
+    importers: dict.Dict(String, List(String)),
+    target: target.Target,
+  )
+}
+
+/// A [Baseline] can be huge (every module environment embeds the map of all
+/// module environments, for field access on unimported modules). Erlang
+/// `spawn` copies a spawned fun's captured variables into the new process's
+/// heap, so handing the baseline to each harness worker through a closure
+/// capture would duplicate that whole graph per worker. Instead the harness
+/// stores the baseline once in a `persistent_term` and each worker reads it
+/// back by key, which shares the term without copying it.
+@external(erlang, "persistent_term", "put")
+pub fn store_baseline(key: String, baseline: Baseline) -> Nil
+
+@external(erlang, "persistent_term", "get")
+pub fn fetch_baseline(key: String) -> Baseline
+
+@external(erlang, "persistent_term", "erase")
+pub fn erase_baseline(key: String) -> Bool
+
 /// Typecheck the package rooted at `extra_project` (when given) or this
 /// package's own `src/` and `dev/`, returning the typecheck result. Prints
 /// nothing itself so callers (like the mutation harness) can run it in-process
@@ -51,15 +82,19 @@ fn parse_extra_dir(argv: List(String)) -> option.Option(String) {
 pub fn run_typecheck(
   extra_project: option.Option(String),
 ) -> Result(Nil, String) {
+  build_baseline(extra_project)
+  |> result.map(fn(_) { Nil })
+}
+
+/// Parse every module of the project and typecheck all of them, returning the
+/// cached [Baseline]. The baseline must typecheck cleanly; callers that re-check
+/// individual modules against it trust the unchanged modules' environments.
+pub fn build_baseline(
+  extra_project: option.Option(String),
+) -> Result(Baseline, String) {
   use src_entries <- result.try(case extra_project {
     option.None -> scan_project_dir("src")
-    option.Some(root) -> {
-      let root = case string.ends_with(root, "/") {
-        True -> root
-        False -> root <> "/"
-      }
-      scan_project_dir(root <> "src")
-    }
+    option.Some(root) -> scan_project_dir(with_trailing_slash(root) <> "src")
   })
 
   let build_target = case extra_project {
@@ -74,13 +109,8 @@ pub fn run_typecheck(
 
   let dep_entries = case extra_project {
     option.None -> scan_build_packages("build/packages/")
-    option.Some(root) -> {
-      let root = case string.ends_with(root, "/") {
-        True -> root
-        False -> root <> "/"
-      }
-      scan_build_packages(root <> "build/packages/")
-    }
+    option.Some(root) ->
+      scan_build_packages(with_trailing_slash(root) <> "build/packages/")
   }
 
   let all_entries = list.flatten([dep_entries, src_entries, dev_entries])
@@ -92,24 +122,144 @@ pub fn run_typecheck(
     }
     option.None -> "glimpse"
   }
-  let package = glimpse.Package(package_name, module_dict, [])
 
   let import_graph =
-    dict.map_values(package.modules, fn(_, value) { value.dependencies })
+    dict.map_values(module_dict, fn(_, value) { value.dependencies })
 
   use ordered <- result.try(sort_from_all_roots(import_graph))
 
-  list.try_fold(
+  use envs <- result.try(fold_typecheck(
+    module_dict,
     ordered,
     dict.new(),
+    build_target,
+  ))
+
+  Ok(Baseline(
+    package_name,
+    module_dict,
+    envs,
+    ordered,
+    reverse_graph(import_graph),
+    build_target,
+  ))
+}
+
+/// Re-typecheck a single mutated module against a precomputed [Baseline]. The
+/// mutant is read from `<worker_root>/<src_rel>` (the harness writes it there);
+/// every other module's parsed source and environment comes from the baseline.
+///
+/// Only the mutated module and the modules that import it (transitively) are
+/// re-typechecked: a module's environment depends only on its own definitions
+/// and its imports' environments, so no other module can be affected.
+pub fn recheck_mutated(
+  baseline: Baseline,
+  worker_root: String,
+  src_rel: String,
+) -> Result(Nil, String) {
+  let path = "/" <> string.join([worker_root, src_rel], "/")
+  use mutated_source <- result.try(
+    simplifile.read(from: path)
+    |> result.map_error(fn(_) { "cannot read " <> path }),
+  )
+  use mutated_glance <- result.try(
+    glance.module(mutated_source)
+    |> result.map_error(fn(_) { "parse error in " <> path }),
+  )
+  let mutated_name = src_rel_to_module_name(src_rel)
+  let mutated_module = glimpse.load_module(mutated_glance, mutated_name)
+
+  let affected = transitive_importers(baseline.importers, mutated_name)
+  let modules = dict.insert(baseline.modules, mutated_name, mutated_module)
+  let envs =
+    dict.filter(baseline.envs, fn(name, _) { !list.contains(affected, name) })
+  let affected_ordered =
+    list.filter(baseline.ordered, fn(name) { list.contains(affected, name) })
+
+  fold_typecheck(modules, affected_ordered, envs, baseline.target)
+  |> result.map(fn(_) { Nil })
+}
+
+/// The module name of a `src/`-relative path like `src/lustre/element.gleam`
+/// (`lustre/element`), matching how the baseline named its src modules.
+fn src_rel_to_module_name(src_rel: String) -> String {
+  let name = case string.starts_with(src_rel, "src/") {
+    True -> string.drop_start(src_rel, 4)
+    False -> src_rel
+  }
+  string.drop_end(name, 6)
+}
+
+/// The name of every module that imports `start`, transitively, plus `start`
+/// itself.
+fn transitive_importers(
+  importers: dict.Dict(String, List(String)),
+  start: String,
+) -> List(String) {
+  transitive_importers_(importers, [start], set.new())
+}
+
+fn transitive_importers_(
+  importers: dict.Dict(String, List(String)),
+  frontier: List(String),
+  seen: set.Set(String),
+) -> List(String) {
+  case frontier {
+    [] -> set.to_list(seen)
+    [name, ..rest] -> {
+      case set.contains(seen, name) {
+        True -> transitive_importers_(importers, rest, seen)
+        False -> {
+          let seen = set.insert(seen, name)
+          let next = dict.get(importers, name) |> result.unwrap([])
+          transitive_importers_(importers, list.append(next, rest), seen)
+        }
+      }
+    }
+  }
+}
+
+/// Invert an import graph (`module` -> `dependencies`) into a map of
+/// `module` -> modules that import it.
+fn reverse_graph(
+  import_graph: dict.Dict(String, List(String)),
+) -> dict.Dict(String, List(String)) {
+  list.fold(dict.to_list(import_graph), dict.new(), fn(acc, entry) {
+    let #(module_name, deps) = entry
+    list.fold(deps, acc, fn(acc2, dep) {
+      let importers = dict.get(acc2, dep) |> result.unwrap([])
+      dict.insert(acc2, dep, [module_name, ..importers])
+    })
+  })
+}
+
+fn with_trailing_slash(dir: String) -> String {
+  case string.ends_with(dir, "/") {
+    True -> dir
+    False -> dir <> "/"
+  }
+}
+
+/// Typecheck `ordered` modules (dependencies first) in turn, threading the
+/// growing map of module environments seeded from `envs`. `modules` must
+/// contain every name in `ordered`.
+fn fold_typecheck(
+  modules: dict.Dict(String, glimpse.Module),
+  ordered: List(String),
+  envs: dict.Dict(String, types.Environment),
+  target: target.Target,
+) -> Result(dict.Dict(String, types.Environment), String) {
+  list.try_fold(
+    ordered,
+    envs,
     fn(module_envs: dict.Dict(String, types.Environment), next_module: String) -> Result(
       dict.Dict(String, types.Environment),
       String,
     ) {
-      case dict.get(package.modules, next_module) {
+      case dict.get(modules, next_module) {
         Error(_) -> Error("missing module " <> next_module)
         Ok(glimpse_module) ->
-          case typecheck.module(glimpse_module, module_envs, build_target) {
+          case typecheck.module(glimpse_module, module_envs, target) {
             Error(err) -> Error(next_module <> ": " <> string.inspect(err))
             Ok(#(_, module_env)) ->
               Ok(dict.insert(module_envs, next_module, module_env))
@@ -117,7 +267,6 @@ pub fn run_typecheck(
       }
     },
   )
-  |> result.map(fn(_) { Nil })
 }
 
 /// Scan a project source directory (`src/` or `dev/`) for .gleam modules.
