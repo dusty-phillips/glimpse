@@ -320,6 +320,7 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "bitreorder ",
     "letswap ",
     "importfn ",
+    "use ",
     "import ",
   ]
   list.map(kinds, fn(kind) {
@@ -1309,6 +1310,65 @@ fn find_clause_pattern(line: String) -> option.Option(#(Int, Int)) {
   }
 }
 
+/// Kind `use`: rename the target of a `use` statement (`use x <- Foo(...)`
+/// -> `use x <- Foo__zzz(...)`), so the use-expression target must resolve.
+/// Exercises the `use` desugaring path in the typechecker.
+fn use_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_use_target(line) {
+      option.None -> []
+      option.Some(#(start, end)) -> {
+        let target = string.slice(line, at_index: start, length: end - start)
+        let renamed = target <> "__zzz"
+        let mutated =
+          string.slice(line, at_index: 0, length: start)
+          <> renamed
+          <> string.slice(
+            line,
+            at_index: end,
+            length: string.length(line) - end,
+          )
+        [#("use rename", source_of(lines, idx, mutated))]
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find the target function name of a `use` statement (`use x <- Foo`). Returns
+/// the offsets of the target token.
+fn find_use_target(line: String) -> option.Option(#(Int, Int)) {
+  case string.contains(line, "use ") && string.contains(line, " <- ") {
+    False -> option.None
+    True ->
+      find_use_arrow(line, 0)
+      |> option.then(fn(arrow) {
+        case skip_spaces(line, arrow + 2) {
+          option.Some(target_start) -> {
+            let target_end = simple_token_end(line, target_start)
+            case target_end == target_start {
+              True -> option.None
+              False -> option.Some(#(target_start, target_end))
+            }
+          }
+          option.None -> option.None
+        }
+      })
+  }
+}
+
+fn find_use_arrow(line: String, index: Int) -> option.Option(Int) {
+  case index + 1 >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 2) == "<-" {
+        True -> option.Some(index)
+        False -> find_use_arrow(line, index + 1)
+      }
+  }
+}
+
 fn casepat_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     let line = fetch(lines, idx)
@@ -1847,6 +1907,7 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(bitreorder_mutants(lines))
   |> list.append(letswap_mutants(lines))
   |> list.append(importfn_mutants(lines))
+  |> list.append(use_mutants(lines))
   |> list.append(import_mutants(lines))
 }
 
