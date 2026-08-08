@@ -312,6 +312,7 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "casepat ",
     "typeparam ",
     "bitreorder ",
+    "letswap ",
     "importfn ",
     "import ",
   ]
@@ -1133,6 +1134,104 @@ fn collect_annotations(
 /// subjects (`case a, b` -> `case b, a`) makes each subject match the wrong
 /// pattern; dropping the second subject breaks pattern-count alignment. Either
 /// way the real compiler rejects the clause.
+/// Kind `letswap`: swap the right-hand sides of two adjacent `let` bindings
+/// whose values are simple tokens, e.g.
+/// `let a = x` / `let b = y` becomes `let a = y` / `let b = x`. If the two
+/// values have different types, later uses of the names diverge and the real
+/// compiler rejects.
+fn letswap_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    case find_let_rhs(fetch(lines, idx)) {
+      option.None -> []
+      option.Some(rhs) ->
+        case find_let_rhs(fetch(lines, idx + 1)) {
+          option.None -> []
+          option.Some(next_rhs) -> {
+            let #(start_a, end_a) = rhs
+            let #(start_b, end_b) = next_rhs
+            let line_a = fetch(lines, idx)
+            let line_b = fetch(lines, idx + 1)
+            let first =
+              string.slice(line_a, at_index: start_a, length: end_a - start_a)
+            let second =
+              string.slice(line_b, at_index: start_b, length: end_b - start_b)
+            case first == second {
+              True -> []
+              False -> {
+                let new_a =
+                  string.slice(line_a, at_index: 0, length: start_a)
+                  <> second
+                  <> string.slice(
+                    line_a,
+                    at_index: end_a,
+                    length: string.length(line_a) - end_a,
+                  )
+                let new_b =
+                  string.slice(line_b, at_index: 0, length: start_b)
+                  <> first
+                  <> string.slice(
+                    line_b,
+                    at_index: end_b,
+                    length: string.length(line_b) - end_b,
+                  )
+                let new_lines =
+                  replace_at(lines, idx, new_a)
+                  |> replace_at(idx + 1, new_b)
+                [#("letswap swap", string.join(new_lines, "\n"))]
+              }
+            }
+          }
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find `let name = simple_token` on a line. Returns the offsets of the value
+/// token.
+fn find_let_rhs(line: String) -> option.Option(#(Int, Int)) {
+  case string.contains(line, "let ") && string.contains(line, " = ") {
+    False -> option.None
+    True -> {
+      let equals = find_char(line, "=")
+      case equals {
+        option.None -> option.None
+        option.Some(eq) -> {
+          case skip_spaces(line, eq + 1) {
+            option.Some(value_start) -> {
+              let value_end = simple_token_end(line, value_start)
+              case value_end == value_start {
+                True -> option.None
+                False -> option.Some(#(value_start, value_end))
+              }
+            }
+            option.None -> option.None
+          }
+        }
+      }
+    }
+  }
+}
+
+fn find_char(line: String, target: String) -> option.Option(Int) {
+  find_char_from(line, 0, target)
+}
+
+fn find_char_from(
+  line: String,
+  index: Int,
+  target: String,
+) -> option.Option(Int) {
+  case index >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 1) == target {
+        True -> option.Some(index)
+        False -> find_char_from(line, index + 1, target)
+      }
+  }
+}
+
 fn casepat_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     let line = fetch(lines, idx)
@@ -1675,6 +1774,7 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(casepat_mutants(lines))
   |> list.append(typeparam_mutants(lines))
   |> list.append(bitreorder_mutants(lines))
+  |> list.append(letswap_mutants(lines))
   |> list.append(importfn_mutants(lines))
   |> list.append(import_mutants(lines))
 }
