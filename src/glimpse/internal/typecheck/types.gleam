@@ -834,10 +834,8 @@ fn unify_callable_types(
         instantiated_left,
         instantiated_right,
         lp,
-        ll,
         lr,
         rp,
-        rl,
         rr,
       )
     _, _ -> Error(mismatch_error(environment, left, right))
@@ -850,10 +848,8 @@ fn unify_callables(
   left: Type,
   right: Type,
   left_parameters: List(Type),
-  _left_labels: dict.Dict(String, Int),
   left_return: Type,
   right_parameters: List(Type),
-  _right_labels: dict.Dict(String, Int),
   right_return: Type,
 ) -> Result(TypeStore, error.TypeCheckError) {
   // Function types unify positionally. Argument labels are not part of the
@@ -1883,6 +1879,19 @@ pub fn is_prelude_type(type_: Type) -> Bool {
   case type_ {
     CustomType(module, _, _, _) -> is_prelude_module(module)
     _ -> False
+  }
+}
+
+/// Build the prelude `List` type over the given element type.
+pub fn list_type(element: Type) -> Type {
+  CustomType("gleam", "List", [element], option.None)
+}
+
+/// The element type when the type is the prelude `List`, otherwise `None`.
+pub fn list_element_type(type_: Type) -> Option(Type) {
+  case type_ {
+    CustomType("gleam", "List", [element], _) -> option.Some(element)
+    _ -> option.None
   }
 }
 

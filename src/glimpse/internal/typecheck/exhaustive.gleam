@@ -118,7 +118,7 @@ fn at(items: List(a), index: Int) -> option.Option(a) {
 }
 
 /// The integers from `from` (inclusive) up to `upto` (exclusive).
-fn range(from: Int, upto: Int) -> List(Int) {
+pub fn range(from: Int, upto: Int) -> List(Int) {
   case from < upto {
     True -> [from, ..range(from + 1, upto)]
     False -> []

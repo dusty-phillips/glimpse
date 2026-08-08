@@ -328,7 +328,7 @@ fn use_callback_position(
   // positional arguments have claimed their slots.
   let #(_, position) =
     list.fold_until(
-      index_range(param_count),
+      exhaustive.range(0, param_count),
       #(positional_count, 0),
       fn(state, position) {
         let #(remaining, _) = state
@@ -886,11 +886,7 @@ fn list_expression(
   use #(store, element_type) <- result.try(element_type_result)
 
   case rest {
-    option.None ->
-      Ok(#(
-        store,
-        types.CustomType("gleam", "List", [element_type], option.None),
-      ))
+    option.None -> Ok(#(store, types.list_type(element_type)))
     option.Some(rest_expr) -> {
       use #(store, rest_type) <- result.try(expression(
         environment,
@@ -914,21 +910,14 @@ fn list_expression(
           "list rest must be a list",
         )
       }
-      types.unify(
-        store,
-        environment,
-        rest_type,
-        types.CustomType("gleam", "List", [rest_element], option.None),
-      )
+      types.unify(store, environment, rest_type, types.list_type(rest_element))
       |> result.map_error(mismatch)
       |> result.map(fn(store) {
         types.unify(store, environment, element_type, rest_element)
       })
       |> result.flatten
       |> result.map_error(mismatch)
-      |> result.map(fn(store) {
-        #(store, types.CustomType("gleam", "List", [element_type], option.None))
-      })
+      |> result.map(fn(store) { #(store, types.list_type(element_type)) })
     }
   }
 }
@@ -1554,24 +1543,29 @@ fn check_update_linked_field(
   }
 }
 
-/// Duplicate field labels within a single record update are an error.
-fn check_update_no_duplicate_fields(
-  fields: List(glance.RecordUpdateField(glance.Expression)),
-) -> Result(Nil, error.TypeCheckError) {
-  let relevant = fields |> list.map(fn(field) { field.label })
-  let #(_seen, duplicate) =
-    list.fold(relevant, #(set.new(), option.None), fn(state, label) {
+/// The first element of `names` that appears twice, if any.
+pub fn find_duplicate(names: List(String)) -> Option(String) {
+  let #(_seen, found) =
+    list.fold(names, #(set.new(), option.None), fn(state, name) {
       let #(seen, found) = state
       case found {
         option.Some(_) -> state
         option.None ->
-          case set.contains(seen, label) {
-            True -> #(seen, option.Some(label))
-            False -> #(set.insert(seen, label), option.None)
+          case set.contains(seen, name) {
+            True -> #(seen, option.Some(name))
+            False -> #(set.insert(seen, name), option.None)
           }
       }
     })
-  case duplicate {
+  found
+}
+
+/// Duplicate field labels within a single record update are an error.
+fn check_update_no_duplicate_fields(
+  fields: List(glance.RecordUpdateField(glance.Expression)),
+) -> Result(Nil, error.TypeCheckError) {
+  let labels = fields |> list.map(fn(field) { field.label })
+  case find_duplicate(labels) {
     option.Some(label) -> Error(error.DuplicateArgument(label))
     option.None -> Ok(Nil)
   }
@@ -2330,7 +2324,9 @@ fn is_record_construction(function: glance.Expression) -> Bool {
 
 fn is_upper_first(name: String) -> Bool {
   string.first(name)
-  |> result.map(fn(first) { string.uppercase(first) == first })
+  |> result.map(fn(first) {
+    string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", first)
+  })
   |> result.unwrap(False)
 }
 
@@ -2822,7 +2818,7 @@ fn pipe_value_into_callable(
       }
     })
   let piped_position =
-    index_range(list.length(parameters) + 1)
+    exhaustive.range(0, list.length(parameters) + 1)
     |> list.find(fn(position) { !set.contains(labelled_claimed, position) })
     |> result.unwrap(0)
 

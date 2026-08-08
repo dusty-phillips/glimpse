@@ -124,9 +124,9 @@ pub fn module(
       glimpse_module.module.constants
       |> list.map(fn(definition) { definition.definition.name }),
     )
-  use _ <- result.try(case list_has_duplicate(definitions) {
-    Ok(name) -> Error(error.DuplicateDefinition(name))
-    Error(_) -> Ok(Nil)
+  use _ <- result.try(case intern.find_duplicate(definitions) {
+    option.Some(name) -> Error(error.DuplicateDefinition(name))
+    option.None -> Ok(Nil)
   })
 
   // A custom type annotated `@external` may not declare constructors.
@@ -462,9 +462,9 @@ pub fn type_alias(
   environment: Environment,
   alias: glance.TypeAlias,
 ) -> EnvironmentResult {
-  use _ <- result.try(case list_has_duplicate(alias.parameters) {
-    Ok(name) -> Error(error.DuplicateTypeParameter(name))
-    Error(_) -> Ok(Nil)
+  use _ <- result.try(case intern.find_duplicate(alias.parameters) {
+    option.Some(name) -> Error(error.DuplicateTypeParameter(name))
+    option.None -> Ok(Nil)
   })
   // Every declared type parameter must be used in the aliased type.
   case
@@ -540,9 +540,9 @@ pub fn custom_type_declaration(
   case clash_with_existing(environment, custom_type.name) {
     True -> Error(error.DuplicateCustomType(custom_type.name))
     False -> {
-      use _ <- result.try(case list_has_duplicate(custom_type.parameters) {
-        Ok(name) -> Error(error.DuplicateTypeParameter(name))
-        Error(_) -> Ok(Nil)
+      use _ <- result.try(case intern.find_duplicate(custom_type.parameters) {
+        option.Some(name) -> Error(error.DuplicateTypeParameter(name))
+        option.None -> Ok(Nil)
       })
       let environment =
         environment
@@ -569,9 +569,9 @@ pub fn custom_type_constructors(
 ) -> EnvironmentResult {
   // Two variants may not share a constructor name.
   let names = custom_type.variants |> list.map(fn(variant) { variant.name })
-  use _ <- result.try(case list_has_duplicate(names) {
-    Ok(name) -> Error(error.DuplicateConstructor(name))
-    Error(_) -> Ok(Nil)
+  use _ <- result.try(case intern.find_duplicate(names) {
+    option.Some(name) -> Error(error.DuplicateConstructor(name))
+    option.None -> Ok(Nil)
   })
   // A constructor may not declare the same label twice.
   use _ <- result.try(
@@ -585,32 +585,13 @@ pub fn custom_type_constructors(
           }
         })
         |> list.filter(fn(label) { label != "" })
-      case list_has_duplicate(labels) {
-        Ok(label) -> Error(error.DuplicateLabel(label))
-        Error(_) -> Ok(Nil)
+      case intern.find_duplicate(labels) {
+        option.Some(label) -> Error(error.DuplicateLabel(label))
+        option.None -> Ok(Nil)
       }
     }),
   )
   custom_type_constructors_(environment, custom_type)
-}
-
-fn list_has_duplicate(names: List(String)) -> Result(String, Nil) {
-  let #(_seen, found) =
-    list.fold(names, #(set.new(), option.None), fn(state, name) {
-      let #(seen, found) = state
-      case found {
-        option.Some(_) -> state
-        option.None ->
-          case set.contains(seen, name) {
-            True -> #(seen, option.Some(name))
-            False -> #(set.insert(seen, name), option.None)
-          }
-      }
-    })
-  case found {
-    option.Some(name) -> Ok(name)
-    option.None -> Error(Nil)
-  }
 }
 
 fn custom_type_constructors_(

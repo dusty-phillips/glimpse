@@ -122,27 +122,28 @@ pub fn typecheck_pattern(
     }
 
     glance.PatternList(_, elements, tail) -> {
-      use #(store, element_type) <- result.try(case expected_type {
-        types.CustomType("gleam", "List", [element_type], option.None) ->
-          Ok(#(store, element_type))
-        _ -> {
-          let #(store, element_type) = types.fresh_var(store)
-          types.unify(
-            store,
-            environment,
-            expected_type,
-            types.CustomType("gleam", "List", [element_type], option.None),
-          )
-          |> result.map(fn(store) { #(store, element_type) })
-          |> result.map_error(fn(_) {
-            error.PatternMismatch(
-              "list pattern",
-              "List",
-              types.to_string(environment, expected_type),
+      use #(store, element_type) <- result.try(
+        case types.list_element_type(expected_type) {
+          option.Some(element_type) -> Ok(#(store, element_type))
+          option.None -> {
+            let #(store, element_type) = types.fresh_var(store)
+            types.unify(
+              store,
+              environment,
+              expected_type,
+              types.list_type(element_type),
             )
-          })
-        }
-      })
+            |> result.map(fn(store) { #(store, element_type) })
+            |> result.map_error(fn(_) {
+              error.PatternMismatch(
+                "list pattern",
+                "List",
+                types.to_string(environment, expected_type),
+              )
+            })
+          }
+        },
+      )
       use #(store, environment) <- result.try(fold_patterns(
         environment,
         store,
@@ -155,7 +156,7 @@ pub fn typecheck_pattern(
           typecheck_pattern(
             environment,
             store,
-            types.CustomType("gleam", "List", [element_type], option.None),
+            types.list_type(element_type),
             tail_pattern,
           )
           |> result.map(fn(new_state) {
