@@ -503,10 +503,9 @@ pub fn extend_tuple(
               let #(store, new_elements) = fresh_vars(store, missing)
               let extended_elements = list.append(elements, new_elements)
               let extended = TupleType(extended_elements)
-              let element =
+              let assert Ok(element) =
                 list.drop(extended_elements, up_to: index)
                 |> list.first
-                |> result.unwrap(GenericTypeVariable("todo"))
               Ok(#(
                 TypeStore(
                   ..store,

@@ -1352,10 +1352,8 @@ fn variant_field_type(
 
   dict.get(labels, label)
   |> result.map(fn(position) {
-    let expected_type =
-      list.drop(parameters, up_to: position)
-      |> list.first
-      |> result.unwrap(types.GenericTypeVariable("todo"))
+    let assert Ok(expected_type) =
+      list.drop(parameters, up_to: position) |> list.first
     let #(_, expected_type) = types.resolve_keep_rigid(store, expected_type)
     #(store, expected_type)
   })
@@ -1440,10 +1438,8 @@ fn record_update(
           )
         })
         |> result.try(fn(position) {
-          let expected_type =
-            list.drop(parameters, up_to: position)
-            |> list.first
-            |> result.unwrap(types.GenericTypeVariable("todo"))
+          let assert Ok(expected_type) =
+            list.drop(parameters, up_to: position) |> list.first
           let #(_, expected_type) = types.resolve(store, expected_type)
           case field.item {
             option.None -> {
