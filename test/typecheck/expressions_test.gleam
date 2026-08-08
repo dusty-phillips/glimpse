@@ -480,3 +480,27 @@ pub fn zero_arg_variant_constructor_test() {
       types.CustomType("main_module", "Foo", [], option.None),
     ))
 }
+
+pub fn invalid_escape_string_literal_test() {
+  assert helpers.error_function_typecheck("fn foo() -> String { \"a\\1b\" }")
+    == error.InvalidEscape("a\\1b")
+}
+
+pub fn invalid_escape_string_pattern_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: String) -> Int {
+    case x {
+      \"a\\1b\" -> 1
+      _ -> 0
+    }
+  }",
+    )
+    == error.InvalidEscape("a\\1b")
+}
+
+pub fn invalid_escape_bit_string_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo() -> BitArray { <<\"x\\1y\">> }",
+    )
+    == error.InvalidEscape("x\\1y")
+}

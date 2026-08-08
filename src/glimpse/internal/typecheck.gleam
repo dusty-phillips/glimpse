@@ -6,6 +6,7 @@ import gleam/option.{type Option}
 import gleam/result
 import gleam/set
 import gleam/string
+import glexer
 import glimpse/error
 import glimpse/internal/typecheck/bit_string_segment
 import glimpse/internal/typecheck/calls
@@ -565,7 +566,11 @@ fn typecheck_with_expected(
         True -> Ok(#(store, types.FloatType))
         False -> Error(error.FloatOutOfRange(value))
       }
-    glance.String(_, _) -> Ok(#(store, types.StringType))
+    glance.String(_, value) ->
+      case glexer.unescape_string(value) {
+        Ok(_) -> Ok(#(store, types.StringType))
+        Error(_) -> Error(error.InvalidEscape(value))
+      }
     glance.Variable(_, "Nil") -> Ok(#(store, types.NilType))
     glance.Variable(_, "True") | glance.Variable(_, "False") ->
       Ok(#(store, types.BoolType))

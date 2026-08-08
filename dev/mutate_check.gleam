@@ -137,7 +137,8 @@ fn run(opts: Options) {
           )
           io.println(counts_by_kind(mutants))
         }
-        False -> check_all(root, path, src, original, mutants, jobs)
+        False ->
+          check_all(root, path, src, original, mutants, jobs, worker_token())
       }
     }
   }
@@ -146,10 +147,11 @@ fn run(opts: Options) {
 /// Check every mutant, `jobs` at a time. Each worker gets a private copy of
 /// the project (with its generated files) so the subprocess compiles overlap.
 ///
-/// The worker copies are keyed only by the root path (`<root>.w<i>`), so two
-/// concurrent invocations against the *same* root would share worker dirs and
-/// overwrite each other's mutant files, corrupting results. Run sweeps
-/// sequentially, one root at a time.
+/// The worker copies are keyed by the root path, the source file, and a
+/// per-invocation token (`<root>.<src>.w<i>.<token>`), so concurrent
+/// invocations -- even against the same root -- get disjoint worker dirs and
+/// cannot overwrite each other's mutant files. Worker dirs are still cleaned
+/// with `rm -rf` before use in case a previous run left a stale copy.
 fn check_all(
   root: String,
   path: String,
@@ -157,6 +159,7 @@ fn check_all(
   original: String,
   mutants: List(Mutant),
   jobs: Int,
+  token: String,
 ) {
   io.println(
     string.inspect(list.length(mutants))
@@ -170,7 +173,7 @@ fn check_all(
   let subject = process.new_subject()
   let _ =
     list.index_map(batches, fn(batch, i) {
-      let worker_root = worker_dir(root, i)
+      let worker_root = worker_dir(root, src, token, i)
       // A previous run may have left a copy at this path; `cp -r` into an
       // existing directory would nest, so clear it first.
       let _ =
@@ -261,8 +264,24 @@ fn combine_results(
   list.flatten(list.map(collected, fn(p) { p.1 }))
 }
 
-fn worker_dir(root: String, i: Int) -> String {
-  root <> ".w" <> int.to_string(i)
+fn worker_dir(root: String, src: String, token: String, i: Int) -> String {
+  root
+  <> "."
+  <> string.replace(src, "/", "_")
+  <> ".w"
+  <> int.to_string(i)
+  <> "."
+  <> token
+}
+
+/// A unique-per-invocation token for keying worker directories. Nanosecond
+/// wall-clock time distinguishes concurrent invocations; fall back to the
+/// current process's identifier if the clock is unavailable.
+fn worker_token() -> String {
+  case shellout.command(run: "date", with: ["+%s%N"], in: ".", opt: []) {
+    Ok(out) -> string.trim(out)
+    Error(_) -> string.inspect(process.self())
+  }
 }
 
 /// Run one mutant in a worker: write the mutant into the worker's copy, run
@@ -323,7 +342,17 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "letswap ",
     "importfn ",
     "use ",
+    "usepat ",
     "import ",
+    "capture ",
+    "fn ",
+    "assert ",
+    "listlit ",
+    "tuptype ",
+    "pipe2 ",
+    "casepat2 ",
+    "recupd ",
+    "bitsize ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -538,6 +567,109 @@ fn tuple_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `tuptype`: swap the two elements of a tuple *type* annotation
+/// (`#(Int, String)` becomes `#(String, Int)`). A `:` or `->` annotation of the
+/// flipped tuple no longer matches the value or function it annotates, so the
+/// real compiler rejects. Tuple patterns (lowercase elements) and tuple
+/// expressions (`#(Ok, Error)` etc.) are skipped by requiring both elements to
+/// be primitive type names. The `tuple` kind only mutates `.N` accessors and
+/// `sigswap` only handles primitives and `List(...)`, so these annotations have
+/// no other coverage.
+fn tuptype_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_tuple_type(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) ->
+        swap_token_spans(
+          lines,
+          idx,
+          first_start,
+          first_end,
+          second_start,
+          second_end,
+          "tuptype swap",
+        )
+    }
+  })
+  |> list.flatten
+}
+
+/// Find `#(Type, Type)` where both elements are primitive type names, returning
+/// the offsets of the two type tokens. Scans past `#(` pairs that are tuple
+/// patterns or expressions.
+fn find_tuple_type(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  find_tuple_type_from(line, 0)
+}
+
+fn find_tuple_type_from(
+  line: String,
+  index: Int,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case index >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 1) {
+        "#" ->
+          case read_call_args(line, index + 1) {
+            option.Some(#(
+              _call_start,
+              first_start,
+              first_end,
+              second_start,
+              second_end,
+            )) -> {
+              let first =
+                string.slice(
+                  line,
+                  at_index: first_start,
+                  length: first_end - first_start,
+                )
+              let second =
+                string.slice(
+                  line,
+                  at_index: second_start,
+                  length: second_end - second_start,
+                )
+              case
+                is_type_name(first) && is_type_name(second) && first != second
+              {
+                True ->
+                  option.Some(#(
+                    first_start,
+                    first_end,
+                    second_start,
+                    second_end,
+                  ))
+                False -> find_tuple_type_from(line, index + 1)
+              }
+            }
+            option.None -> find_tuple_type_from(line, index + 1)
+          }
+        _ -> find_tuple_type_from(line, index + 1)
+      }
+  }
+}
+
+/// Whether `token` is a primitive type name that can appear bare in a tuple
+/// type annotation.
+fn is_type_name(token: String) -> Bool {
+  list.contains(
+    [
+      "Int",
+      "String",
+      "Bool",
+      "Float",
+      "Nil",
+      "List",
+      "Option",
+      "Result",
+      "Dict",
+    ],
+    token,
+  )
+}
+
 /// Kind `arity`: give a two-argument call one argument too few or too many, so
 /// the real compiler reports a wrong-arity error. The ground-truth filter keeps
 /// mutations of variadic-ish or single-parameter functions out of the count.
@@ -587,6 +719,92 @@ fn arity_mutants(lines: List(String)) -> List(Mutant) {
     }
   })
   |> list.flatten
+}
+
+/// Kind `fn`: drop the parameters of an anonymous function (`fn(x) { ... }`
+/// becomes `fn() { ... }`). The result has the wrong arity for any higher-order
+/// call, and a body that still names the dropped parameters references unbound
+/// names, so the real compiler rejects it. The `arity` kind only sees simple
+/// tokens, so a lambda in an argument (which contains `{`) is invisible to it.
+fn fn_arity_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_lambda_parens(line) {
+      option.None -> []
+      option.Some(#(open_index, close_index)) -> {
+        let dropped =
+          string.slice(line, at_index: 0, length: open_index)
+          <> "()"
+          <> string.slice(
+            line,
+            at_index: close_index,
+            length: string.length(line) - close_index,
+          )
+        [#("fn drop-params", source_of(lines, idx, dropped))]
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find the parens of the first `fn(<simple params>)` on `line`, where the
+/// parameter list is a non-empty run of simple tokens, commas, and spaces.
+/// Returns the offsets of the opening `(` and the closing `)`.
+fn find_lambda_parens(line: String) -> option.Option(#(Int, Int)) {
+  find_lambda_parens_from(line, 0)
+}
+
+fn find_lambda_parens_from(
+  line: String,
+  index: Int,
+) -> option.Option(#(Int, Int)) {
+  case find_substring_from(line, index, "fn(") {
+    option.None -> option.None
+    option.Some(fn_index) -> {
+      let open_index = fn_index + 2
+      case simple_params_end(line, open_index + 1, False) {
+        option.None -> find_lambda_parens_from(line, fn_index + 2)
+        option.Some(close_index) ->
+          case
+            byte_at(line, fn_index - 1) == ""
+            || !is_identifier_char(byte_at(line, fn_index - 1))
+          {
+            True -> option.Some(#(open_index, close_index))
+            False -> find_lambda_parens_from(line, fn_index + 2)
+          }
+      }
+    }
+  }
+}
+
+/// Scan a parameter list from `from` until the `)`. Returns the `)` index when
+/// the list is non-empty and contains only simple parameter characters (simple
+/// tokens, commas, and spaces); `None` when it is empty or holds an annotated
+/// parameter (`:`) or anything else.
+fn simple_params_end(
+  line: String,
+  index: Int,
+  seen_token: Bool,
+) -> option.Option(Int) {
+  case index >= string.length(line) {
+    True -> option.None
+    False -> {
+      let ch = string.slice(line, at_index: index, length: 1)
+      case ch {
+        ")" ->
+          case seen_token {
+            True -> option.Some(index)
+            False -> option.None
+          }
+        " " | "," -> simple_params_end(line, index + 1, seen_token)
+        _ ->
+          case is_simple_arg_char(ch) {
+            True -> simple_params_end(line, index + 1, True)
+            False -> option.None
+          }
+      }
+    }
+  }
 }
 
 /// Kind `negate`: prepend a unary negation to an identifier. `-x` demands an
@@ -661,6 +879,22 @@ fn pattern_mutants(lines: List(String)) -> List(Mutant) {
     swap_on_line(lines, idx, "pattern 1->2", "1", "2")
     |> list.append(swap_on_line(lines, idx, "pattern 2->1", "2", "1"))
     |> list.append(swap_on_line(lines, idx, "pattern 0->1", "0", "1"))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "pattern \"a\"->\"b\"",
+      "\"a\"",
+      "\"b\"",
+    ))
+    |> list.append(swap_on_line(
+      lines,
+      idx,
+      "pattern \"b\"->\"a\"",
+      "\"b\"",
+      "\"a\"",
+    ))
+    |> list.append(swap_on_line(lines, idx, "pattern 0.0->1.0", "0.0", "1.0"))
+    |> list.append(swap_on_line(lines, idx, "pattern 1.0->0.0", "1.0", "0.0"))
   })
   |> list.flatten
 }
@@ -752,6 +986,95 @@ fn literal_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `assert`: replace the value of an `assert` statement with a String
+/// literal, so the forced Bool no longer holds (`assert x` becomes
+/// `assert "a"`). `let assert` pattern-assertions are skipped: they do not
+/// assert a Bool and start with `let`.
+fn assert_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    let trimmed = string.trim(line)
+    case string.starts_with(trimmed, "assert ") {
+      False -> []
+      True -> {
+        let assert_offset = string.length(line) - string.length(trimmed) + 7
+        case first_simple_start(line, assert_offset) {
+          option.None -> []
+          option.Some(start) -> {
+            let end = simple_token_end(line, start)
+            let mutated =
+              string.slice(line, at_index: 0, length: start)
+              <> "\"a\""
+              <> string.slice(
+                line,
+                at_index: end,
+                length: string.length(line) - end,
+              )
+            [#("assert value", source_of(lines, idx, mutated))]
+          }
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `listlit`: replace the first element of a list literal with a literal
+/// of a different type, so a homogeneous literal becomes heterogeneous (`[1, 2]`
+/// becomes `["a", 2]`, `["x", "y"]` becomes `[1, "y"]`). Two mutants per list
+/// cover the primitive types: the String replacement breaks Int lists, the Int
+/// replacement breaks String/Float/Bool lists. The ground-truth filter drops
+/// lists that stay homogeneous or where the element was a variable.
+fn listlit_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_list_element(line) {
+      option.None -> []
+      option.Some(#(start, end)) -> {
+        let with = fn(replacement) {
+          let mutated =
+            string.slice(line, at_index: 0, length: start)
+            <> replacement
+            <> string.slice(
+              line,
+              at_index: end,
+              length: string.length(line) - end,
+            )
+          source_of(lines, idx, mutated)
+        }
+        [
+          #("listlit ->string", with("\"a\"")),
+          #("listlit ->int", with("1")),
+        ]
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// The offsets of the first simple token inside a `[ ... ]` list literal on
+/// `line`, if the brackets are on the same line.
+fn find_list_element(line: String) -> option.Option(#(Int, Int)) {
+  case find_char(line, "[") {
+    option.None -> option.None
+    option.Some(open) ->
+      case first_simple_start(line, open + 1) {
+        option.None -> option.None
+        option.Some(start) -> {
+          let end = simple_token_end(line, start)
+          case find_char_from(line, open + 1, "]") {
+            option.None -> option.None
+            option.Some(close) ->
+              case start < close {
+                True -> option.Some(#(start, end))
+                False -> option.None
+              }
+          }
+        }
+      }
+  }
+}
+
 /// Kind `arg`: swap the two arguments of a two-argument call when both are
 /// simple identifiers or literals, so a call whose arguments have different
 /// types is rejected.
@@ -771,7 +1094,7 @@ fn swap_args_in_line(
 ) -> List(Mutant) {
   case find_two_arg_call(line) {
     option.None -> []
-    option.Some(#(call_start, first_start, first_end, second_start, second_end)) -> {
+    option.Some(#(_call_start, first_start, first_end, second_start, second_end)) -> {
       let first =
         string.slice(
           line,
@@ -811,6 +1134,176 @@ fn is_simple_arg_char(ch: String) -> Bool {
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.\"",
     ch,
   )
+}
+
+/// Swap the two token spans on `line` and wrap the result in a mutant, or return
+/// no mutant when the two tokens are identical (the swap would be a no-op).
+fn swap_token_spans(
+  lines: List(String),
+  index: Int,
+  first_start: Int,
+  first_end: Int,
+  second_start: Int,
+  second_end: Int,
+  desc: String,
+) -> List(Mutant) {
+  let line = fetch(lines, index)
+  let first =
+    string.slice(line, at_index: first_start, length: first_end - first_start)
+  let second =
+    string.slice(
+      line,
+      at_index: second_start,
+      length: second_end - second_start,
+    )
+  case first == second {
+    True -> []
+    False -> {
+      let swapped =
+        string.slice(line, at_index: 0, length: first_start)
+        <> second
+        <> string.slice(
+          line,
+          at_index: first_end,
+          length: second_start - first_end,
+        )
+        <> first
+        <> string.slice(
+          line,
+          at_index: second_end,
+          length: string.length(line) - second_end,
+        )
+      [#(desc, source_of(lines, index, swapped))]
+    }
+  }
+}
+
+/// Kind `capture`: swap the argument and the hole in a partial application
+/// (`f(1, _)` becomes `f(_, 1)`, and vice versa). A captured hole `_` is already
+/// a simple token, so the two-argument call scanner sees it. When the argument
+/// type does not match the other parameter's type, the real compiler rejects the
+/// swapped capture, exercising the `FnCapture` expression (which has no other
+/// coverage).
+fn capture_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_two_arg_call(line) {
+      option.None -> []
+      option.Some(#(
+        _call_start,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
+      )) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        case first == "_" || second == "_" {
+          True ->
+            swap_token_spans(
+              lines,
+              idx,
+              first_start,
+              first_end,
+              second_start,
+              second_end,
+              "capture swap",
+            )
+          False -> []
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `recupd`: rename the base of a record update (`..base` in
+/// `Foo(..base, a: 1)`), so the base expression must resolve to a value of the
+/// record's type. Also swaps the base name with the first labeled field's value
+/// (`Foo(..base, a: x)` -> `Foo(..x, a: base)`); when the base and field have
+/// different types the real compiler rejects the update.
+fn recupd_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_record_update_base(line) {
+      option.None -> []
+      option.Some(#(base_start, base_end)) -> {
+        let base =
+          string.slice(
+            line,
+            at_index: base_start,
+            length: base_end - base_start,
+          )
+        let renamed = base <> "__zzz"
+        let mutated =
+          string.slice(line, at_index: 0, length: base_start)
+          <> renamed
+          <> string.slice(
+            line,
+            at_index: base_end,
+            length: string.length(line) - base_end,
+          )
+        case find_label_value(line, base_end) {
+          option.Some(#(value_start, value_end, _next)) ->
+            swap_token_spans(
+              lines,
+              idx,
+              base_start,
+              base_end,
+              value_start,
+              value_end,
+              "recupd base-field",
+            )
+            |> list.append([#("recupd rename", source_of(lines, idx, mutated))])
+          option.None -> [#("recupd rename", source_of(lines, idx, mutated))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find the `..base` base of a record update on `line`. Returns the offsets of
+/// the identifier following `..`.
+fn find_record_update_base(line: String) -> option.Option(#(Int, Int)) {
+  case string.contains(line, "..") {
+    False -> option.None
+    True -> find_record_update_base_from(line, 0)
+  }
+}
+
+fn find_record_update_base_from(
+  line: String,
+  index: Int,
+) -> option.Option(#(Int, Int)) {
+  case index + 1 >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 2) == ".." {
+        True ->
+          case first_simple_start(line, index + 2) {
+            option.Some(start) -> {
+              let end = simple_token_end(line, start)
+              case end == start {
+                True -> option.None
+                False -> option.Some(#(start, end))
+              }
+            }
+            option.None -> option.None
+          }
+        False -> find_record_update_base_from(line, index + 1)
+      }
+  }
 }
 
 /// Kind `letpat`: swap the two elements of a tuple destructure pattern
@@ -894,6 +1387,152 @@ fn find_tuple_pattern_from(
         _ -> find_tuple_pattern_from(line, index + 1, acc)
       }
     }
+  }
+}
+
+/// Kind `casepat2`: swap the two elements of a tuple destructure pattern on a
+/// case-clause line (`#(a, b) -> ...`), so the pattern binds each name to the
+/// other's type. Complements `letpat`, which only matches `let #(a, b) = ...`
+/// lines (those containing `=`); clause patterns are on their own line with no
+/// `=` and are not covered there.
+fn casepat2_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_clause_tuple_pattern(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) ->
+        swap_token_spans(
+          lines,
+          idx,
+          first_start,
+          first_end,
+          second_start,
+          second_end,
+          "casepat2 swap",
+        )
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a tuple pattern on a case-clause line: contains `#(` and `->` but no
+/// `=`. Returns the byte offsets of the two pattern elements (each may itself
+/// contain nested brackets/patterns, unlike `arg`'s simple-token scan). If no
+/// top-level comma separates two elements, returns `option.None`.
+fn find_clause_tuple_pattern(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case
+    string.contains(line, "#(")
+    && string.contains(line, "->")
+    && !string.contains(line, "=")
+  {
+    False -> option.None
+    True -> find_tuple_pattern_split(line, 0)
+  }
+}
+
+/// Scan for the first `#(...)` whose top-level (depth-0) comma splits two
+/// pattern elements. Returns `#(first_start, first_end, second_start, second_end)`
+/// where `first_end` points at the comma and `second_end` at the closing `)`.
+fn find_tuple_pattern_split(
+  line: String,
+  index: Int,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case index + 1 >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 2) == "#(" {
+        True -> {
+          let open = index + 2
+          case first_simple_start(line, open) {
+            option.Some(first_start) -> {
+              case find_top_comma(line, open, 0) {
+                option.Some(comma) -> {
+                  case skip_spaces(line, comma + 1) {
+                    option.Some(second_start) -> {
+                      let second_end = matching_close(line, second_start, 0)
+                      case second_end {
+                        option.Some(end) ->
+                          option.Some(#(first_start, comma, second_start, end))
+                        option.None -> find_tuple_pattern_split(line, index + 1)
+                      }
+                    }
+                    option.None -> find_tuple_pattern_split(line, index + 1)
+                  }
+                }
+                option.None -> find_tuple_pattern_split(line, index + 1)
+              }
+            }
+            option.None -> find_tuple_pattern_split(line, index + 1)
+          }
+        }
+        False -> find_tuple_pattern_split(line, index + 1)
+      }
+  }
+}
+
+/// Find the first `,` at bracket depth 0, scanning forward from `from` (which
+/// is just after a `#(`). Brackets are `(`/`)`, `[`/`]`, `{`/`}`.
+fn find_top_comma(line: String, from: Int, depth: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: from, length: 1) {
+        "," ->
+          case depth == 0 {
+            True -> option.Some(from)
+            False -> find_top_comma(line, from + 1, depth)
+          }
+        "(" -> find_top_comma(line, from + 1, depth + 1)
+        ")" ->
+          case depth == 0 {
+            True -> option.None
+            False -> find_top_comma(line, from + 1, depth - 1)
+          }
+        "[" -> find_top_comma(line, from + 1, depth + 1)
+        "]" ->
+          case depth == 0 {
+            True -> option.None
+            False -> find_top_comma(line, from + 1, depth - 1)
+          }
+        "{" -> find_top_comma(line, from + 1, depth + 1)
+        "}" ->
+          case depth == 0 {
+            True -> option.None
+            False -> find_top_comma(line, from + 1, depth - 1)
+          }
+        _ -> find_top_comma(line, from + 1, depth)
+      }
+  }
+}
+
+/// Find the `)` at bracket depth 0 that closes a `#(` opened before `from`.
+fn matching_close(line: String, from: Int, depth: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: from, length: 1) {
+        "(" -> matching_close(line, from + 1, depth + 1)
+        "[" -> matching_close(line, from + 1, depth + 1)
+        "{" -> matching_close(line, from + 1, depth + 1)
+        ")" ->
+          case depth == 0 {
+            True -> option.Some(from)
+            False -> matching_close(line, from + 1, depth - 1)
+          }
+        "]" ->
+          case depth == 0 {
+            True -> option.None
+            False -> matching_close(line, from + 1, depth - 1)
+          }
+        "}" ->
+          case depth == 0 {
+            True -> option.None
+            False -> matching_close(line, from + 1, depth - 1)
+          }
+        _ -> matching_close(line, from + 1, depth)
+      }
   }
 }
 
@@ -1367,6 +2006,75 @@ fn find_use_arrow(line: String, index: Int) -> option.Option(Int) {
       case string.slice(line, at_index: index, length: 2) == "<-" {
         True -> option.Some(index)
         False -> find_use_arrow(line, index + 1)
+      }
+  }
+}
+
+/// Kind `usepat`: swap the two patterns of a multi-pattern `use` binding
+/// (`use a, b <- f()` becomes `use b, a <- f()`). The callback the target
+/// function receives now binds its two arguments to the wrong patterns, so when
+/// the two argument types differ the real compiler rejects. The `use` kind only
+/// renames the target function, never the patterns.
+fn usepat_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_use_pattern_pair(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) ->
+        swap_token_spans(
+          lines,
+          idx,
+          first_start,
+          first_end,
+          second_start,
+          second_end,
+          "usepat swap",
+        )
+    }
+  })
+  |> list.flatten
+}
+
+/// Find two comma-separated simple tokens between `use` and the ` <- ` arrow of
+/// a `use` statement, returning their offsets.
+fn find_use_pattern_pair(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  let trimmed = string.trim(line)
+  case string.starts_with(trimmed, "use ") && string.contains(line, " <- ") {
+    False -> option.None
+    True ->
+      case find_substring(line, "use ") {
+        option.None -> option.None
+        option.Some(use_start) ->
+          case find_substring_from(line, use_start + 4, " <- ") {
+            option.None -> option.None
+            option.Some(arrow) ->
+              case first_simple_start(line, use_start + 4) {
+                option.None -> option.None
+                option.Some(first_start) -> {
+                  let first_end = simple_token_end(line, first_start)
+                  case string.slice(line, at_index: first_end, length: 1) {
+                    "," ->
+                      case skip_spaces(line, first_end + 1) {
+                        option.Some(second_start) -> {
+                          let second_end = simple_token_end(line, second_start)
+                          case second_end <= arrow {
+                            True ->
+                              option.Some(#(
+                                first_start,
+                                first_end,
+                                second_start,
+                                second_end,
+                              ))
+                            False -> option.None
+                          }
+                        }
+                        option.None -> option.None
+                      }
+                    _ -> option.None
+                  }
+                }
+              }
+          }
       }
   }
 }
@@ -1905,12 +2613,114 @@ fn segment_end(line: String, from: Int) -> Int {
   }
 }
 
+/// Kind `bitsize`: change the size option of a bit-string segment (`<<x:8>>`
+/// -> `<<x:9>>`). The real compiler rejects sizes that are out of range for the
+/// segment's type (e.g. a `utf8` segment must be a multiple of 8, and
+/// `bytes`/`bits` sizes have value constraints), exercising bit-string segment
+/// size validation.
+fn bitsize_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_segment_size(line) {
+      option.None -> []
+      option.Some(#(size_start, size_end)) -> {
+        let size =
+          string.slice(
+            line,
+            at_index: size_start,
+            length: size_end - size_start,
+          )
+        let mutated =
+          string.slice(line, at_index: 0, length: size_start)
+          <> size
+          <> "9"
+          <> string.slice(
+            line,
+            at_index: size_end,
+            length: string.length(line) - size_end,
+          )
+        [#("bitsize bump", source_of(lines, idx, mutated))]
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a `:N` size option inside a bit-string segment on `line`, where N is a
+/// run of digits (e.g. the `8` in `<<x:8>>`). Returns the offsets of the
+/// digits.
+fn find_segment_size(line: String) -> option.Option(#(Int, Int)) {
+  case string.contains(line, "<<") && string.contains(line, ":") {
+    False -> option.None
+    True -> find_segment_size_from(line, 0)
+  }
+}
+
+fn find_segment_size_from(
+  line: String,
+  index: Int,
+) -> option.Option(#(Int, Int)) {
+  case index >= string.length(line) {
+    True -> option.None
+    False -> {
+      let ch = string.slice(line, at_index: index, length: 1)
+      case ch {
+        ":" -> {
+          case first_digit_start(line, index + 1) {
+            option.Some(start) -> {
+              let end = digit_end(line, start)
+              case end == start {
+                True -> option.None
+                False -> option.Some(#(start, end))
+              }
+            }
+            option.None -> find_segment_size_from(line, index + 1)
+          }
+        }
+        _ -> find_segment_size_from(line, index + 1)
+      }
+    }
+  }
+}
+
+fn first_digit_start(line: String, from: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case
+        string.contains(
+          "0123456789",
+          string.slice(line, at_index: from, length: 1),
+        )
+      {
+        True -> option.Some(from)
+        False -> first_digit_start(line, from + 1)
+      }
+  }
+}
+
+fn digit_end(line: String, from: Int) -> Int {
+  case from >= string.length(line) {
+    True -> from
+    False ->
+      case
+        string.contains(
+          "0123456789",
+          string.slice(line, at_index: from, length: 1),
+        )
+      {
+        True -> digit_end(line, from + 1)
+        False -> from
+      }
+  }
+}
+
 fn pipe_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     let line = fetch(lines, idx)
     case find_pipe_swap(line) {
       option.None -> []
-      option.Some(#(pipe_start, call_start, arg_start, arg_end)) -> {
+      option.Some(#(pipe_start, _call_start, arg_start, arg_end)) -> {
         // the piped value is the token ending just before `|>`
         case find_token_before(line, pipe_start) {
           option.None -> []
@@ -1971,6 +2781,138 @@ fn find_pipe_swap(line: String) -> option.Option(#(Int, Int, Int, Int)) {
           option.None -> option.None
         }
       })
+  }
+}
+
+/// Kind `pipe2`: swap the piped value with an argument of a call after a pipe
+/// (`x |> f(a, b)` becomes `a |> f(x, b)` and `b |> f(a, x)`). The piped value
+/// lands in the first parameter slot of the desugared call, so swapping it into
+/// a different parameter position is rejected when the argument types differ.
+/// Complements `pipe`, which only matches calls with a single simple argument:
+/// here the first two arguments may be arbitrary balanced expressions.
+fn pipe2_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_pipe_two_args(line) {
+      option.None -> []
+      option.Some(#(
+        pipe_index,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
+      )) ->
+        case find_token_before(line, pipe_index) {
+          option.None -> []
+          option.Some(#(val_start, val_end)) ->
+            swap_token_spans(
+              lines,
+              idx,
+              val_start,
+              val_end,
+              first_start,
+              first_end,
+              "pipe2 swap arg1",
+            )
+            |> list.append(swap_token_spans(
+              lines,
+              idx,
+              val_start,
+              val_end,
+              second_start,
+              second_end,
+              "pipe2 swap arg2",
+            ))
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find `x |> f(a, b)` on `line`: the `|>` pipe and a call with at least two
+/// arguments after it, where the arguments are balanced spans (so `a`/`b` may
+/// be nested expressions, not just simple tokens). Returns
+/// `#(pipe_index, first_start, first_end, second_start, second_end)`.
+fn find_pipe_two_args(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int, Int)) {
+  case string.contains(line, "|>") {
+    False -> option.None
+    True ->
+      find_pipe_index(line, 0)
+      |> option.then(fn(pipe_index) {
+        case find_first_paren_after(line, pipe_index + 2) {
+          option.Some(call_open) ->
+            case find_two_arg_spans(line, call_open) {
+              option.Some(#(first_start, first_end, second_start, second_end)) ->
+                option.Some(#(
+                  pipe_index,
+                  first_start,
+                  first_end,
+                  second_start,
+                  second_end,
+                ))
+              option.None -> option.None
+            }
+          option.None -> option.None
+        }
+      })
+  }
+}
+
+/// Read the first two arguments of a call starting at `open_index` (the `(`),
+/// as balanced spans. Returns `#(first_start, first_end, second_start, second_end)`
+/// where `first_end` points at the top-level comma after the first argument and
+/// `second_end` at the top-level comma (or call close) after the second.
+fn find_two_arg_spans(
+  line: String,
+  open_index: Int,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case skip_spaces(line, open_index + 1) {
+    option.None -> option.None
+    option.Some(first_start) ->
+      case find_top_comma(line, open_index + 1, 0) {
+        option.Some(comma) -> {
+          case skip_spaces(line, comma + 1) {
+            option.None -> option.None
+            option.Some(second_start) -> {
+              let second_end = find_arg_end(line, second_start)
+              case second_end {
+                option.Some(end) ->
+                  option.Some(#(first_start, comma, second_start, end))
+                option.None -> option.None
+              }
+            }
+          }
+        }
+        option.None -> option.None
+      }
+  }
+}
+
+/// Find where the argument starting at `from` ends: the next top-level comma or
+/// the closing `)` of the call.
+fn find_arg_end(line: String, from: Int) -> option.Option(Int) {
+  case from >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: from, length: 1) {
+        "," -> option.Some(from)
+        ")" -> option.Some(from)
+        "(" -> find_arg_end(line, find_matching_close(line, from) + 1)
+        "[" -> find_arg_end(line, find_matching_close(line, from) + 1)
+        "{" -> find_arg_end(line, find_matching_close(line, from) + 1)
+        _ -> find_arg_end(line, from + 1)
+      }
+  }
+}
+
+/// Return the index of the bracket that closes the group opened at `from`
+/// (which must point at `(`, `[`, or `{`).
+fn find_matching_close(line: String, from: Int) -> Int {
+  case matching_close(line, from, 0) {
+    option.Some(close) -> close
+    option.None -> string.length(line)
   }
 }
 
@@ -2119,25 +3061,35 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(binop_mutants(lines))
   |> list.append(label_mutants(lines))
   |> list.append(tuple_mutants(lines))
+  |> list.append(tuptype_mutants(lines))
   |> list.append(pattern_mutants(lines))
+  |> list.append(capture_mutants(lines))
   |> list.append(variant_mutants(lines))
   |> list.append(bitstring_mutants(lines))
   |> list.append(literal_mutants(lines))
+  |> list.append(listlit_mutants(lines))
+  |> list.append(assert_mutants(lines))
   |> list.append(arg_mutants(lines))
   |> list.append(lblarg_mutants(lines))
   |> list.append(arity_mutants(lines))
+  |> list.append(fn_arity_mutants(lines))
   |> list.append(negate_mutants(lines))
   |> list.append(letpat_mutants(lines))
+  |> list.append(casepat2_mutants(lines))
   |> list.append(sigswap_mutants(lines))
   |> list.append(pipe_mutants(lines))
+  |> list.append(pipe2_mutants(lines))
   |> list.append(casepat_mutants(lines))
   |> list.append(clausepat_mutants(lines))
   |> list.append(guard_mutants(lines))
   |> list.append(typeparam_mutants(lines))
   |> list.append(bitreorder_mutants(lines))
+  |> list.append(bitsize_mutants(lines))
+  |> list.append(recupd_mutants(lines))
   |> list.append(letswap_mutants(lines))
   |> list.append(importfn_mutants(lines))
   |> list.append(use_mutants(lines))
+  |> list.append(usepat_mutants(lines))
   |> list.append(import_mutants(lines))
 }
 
@@ -2171,19 +3123,19 @@ fn name_spans_from(
     True -> {
       let ch = string.slice(line, at_index: index, length: 1)
       let is_word = is_identifier_char(ch)
-      case #(is_word, prev) {
-        #(True, option.None) ->
+      case is_word, prev {
+        True, option.None ->
           name_spans_from(line, index + 1, index, option.Some(ch), acc)
-        #(True, option.Some(previous)) ->
+        True, option.Some(previous) ->
           case is_identifier_char(previous) {
             True ->
               name_spans_from(line, index + 1, start, option.Some(ch), acc)
             False ->
               name_spans_from(line, index + 1, index, option.Some(ch), acc)
           }
-        #(False, option.None) ->
+        False, option.None ->
           name_spans_from(line, index + 1, 0, option.Some(ch), acc)
-        #(False, option.Some(_)) -> {
+        False, option.Some(_) -> {
           let kind = classify(line, start, index, prev)
           name_spans_from(line, index + 1, 0, option.Some(ch), [kind, ..acc])
         }
@@ -2210,10 +3162,10 @@ fn classify(
 ) -> Span {
   let before = byte_at(line, start - 1)
   let after = byte_at(line, end)
-  let kind = case #(before, after) {
-    #(".", _) -> Field
-    #(_, ":") -> Label
-    _ -> Other
+  let kind = case before, after {
+    ".", _ -> Field
+    _, ":" -> Label
+    _, _ -> Other
   }
   #(start, end - start, kind)
 }

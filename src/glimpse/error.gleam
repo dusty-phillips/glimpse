@@ -128,6 +128,9 @@ pub type TypeCheckError {
   RecursiveType
   /// Raised when a float literal is too large to be represented.
   FloatOutOfRange(value: String)
+  /// Raised when a string literal contains an invalid escape sequence, e.g.
+  /// `"\1"`, which the Gleam compiler rejects at parse time.
+  InvalidEscape(value: String)
   /// Raised when a value is only implemented for another build target.
   UnsupportedTarget(name: String)
   /// Raised when two imports resolve to the same local module name.

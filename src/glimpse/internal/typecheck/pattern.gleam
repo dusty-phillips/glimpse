@@ -6,6 +6,7 @@ import gleam/list
 import gleam/option.{type Option}
 import gleam/result
 import gleam/string
+import glexer
 import glimpse/error
 import glimpse/internal/typecheck/bit_string_segment
 import glimpse/internal/typecheck/types
@@ -72,17 +73,21 @@ pub fn typecheck_pattern(
       }
     }
 
-    glance.PatternString(_, _) -> {
-      types.unify(store, environment, expected_type, types.StringType)
-      |> result.map(fn(store) { #(store, environment) })
-      |> result.map_error(fn(_) {
-        error.PatternMismatch(
-          "string pattern",
-          "String",
-          types.to_string(environment, expected_type),
-        )
-      })
-    }
+    glance.PatternString(_, value) ->
+      case glexer.unescape_string(value) {
+        Error(_) -> Error(error.InvalidEscape(value))
+        Ok(_) -> {
+          types.unify(store, environment, expected_type, types.StringType)
+          |> result.map(fn(store) { #(store, environment) })
+          |> result.map_error(fn(_) {
+            error.PatternMismatch(
+              "string pattern",
+              "String",
+              types.to_string(environment, expected_type),
+            )
+          })
+        }
+      }
 
     glance.PatternTuple(_, elements) -> {
       use #(store, expected_elements) <- result.try(case expected_type {

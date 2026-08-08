@@ -823,10 +823,10 @@ fn unify_callable_types(
   let #(store, instantiated_left) = instantiate(store, left)
   let #(store, instantiated_right) = instantiate(store, right)
   case instantiated_left, instantiated_right {
-    CallableType(lp, ll, lr), CallableType(rp, rl, rr)
-    | GenericCallableType(lp, ll, lr, _), GenericCallableType(rp, rl, rr, _)
-    | GenericCallableType(lp, ll, lr, _), CallableType(rp, rl, rr)
-    | CallableType(lp, ll, lr), GenericCallableType(rp, rl, rr, _)
+    CallableType(lp, _ll, lr), CallableType(rp, _rl, rr)
+    | GenericCallableType(lp, _ll, lr, _), GenericCallableType(rp, _rl, rr, _)
+    | GenericCallableType(lp, _ll, lr, _), CallableType(rp, _rl, rr)
+    | CallableType(lp, _ll, lr), GenericCallableType(rp, _rl, rr, _)
     ->
       unify_callables(
         store,
