@@ -34,7 +34,10 @@ The library is filesystem-agnostic: external module loading happens through a lo
   - `functions.gleam` — function signature and parameter handling, variant constructor types
   - `imports.gleam` — import resolution and module environment merging
   - `pattern.gleam` — pattern typechecking
-- `src/glimpse/internal/typecheck.gleam` — expression, statement, call, and case typechecking
+  - `calls.gleam` — call and argument typechecking
+  - `pipe.gleam` — pipe and binary operator typechecking
+  - `capture.gleam` — function capture typechecking
+- `src/glimpse/internal/typecheck.gleam` — expression, statement, and case typechecking
 - `src/glimpse/internal/import_dependencies.gleam` — dependency sorting and circular dependency detection
 
 ### Typechecking flow
@@ -80,4 +83,4 @@ value; for `Result`/`Error` debugging the constructor prints directly.
 The typechecker covers every expression, statement, and pattern variant in the
 glance AST, typechecks both within and between modules, and supports generics
 (parametric custom types and polymorphic functions) through instantiation at
-each call site. It is not yet available in public releases.
+each call site. Released as 0.9.0.

@@ -15,6 +15,8 @@ It is not yet a complete Gleam typechecker, but it covers the common parts of
 the language so that folks targeting different languages from Gleam can focus
 on codegen.
 
+Glimpse 0.9.0 is available on [hex.pm](https://hex.pm/packages/glimpse).
+
 Docs: https://hexdocs.pm/glimpse/
 Repo: https://github.com/dusty-phillips/glimpse
 
