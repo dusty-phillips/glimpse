@@ -304,6 +304,8 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "bitstring ",
     "literal ",
     "arg ",
+    "arity ",
+    "negate ",
     "import ",
   ]
   list.map(kinds, fn(kind) {
@@ -507,11 +509,128 @@ fn label_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
-/// Kind `tuple`: index a tuple with an out-of-range `.N`.
+/// Kind `tuple`: index a tuple with an out-of-range `.N`, or swap between the
+/// two positions when the tuple's elements have different types.
 fn tuple_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     swap_on_line(lines, idx, "tuple .0->.9", ".0", ".9")
     |> list.append(swap_on_line(lines, idx, "tuple .1->.9", ".1", ".9"))
+    |> list.append(swap_on_line(lines, idx, "tuple .0->.1", ".0", ".1"))
+    |> list.append(swap_on_line(lines, idx, "tuple .1->.0", ".1", ".0"))
+  })
+  |> list.flatten
+}
+
+/// Kind `arity`: give a two-argument call one argument too few or too many, so
+/// the real compiler reports a wrong-arity error. The ground-truth filter keeps
+/// mutations of variadic-ish or single-parameter functions out of the count.
+fn arity_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_two_arg_call(line) {
+      option.None -> []
+      option.Some(#(
+        _call_start,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
+      )) -> {
+        let len = string.length(line)
+        let second =
+          string.slice(
+            line,
+            at_index: second_start,
+            length: second_end - second_start,
+          )
+        // drop the second argument: `f(a, b)` -> `f(a)`
+        let drop_second =
+          string.slice(line, at_index: 0, length: first_end)
+          <> string.slice(line, at_index: second_end, length: len - second_end)
+        // drop the first argument: `f(a, b)` -> `f(b)`
+        let drop_first =
+          string.slice(line, at_index: 0, length: first_start)
+          <> string.slice(
+            line,
+            at_index: second_start,
+            length: len - second_start,
+          )
+        // duplicate the second argument: `f(a, b)` -> `f(a, b, b)`
+        let dup_second =
+          string.slice(line, at_index: 0, length: second_end)
+          <> ", "
+          <> second
+          <> string.slice(line, at_index: second_end, length: len - second_end)
+        [
+          #("arity drop-second", source_of(lines, idx, drop_second)),
+          #("arity drop-first", source_of(lines, idx, drop_first)),
+          #("arity dup-second", source_of(lines, idx, dup_second)),
+        ]
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `negate`: prepend a unary negation to an identifier. `-x` demands an
+/// Int, `-.x` a Float, `!x` a Bool, so negating a value of the wrong type is a
+/// real error. Only identifiers in argument position (right after `(` or `,`)
+/// are mutated: there the negation stays parseable and lands on a value whose
+/// type is constrained by a parameter. Type names, keywords, and
+/// module/record accessors are skipped. `@external` and `@target` arguments
+/// are also skipped: glimpse intentionally accepts targets beyond `js`/`erlang`,
+/// and the target argument is not typechecked.
+fn negate_mutants(lines: List(String)) -> List(Mutant) {
+  let keywords = [
+    "fn", "let", "pub", "import", "type", "case", "if", "else", "use", "as",
+    "assert", "loop", "todo", "panic",
+  ]
+  let type_names = [
+    "Int", "String", "Bool", "Float", "Nil", "True", "False", "List", "Result",
+    "Option", "Dict", "Ok", "Error", "Some", "None",
+  ]
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case
+      string.starts_with(line, "@external")
+      || string.starts_with(line, "@target")
+    {
+      True -> []
+      False ->
+        name_spans(line)
+        |> list.filter(fn(span) { span.2 == Other })
+        |> list.filter(fn(span) {
+          let word = string.slice(line, at_index: span.0, length: span.1)
+          let before = byte_at(line, span.0 - 1)
+          let prev_prev = byte_at(line, span.0 - 2)
+          let after_comma = before == " " && prev_prev == ","
+          let in_arg_position = before == "(" || after_comma
+          !list.contains(keywords, word)
+          && !list.contains(type_names, word)
+          && before != "."
+          && before != "#"
+          && before != ":"
+          && in_arg_position
+        })
+        |> list.map(fn(span) {
+          let word = string.slice(line, at_index: span.0, length: span.1)
+          let prefix = fn(neg) {
+            string.slice(line, at_index: 0, length: span.0)
+            <> neg
+            <> string.slice(
+              line,
+              at_index: span.0,
+              length: string.length(line) - span.0,
+            )
+          }
+          [
+            #("negate -" <> word, source_of(lines, idx, prefix("-"))),
+            #("negate -." <> word, source_of(lines, idx, prefix("-."))),
+            #("negate !" <> word, source_of(lines, idx, prefix("!"))),
+          ]
+        })
+        |> list.flatten
+    }
   })
   |> list.flatten
 }
@@ -836,6 +955,8 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(bitstring_mutants(lines))
   |> list.append(literal_mutants(lines))
   |> list.append(arg_mutants(lines))
+  |> list.append(arity_mutants(lines))
+  |> list.append(negate_mutants(lines))
   |> list.append(import_mutants(lines))
 }
 
@@ -872,8 +993,13 @@ fn name_spans_from(
       case #(is_word, prev) {
         #(True, option.None) ->
           name_spans_from(line, index + 1, index, option.Some(ch), acc)
-        #(True, option.Some(_)) ->
-          name_spans_from(line, index + 1, start, option.Some(ch), acc)
+        #(True, option.Some(previous)) ->
+          case is_identifier_char(previous) {
+            True ->
+              name_spans_from(line, index + 1, start, option.Some(ch), acc)
+            False ->
+              name_spans_from(line, index + 1, index, option.Some(ch), acc)
+          }
         #(False, option.None) ->
           name_spans_from(line, index + 1, 0, option.Some(ch), acc)
         #(False, option.Some(_)) -> {

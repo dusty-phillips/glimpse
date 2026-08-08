@@ -843,8 +843,8 @@ fn unify_callable_types(
 fn unify_callables(
   store: TypeStore,
   environment: Environment,
-  _left: Type,
-  _right: Type,
+  left: Type,
+  right: Type,
   left_parameters: List(Type),
   _left_labels: dict.Dict(String, Int),
   left_return: Type,
@@ -856,14 +856,18 @@ fn unify_callables(
   // type: a labelled constructor (e.g. `Todo(location:, message:)`) may be
   // passed where an unlabelled `fn(Span, Option(Expression)) -> Expression`
   // is expected, matching the real Gleam typechecker.
-  list.zip(left_parameters, right_parameters)
-  |> list.try_fold(store, fn(store, pair) {
-    let #(l, r) = pair
-    unify(store, environment, l, r)
-  })
-  |> result.try(fn(store) {
-    unify(store, environment, left_return, right_return)
-  })
+  case list.length(left_parameters) == list.length(right_parameters) {
+    False -> Error(mismatch_error(environment, left, right))
+    True ->
+      list.zip(left_parameters, right_parameters)
+      |> list.try_fold(store, fn(store, pair) {
+        let #(l, r) = pair
+        unify(store, environment, l, r)
+      })
+      |> result.try(fn(store) {
+        unify(store, environment, left_return, right_return)
+      })
+  }
 }
 
 fn mismatch_error(

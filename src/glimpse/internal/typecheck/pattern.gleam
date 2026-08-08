@@ -354,8 +354,12 @@ fn check_segments(
     // *rest* of the bit array, so it is only valid as the final segment, and
     // a utf segment cannot bind a plain variable (use `_` or a literal).
     use _ <- result.try(check_pattern_segment_options(options, is_last, pattern))
-    // Literal sizes and units must be positive.
-    use store <- result.try(check_pattern_size_options(store, options))
+    // Literal sizes and units must be positive; variable sizes must be bound.
+    use store <- result.try(check_pattern_size_options(
+      environment,
+      store,
+      options,
+    ))
     // A bit-string segment cannot assign a variable twice (`<<a as b>>`).
     use store <- result.try(check_segment_assignment(store, pattern))
     case pattern {
@@ -690,15 +694,45 @@ fn check_segment_assignment(
 }
 
 fn check_pattern_size_options(
+  environment: types.Environment,
   store: types.TypeStore,
   options: List(glance.BitStringSegmentOption(glance.BitArraySize)),
 ) -> error.TypeCheckResult(types.TypeStore) {
   list.try_fold(options, store, fn(store, option) {
     case option {
-      glance.SizeValueOption(size) -> check_bit_array_size_positive(store, size)
+      glance.SizeValueOption(size) ->
+        check_bit_array_size_positive(store, size)
+        |> result.try(fn(store) {
+          check_bit_array_size_variables(environment, store, size)
+        })
       _ -> Ok(store)
     }
   })
+}
+
+/// A `size(...)` argument that is a variable reference must name a variable in
+/// scope (`<<value:size(bytes)>>`), mirroring the expression side where the
+/// size expression is typechecked.
+fn check_bit_array_size_variables(
+  environment: types.Environment,
+  store: types.TypeStore,
+  size: glance.BitArraySize,
+) -> error.TypeCheckResult(types.TypeStore) {
+  case size {
+    glance.BitArraySizeVariable(_, name) ->
+      case types.lookup_variable_type(environment, name) {
+        Ok(_) -> Ok(store)
+        Error(_) -> Error(error.InvalidName(name))
+      }
+    glance.BitArraySizeBinaryOperator(_, _, left, right) ->
+      check_bit_array_size_variables(environment, store, left)
+      |> result.try(fn(store) {
+        check_bit_array_size_variables(environment, store, right)
+      })
+    glance.BitArraySizeBlock(_, inner) ->
+      check_bit_array_size_variables(environment, store, inner)
+    _ -> Ok(store)
+  }
 }
 
 fn check_bit_array_size_positive(
