@@ -11,9 +11,9 @@ Glimpse is not filesystem aware: all modules are loaded externally through a
 loader function. It provides tooling to determine which dependencies need to be
 loaded, and it typechecks across module boundaries.
 
-It is not yet a complete Gleam typechecker, but it covers the common parts of
-the language so that folks targeting different languages from Gleam can focus
-on codegen.
+It is intended to be feature complete for the entire language and I believe
+I have achieved that. I've done extensive mutation testing as well as
+typechecking various popular gleam projects.
 
 Glimpse 0.9.0 is available on [hex.pm](https://hex.pm/packages/glimpse).
 
@@ -90,10 +90,13 @@ fn load_glimpse_package(
 
 ## Typechecking
 
-Glimpse can typecheck a loaded package, both within and between modules. The
-entry point you'll usually want is `typecheck.package`, which sorts the modules
-by their dependencies and checks each in turn. It takes the target the package
-is being built for, and returns the package with inferred types filled in:
+Glimpse can typecheck a loaded package, both within and between modules. It is a
+full Hindley-Milner type checking implementation with exhaustiveness checking.
+
+The entry point you'll usually want is `typecheck.package`, which sorts the
+modules by their dependencies and checks each in turn. It takes the target the
+package is being built for, and returns the package with inferred types filled
+in:
 
 ```gleam
 pub fn package(
@@ -109,10 +112,11 @@ that are not active for the target being checked are filtered out before
 typechecking, mirroring the real compiler. Pass `target.Erlang` or
 `target.Javascript` to `typecheck.package`.
 
-Experimental backends targeting another language can use `target.Named(name)`
-to check with their own target, so a `@target(python)` definition is active
-when checking for `target.Named("python")` and filtered out otherwise. The same
-matching applies to `@external(...)` annotations.
+Unlike the official Gleam compiler, experimental backends targeting another
+language can use `target.Named(name)` to check with their own target, so
+a `@target(python)` definition is active when checking for
+`target.Named("python")` and filtered out otherwise. The same matching applies
+to `@external(...)` annotations.
 
 ### Lower-level entry points
 
@@ -142,42 +146,83 @@ dev-only on its own. Set `Package.dev_dependencies` to the names of those
 modules after loading so that a source module importing one is reported as an
 `ImportError`, mirroring the real compiler's `src`/`dev` split.
 
-## Future Ideas
-
-My vision for the project is that it handles the common parts of gleam
-compilation so that folks wanting to target different languages from gleam can
-focus on the codegen part.
-
-### Desugaring
-
-I'd like to add some desugaring so that the output of glimpse is actually a
-simpler AST than the glance AST representing the full gleam language. This
-would reduce the footprint that compiler implementers need to cover while still
-targeting the entire language.
-
-A couple ideas include:
-
-- Desugar use statements to their function call syntax (already implemented in
-  macabre and just needs to be ported to this package)
-- Translate labelled fields to direct calls
-- ??? suggestions welcome
-
-If I tackle this, it will probably happen _before_ type checking and inference
-so the typechecker also doesnt have to cover the entirety of glance.
-
-### Token positions
-
-The glance library does not maintain token positions with AST nodes. It does
-record the locations of parse errors, but that doesn't help with locating
-errors further up the chain. E.g. when there is an error with typechecking,
-there is currently no way to communicate to the user where the error occurred.
-
-Solving this requires modifications to, a rewrite of, or a fork of the glance
-library. I'm not willing to tackle that anytime soon, but it is a prerequisite
-for the vision for this project.
-
 ## Development
 
-```sh
-gleam test  # Run the tests
+Two standalone dev tools live in `dev/`. Pass their arguments after a `--`
+separator:
+
+```s
+gleam test                                # Run the unit tests
+gleam run -m dev_check                    # Typecheck glimpse itself
+gleam run -m dev_check -- --typecheck <root>
+gleam run -m mutate_check -- --root <root> --src <src_rel> [--jobs <n>] [--kind <kind>] [--count]
 ```
+
+### dev_check
+
+`dev_check` with no arguments typechecks glimpse against itself: its own `src/`
+and `dev/` modules plus the cached dependencies in `build/packages/`. A quick
+smoke test that the typechecker still accepts its own code after a change.
+
+Passing `--typecheck <root>` typechecks an external Gleam project checkout
+instead. `<root>` must be a project root with its dependencies already cached
+(run `gleam build` first): the checkout's `src/` modules are loaded under their
+real names and its `build/packages/` cache provides the transitive
+dependencies. The target is read from the project's `gleam.toml`, defaulting to
+Erlang.
+
+The typechecking core lives in the exported `run_typecheck` function, which
+prints nothing; `mutate_check` calls it in-process for each mutant rather than
+booting a fresh `dev_check` subprocess each time.
+
+### mutate_check
+
+`mutate_check` is a differential mutation harness for the typechecker. It takes
+a single source module, generates many mutants by rewriting small pieces of it,
+and judges each against the real compiler:
+
+1. The real `gleam check` runs in the project checkout. If it rejects the
+   mutant (non-zero exit), that is ground truth: the mutant has a genuine error
+   that glimpse must also catch.
+2. glimpse's `dev_check` runs against the same checkout. If glimpse *accepts* a
+   mutant the real compiler rejected, that is a **false negative** bug in
+   glimpse.
+
+The official compiler is always ground truth, so any mutation that turns out to
+be valid code is simply not counted — which makes it safe to over-generate
+mutants. Mutants come from many *kinds*, each aimed at a different part of the
+typechecker: signature type swaps, boolean literal flips, binary operators,
+labelled arguments and record fields, tuple indexes, case patterns,
+`Ok`/`Error` variants, bit-string options, imports, `use` expressions, pipes,
+guards, and more.
+
+Each mutant runs two subprocess compiles, which dominate the runtime, so the
+harness spawns a worker pool (`--jobs <n>`, default 16). Each worker checks
+against its own private copy of the project (`<root>.w<i>`), so the compiles
+truly run concurrently and the original checkout is left untouched. The worker
+copies are keyed only by the root path, so two concurrent invocations against
+the *same* root would overwrite each other's files — run sweeps sequentially,
+one root at a time.
+
+Flags:
+
+- `--root <root>` — the project checkout to mutate (required); must have its
+  dependencies cached.
+- `--src <src_rel>` — the source module to mutate, relative to `root`
+  (required), e.g. `src/foo.gleam`.
+- `--jobs <n>` — worker parallelism (default 16).
+- `--kind <kind>` — only run one mutant kind, e.g. `type` or `use`.
+- `--count` — print how many mutants each kind would generate, then exit
+  without running any checks.
+
+The final line reports `N/M FALSE NEGATIVES in <src>`, and the offending
+mutants (description plus rewritten source) are appended to
+`/tmp/mutcheck/falsenegs.txt` for inspection.
+
+
+## Implementation notes
+
+The initial typechecker was handcoded. I used AI for a few commits in the
+sonnet 3 days and it absolutely massacred it. I lost time/interest in
+typechecking and didn't think I'd ever finish it so I threw deepseek at it for
+a few days and it "seems to be working."
