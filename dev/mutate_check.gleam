@@ -145,6 +145,11 @@ fn run(opts: Options) {
 
 /// Check every mutant, `jobs` at a time. Each worker gets a private copy of
 /// the project (with its generated files) so the subprocess compiles overlap.
+///
+/// The worker copies are keyed only by the root path (`<root>.w<i>`), so two
+/// concurrent invocations against the *same* root would share worker dirs and
+/// overwrite each other's mutant files, corrupting results. Run sweeps
+/// sequentially, one root at a time.
 fn check_all(
   root: String,
   path: String,
