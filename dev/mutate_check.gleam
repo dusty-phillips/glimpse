@@ -310,6 +310,7 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "sigswap ",
     "pipe ",
     "casepat ",
+    "clausepat ",
     "typeparam ",
     "bitreorder ",
     "letswap ",
@@ -1232,6 +1233,77 @@ fn find_char_from(
   }
 }
 
+/// Kind `clausepat`: swap the patterns of two adjacent case clauses
+/// (`Pat1 -> body1` / `Pat2 -> body2` becomes `Pat2 -> body1` /
+/// `Pat1 -> body2`). If the two patterns bind different types of variables,
+/// each body now sees the other's bindings and the real compiler rejects.
+fn clausepat_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    case find_clause_pattern(fetch(lines, idx)) {
+      option.None -> []
+      option.Some(pat_a) ->
+        case find_clause_pattern(fetch(lines, idx + 1)) {
+          option.None -> []
+          option.Some(pat_b) -> {
+            let #(start_a, end_a) = pat_a
+            let #(start_b, end_b) = pat_b
+            let line_a = fetch(lines, idx)
+            let line_b = fetch(lines, idx + 1)
+            let pattern_a =
+              string.slice(line_a, at_index: start_a, length: end_a - start_a)
+            let pattern_b =
+              string.slice(line_b, at_index: start_b, length: end_b - start_b)
+            case pattern_a == pattern_b {
+              True -> []
+              False -> {
+                let new_a =
+                  string.slice(line_a, at_index: 0, length: start_a)
+                  <> pattern_b
+                  <> string.slice(
+                    line_a,
+                    at_index: end_a,
+                    length: string.length(line_a) - end_a,
+                  )
+                let new_b =
+                  string.slice(line_b, at_index: 0, length: start_b)
+                  <> pattern_a
+                  <> string.slice(
+                    line_b,
+                    at_index: end_b,
+                    length: string.length(line_b) - end_b,
+                  )
+                let new_lines =
+                  replace_at(lines, idx, new_a)
+                  |> replace_at(idx + 1, new_b)
+                [#("clausepat swap", string.join(new_lines, "\n"))]
+              }
+            }
+          }
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find the pattern in a `pattern -> body` clause line. Returns the offsets of
+/// the pattern (the text before ` -> `, trimmed).
+fn find_clause_pattern(line: String) -> option.Option(#(Int, Int)) {
+  case string.contains(line, " -> ") {
+    False -> option.None
+    True -> {
+      let trimmed = string.trim(line)
+      let indent = string.length(line) - string.length(trimmed)
+      case string.split_once(trimmed, " -> ") {
+        Error(_) -> option.None
+        Ok(#(pattern, _body)) -> {
+          let pattern_len = string.length(pattern)
+          option.Some(#(indent, indent + pattern_len))
+        }
+      }
+    }
+  }
+}
+
 fn casepat_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     let line = fetch(lines, idx)
@@ -1765,6 +1837,7 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(sigswap_mutants(lines))
   |> list.append(pipe_mutants(lines))
   |> list.append(casepat_mutants(lines))
+  |> list.append(clausepat_mutants(lines))
   |> list.append(typeparam_mutants(lines))
   |> list.append(bitreorder_mutants(lines))
   |> list.append(letswap_mutants(lines))
