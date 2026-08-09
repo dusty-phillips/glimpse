@@ -649,39 +649,6 @@ fn strip(rows: List(Row)) -> List(Row) {
   })
 }
 
-/// The `(id, mode)` pairs of the original subjects, ignoring the fresh ids
-/// introduced for constructor fields during splitting.
-fn missing_id_mode_pairs(
-  modes: dict.Dict(Int, Mode),
-  subject_count: Int,
-) -> List(#(Int, Mode)) {
-  dict.to_list(modes)
-  |> list.filter(fn(pair) {
-    let #(id, _mode) = pair
-    id < subject_count
-  })
-}
-
-/// Every value a mode can take, as missing patterns: the constructors of a
-/// finite mode, or the `_` catch-all of an infinite one.
-fn all_values(pairs: List(#(Int, Mode))) -> List(MissingPattern) {
-  list.flatten(
-    list.map(pairs, fn(pair) {
-      let #(_id, mode) = pair
-      case mode {
-        Finite(fields) ->
-          list.map(fields, fn(field) {
-            ValueMissing(
-              field.name,
-              list.map(field.modes, fn(_) { AnyMissing }),
-            )
-          })
-        Infinite -> [AnyMissing]
-      }
-    }),
-  )
-}
-
 /// Run the decision procedure over the matrix.
 fn compile(
   modes: dict.Dict(Int, Mode),
@@ -689,16 +656,9 @@ fn compile(
   next_id: Int,
 ) -> Outcome {
   let rows = strip(rows)
-  case rows {
-    // An empty matrix (no clauses at all) misses every possible value of the
-    // subjects: each constructor of a finite subject, or the catch-all `_` of
-    // an infinite one.
-    [] -> Outcome(all_values(missing_id_mode_pairs(modes, next_id)), next_id)
-    _ ->
-      case list.any(rows, fn(row) { row.checks == [] }) {
-        True -> Outcome([], next_id)
-        False -> run_decision(modes, rows, next_id)
-      }
+  case list.any(rows, fn(row) { row.checks == [] }) {
+    True -> Outcome([], next_id)
+    False -> run_decision(modes, rows, next_id)
   }
 }
 

@@ -159,25 +159,6 @@ pub fn var_source(store: TypeStore, type_: Type) -> Option(String) {
   }
 }
 
-/// Tag an inference variable with the generic variable name it stands for,
-/// returning the store with the tag recorded (and the type unchanged).
-pub fn tag_var_source(
-  store: TypeStore,
-  type_: Type,
-  source: String,
-) -> #(TypeStore, Type) {
-  case type_ {
-    Var(id) -> #(
-      TypeStore(
-        ..store,
-        var_sources: dict.insert(store.var_sources, id, source),
-      ),
-      type_,
-    )
-    _ -> #(store, type_)
-  }
-}
-
 /// Whether a var with the given source appears nested inside `type_` (inside a
 /// constructor, tuple, or function, but not as the type itself). A return type
 /// that embeds its own call's return inside a container is infinitely
@@ -1199,35 +1180,6 @@ pub type Environment {
 
 pub type EnvState(a) {
   EnvState(environment: Environment, state: a)
-}
-
-pub fn raw_show(type_: Type) -> String {
-  case type_ {
-    Var(id) -> "V" <> int.to_string(id)
-    NilType -> "Nil"
-    IntType -> "Int"
-    FloatType -> "Float"
-    StringType -> "String"
-    BoolType -> "Bool"
-    BitArrayType -> "BitArray"
-    TupleType(e) -> "#(" <> raw_show_list(e) <> ")"
-    CustomType(m, n, p, _) -> m <> "." <> n <> "(" <> raw_show_list(p) <> ")"
-    CallableType(p, _, r) ->
-      "Callable(" <> raw_show_list(p) <> " -> " <> raw_show(r) <> ")"
-    GenericCallableType(p, _, r, _) ->
-      "GenCallable(" <> raw_show_list(p) <> " -> " <> raw_show(r) <> ")"
-    NamespaceType(_, _) -> "Namespace"
-    TypeAlias(_, aliased) -> "Alias(" <> raw_show(aliased) <> ")"
-    GenericTypeVariable(n, _) -> "G:" <> n
-    TodoType -> "Todo"
-    InferredReturn -> "InferredReturn"
-  }
-}
-
-pub fn raw_show_list(types_: List(Type)) -> String {
-  types_
-  |> list.map(raw_show)
-  |> string.join(", ")
 }
 
 pub type EnvStateResult(a) =
