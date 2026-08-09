@@ -805,3 +805,133 @@ pub fn valid_record_update_on_polymorphic_const_with_lambda_annotation_test() {
   }",
   )
 }
+pub fn capture_with_rigid_param_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Subject(a) { Subject }
+  pub type Effect(a) { Effect }
+  pub type Message(a) {
+    Message
+    EffectDispatchedMessage(message: a)
+  }
+  pub fn send_capture(self: Subject(Message(a)), message: Message(a)) -> Nil {
+    Nil
+  }
+  pub fn perform(effect: Effect(message), dispatch: fn(message) -> Nil) -> Nil {
+    case effect {
+      Effect -> Nil
+    }
+  }
+  pub fn handle_effect(
+    self: Subject(Message(message__zzz)),
+    effect: Effect(message),
+  ) -> Nil {
+    let send = send_capture(self, _)
+    let dispatch = fn(message) { send(EffectDispatchedMessage(message:)) }
+    perform(effect, dispatch)
+  }",
+    )
+    == error.InvalidArguments(
+      "(main_module.Effect(var_5), fn (var_5) -> Nil)",
+      "(main_module.Effect(var_1), fn (var_3) -> Nil)",
+    )
+}
+
+pub fn capture_with_same_rigid_param_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Subject(a) { Subject }
+  pub type Effect(a) { Effect }
+  pub type Message(a) {
+    Message
+    EffectDispatchedMessage(message: a)
+  }
+  pub fn send_capture(self: Subject(Message(a)), message: Message(a)) -> Nil {
+    Nil
+  }
+  pub fn perform(effect: Effect(message), dispatch: fn(message) -> Nil) -> Nil {
+    case effect {
+      Effect -> Nil
+    }
+  }
+  pub fn handle_effect(
+    self: Subject(Message(message)),
+    effect: Effect(message),
+  ) -> Nil {
+    let send = send_capture(self, _)
+    let dispatch = fn(message) { send(EffectDispatchedMessage(message:)) }
+    perform(effect, dispatch)
+  }",
+  )
+}
+
+pub fn pipe_into_capture_keeps_rigid_type_var_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Blob { Blob }
+  pub type Cache(a) { Cache }
+  pub type Handler(a) { Handler }
+  pub type Result(a, b) {
+    Ok(a)
+    Error(b)
+  }
+  pub fn decode(
+    cache: Cache(a),
+    path: String,
+    name: String,
+    event: Blob,
+  ) -> #(Cache(a), Result(Handler(a), Nil)) {
+    #(cache, Ok(Handler))
+  }
+  pub fn dispatch(
+    cache: Cache(a),
+    decoded: #(Cache(a), Result(Handler(a), Nil)),
+  ) -> #(Cache(a), Result(Handler(a), Nil)) {
+    decoded
+  }
+  pub fn handle(
+    cache: Cache(message__zzz),
+    path: String,
+    name: String,
+    event: Blob,
+  ) -> #(Cache(message), Result(Handler(message), Nil)) {
+    decode(cache, path, name, event) |> dispatch(cache, _)
+  }",
+    )
+    == error.InvalidReturnType(
+      "handle",
+      "(main_module.Cache(message__zzz), main_module.Result(main_module.Handler(message__zzz), Nil))",
+      "(main_module.Cache(message), main_module.Result(main_module.Handler(message), Nil))",
+    )
+}
+
+pub fn pipe_into_capture_with_same_rigid_type_var_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Blob { Blob }
+  pub type Cache(a) { Cache }
+  pub type Handler(a) { Handler }
+  pub type Result(a, b) {
+    Ok(a)
+    Error(b)
+  }
+  pub fn decode(
+    cache: Cache(a),
+    path: String,
+    name: String,
+    event: Blob,
+  ) -> #(Cache(a), Result(Handler(a), Nil)) {
+    #(cache, Ok(Handler))
+  }
+  pub fn dispatch(
+    cache: Cache(a),
+    decoded: #(Cache(a), Result(Handler(a), Nil)),
+  ) -> #(Cache(a), Result(Handler(a), Nil)) {
+    decoded
+  }
+  pub fn handle(
+    cache: Cache(message),
+    path: String,
+    name: String,
+    event: Blob,
+  ) -> #(Cache(message), Result(Handler(message), Nil)) {
+    decode(cache, path, name, event) |> dispatch(cache, _)
+  }",
+  )
+}

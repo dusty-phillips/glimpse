@@ -1043,17 +1043,34 @@ fn do_generalise(
 ) -> #(TypeStore, dict.Dict(Int, String), Type) {
   case type_ {
     Var(id) -> {
-      case dict.get(store.vars, id) {
-        Ok(Link(linked)) -> do_generalise(store, names, linked)
-        Ok(Unbound) | Error(_) -> {
-          case dict.get(names, id) {
-            Ok(name) -> #(store, names, GenericTypeVariable(name))
-            Error(_) -> {
-              let name = generalise_name(dict.size(names))
-              #(store, dict.insert(names, id, name), GenericTypeVariable(name))
+      case is_rigid_var(store, Var(id)) {
+        True -> {
+          // A rigid type variable (one tagged `rigid:`, or a flexible var
+          // linked to one) is not free and must not be generalised to a named
+          // generic: doing so lets a use site freshen it into a fresh variable
+          // and unify it with any type. Keep it as the rigid var so it retains
+          // its identity (e.g. a function capture `f(x, _)` whose `x` pins the
+          // remaining parameter to the enclosing function's rigid type var).
+          let #(_, resolved) = resolve_keep_rigid(store, Var(id))
+          #(store, names, resolved)
+        }
+        False ->
+          case dict.get(store.vars, id) {
+            Ok(Link(linked)) -> do_generalise(store, names, linked)
+            Ok(Unbound) | Error(_) -> {
+              case dict.get(names, id) {
+                Ok(name) -> #(store, names, GenericTypeVariable(name))
+                Error(_) -> {
+                  let name = generalise_name(dict.size(names))
+                  #(
+                    store,
+                    dict.insert(names, id, name),
+                    GenericTypeVariable(name),
+                  )
+                }
+              }
             }
           }
-        }
       }
     }
     CallableType(parameters, labels, return) -> {

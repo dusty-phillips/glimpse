@@ -125,7 +125,11 @@ pub fn fn_capture(
           }
         })
 
-      let #(_, resolved_return) = types.resolve(store, return)
+      // Keep rigid type variables in the return (e.g. a signature type param
+      // pinned by a supplied capture argument) so the capture stays pinned to
+      // them; plain resolve would collapse them to their named generics, which
+      // are freshened at the use site and lose the linkage.
+      let #(_, resolved_return) = types.resolve_keep_rigid(store, return)
       let generalised =
         types.generalise(
           store,
