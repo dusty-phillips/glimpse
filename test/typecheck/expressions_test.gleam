@@ -984,3 +984,38 @@ pub fn recursive_call_with_same_rigid_type_var_is_fine_test() {
   }",
   )
 }
+
+pub fn todo_with_message_is_fine_test() {
+  // `todo("msg")` is a call to the prelude wildcard value; its argument is
+  // typechecked and the whole expression unifies with anything.
+  helpers.ok_module_typecheck("pub fn f() -> Int { todo(\"msg\") }")
+  helpers.ok_module_typecheck("pub fn f() -> Int { todo(1.5) }")
+}
+
+pub fn panic_with_message_is_fine_test() {
+  helpers.ok_module_typecheck("pub fn f() -> Int { panic(\"boom\") }")
+}
+
+pub fn todo_message_is_typechecked_test() {
+  // The message is a normal expression: an undefined variable or a type error
+  // inside it is reported.
+  assert helpers.error_module_typecheck(
+      "pub fn f() -> Int { todo(undefined_var) }",
+    )
+    == error.InvalidName("undefined_var")
+  assert helpers.error_module_typecheck(
+      "pub fn f() -> Int { todo(\"msg\" <> 1) }",
+    )
+    == error.InvalidBinOp("<>", "String", "Int", "two Strings")
+}
+
+pub fn todo_as_type_name_message_is_rejected_test() {
+  // `todo as String` parses the type name as the message, which is a type used
+  // as a value; the real compiler reports an unknown variable.
+  assert helpers.error_module_typecheck("pub fn f() -> Int { todo as String }")
+    == error.InvalidName("String")
+  assert helpers.error_module_typecheck(
+      "pub fn f() -> Int { panic as Result(Int, String) }",
+    )
+    == error.InvalidName("Result")
+}

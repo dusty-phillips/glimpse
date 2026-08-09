@@ -449,12 +449,26 @@ fn check_pattern_segment_options(
     glance.PatternVariable(_, _) -> True
     _ -> False
   }
+  let has_unit =
+    list.any(options, fn(option) {
+      case option {
+        glance.UnitOption(_) -> True
+        _ -> False
+      }
+    })
   case !is_last && has_bits_or_bytes && !has_size {
     True -> Error(error.InvalidBitStringSegment("bits"))
     False ->
       case has_utf && is_variable {
         True -> Error(error.InvalidBitStringSegment("utf8"))
-        False -> Ok(Nil)
+        False ->
+          case has_unit && !has_size {
+            // A `unit` without an explicit size cannot determine the segment
+            // width, so the real compiler rejects it in both expressions and
+            // patterns ("This needs an explicit size").
+            True -> Error(error.InvalidBitStringSegment("unit"))
+            False -> Ok(Nil)
+          }
       }
   }
 }

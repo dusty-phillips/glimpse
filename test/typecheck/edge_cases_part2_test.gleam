@@ -393,3 +393,87 @@ pub fn named_target_erlang_name_matches_builtin_test() {
   assert list.map(filtered.functions, fn(def) { def.definition.name })
     == ["erl_only"]
 }
+
+pub fn rigid_signature_type_variable_is_enforced_on_return_test() {
+  // A function parameter whose type mentions the function's own type variable
+  // (`message: fn(List(String)) -> message`) flows that rigid variable through
+  // the body. A body that passes a `Decoder(message)` value as a call argument
+  // must not have its rigid linkage broken by call-argument instantiation, so
+  // a return annotation that renames the variable (`message__zzz`) is a type
+  // error rather than unifying with the flexible body type.
+  assert helpers.error_module_typecheck(
+      "pub type Decoder(a) { Decoder(value: fn(Int) -> a) }
+  pub type Attribute(a) { Attribute }
+  pub fn subfield(
+    path: List(String),
+    decoder: Decoder(a),
+    next: fn(a) -> Decoder(final),
+  ) -> Decoder(final) {
+    next(decoder.value(0))
+  }
+  pub fn success(value: message) -> Decoder(message) {
+    Decoder(fn(_) { value })
+  }
+  pub fn on(name: String, handler: Decoder(message)) -> Attribute(message) {
+    Attribute
+  }
+  pub fn prevent_default(event: Attribute(message)) -> Attribute(message) {
+    Attribute
+  }
+  fn formdata_decoder() -> Decoder(List(String)) {
+    Decoder(fn(_) { [] })
+  }
+  pub fn on_submit(message: fn(List(String)) -> message) -> Attribute(message) {
+    on(\"submit\", {
+      use formdata <- subfield([\"f\"], formdata_decoder())
+      formdata |> message |> success
+    })
+    |> prevent_default
+  }
+  pub fn on_submit_bad(message: fn(List(String)) -> message) -> Attribute(message__zzz) {
+    on(\"submit\", {
+      use formdata <- subfield([\"f\"], formdata_decoder())
+      formdata |> message |> success
+    })
+    |> prevent_default
+  }",
+    )
+    == error.InvalidReturnType(
+      "on_submit_bad",
+      "main_module.Attribute(message)",
+      "main_module.Attribute(message__zzz)",
+    )
+}
+
+pub fn rigid_signature_type_variable_unmutated_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Decoder(a) { Decoder(value: fn(Int) -> a) }
+  pub type Attribute(a) { Attribute }
+  pub fn subfield(
+    path: List(String),
+    decoder: Decoder(a),
+    next: fn(a) -> Decoder(final),
+  ) -> Decoder(final) {
+    next(decoder.value(0))
+  }
+  pub fn success(value: message) -> Decoder(message) {
+    Decoder(fn(_) { value })
+  }
+  pub fn on(name: String, handler: Decoder(message)) -> Attribute(message) {
+    Attribute
+  }
+  pub fn prevent_default(event: Attribute(message)) -> Attribute(message) {
+    Attribute
+  }
+  fn formdata_decoder() -> Decoder(List(String)) {
+    Decoder(fn(_) { [] })
+  }
+  pub fn on_submit(message: fn(List(String)) -> message) -> Attribute(message) {
+    on(\"submit\", {
+      use formdata <- subfield([\"f\"], formdata_decoder())
+      formdata |> message |> success
+    })
+    |> prevent_default
+  }",
+  )
+}

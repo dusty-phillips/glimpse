@@ -609,10 +609,15 @@ fn typecheck_with_expected(
       }
     }
 
-    glance.Block(_, statements) -> block(environment, store, statements)
+    glance.Block(_, statements) ->
+      block(environment, store, statements)
+      |> result.map(fn(state) {
+        let #(store, btype) = state
+        #(store, btype)
+      })
 
-    glance.Panic(_, _) -> Ok(#(store, types.TodoType))
-    glance.Todo(_, _) -> Ok(#(store, types.TodoType))
+    glance.Panic(_, message) -> check_todo_message(environment, store, message)
+    glance.Todo(_, message) -> check_todo_message(environment, store, message)
 
     glance.Tuple(_, elements) -> {
       use #(store, types_rev) <- result.try(
@@ -1821,6 +1826,24 @@ fn custom_type_variant_count(
   |> set.size
 }
 
+/// Typecheck a `todo`/`panic` and its optional message. The message (e.g.
+/// `todo("still building")`) is a normal expression that the real compiler
+/// typechecks, so an undefined variable or type error inside it is reported.
+fn check_todo_message(
+  environment: Environment,
+  store: TypeStore,
+  message: option.Option(glance.Expression),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use store <- result.try(case message {
+    option.None -> Ok(store)
+    option.Some(expr) -> {
+      use #(store, _) <- result.try(expression(environment, store, expr))
+      Ok(store)
+    }
+  })
+  Ok(#(store, types.TodoType))
+}
+
 /// Typecheck a single bit-string segment. The segment value's type must match
 /// the type family chosen by the options, and the segment's size/unit options
 /// must be valid positive sizes.
@@ -1868,7 +1891,43 @@ fn check_bit_string_sizes(
   options: List(glance.BitStringSegmentOption(glance.Expression)),
 ) -> error.TypeCheckResult(TypeStore) {
   use store <- result.try(check_option_conflicts(environment, store, options))
+  use store <- result.try(check_expression_options(options, store))
   check_literal_sizes(environment, store, options)
+}
+
+/// Reject segment options that the real compiler only allows in bit-array
+/// *patterns*: `signed`/`unsigned` are meaningless for an expression that is
+/// just built (its byte order and interpretation are fixed). A `unit` without
+/// an accompanying `size` is also rejected, in both expressions and patterns.
+fn check_expression_options(
+  options: List(glance.BitStringSegmentOption(glance.Expression)),
+  store: TypeStore,
+) -> error.TypeCheckResult(TypeStore) {
+  let has_size =
+    list.any(options, fn(option) {
+      case option {
+        glance.SizeOption(_) | glance.SizeValueOption(_) -> True
+        _ -> False
+      }
+    })
+  let has_unit =
+    list.any(options, fn(option) {
+      case option {
+        glance.UnitOption(_) -> True
+        _ -> False
+      }
+    })
+  let has_signed =
+    list.any(options, fn(option) {
+      case option {
+        glance.SignedOption | glance.UnsignedOption -> True
+        _ -> False
+      }
+    })
+  case has_signed || has_unit && !has_size {
+    True -> Error(error.InvalidBitStringSegment("signed"))
+    False -> Ok(store)
+  }
 }
 
 /// Reject segments that declare mutually exclusive options: more than one
@@ -2536,6 +2595,36 @@ pub fn call(
   target: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  // `todo(expr)` and `panic(expr)` are calls to the prelude wildcard values:
+  // the message is typechecked as a normal expression and the call itself has
+  // the wildcard type (unifies with anything). Glance represents them as a
+  // `Todo`/`Panic` callee, not a `Variable("todo")`.
+  case target {
+    glance.Todo(_, _) | glance.Panic(_, _) -> {
+      use #(store, _) <- result.try(
+        list.try_fold(arguments, #(store, Nil), fn(state, argument) {
+          let #(store, _) = state
+          use #(store, _) <- result.try(case argument {
+            glance.UnlabelledField(expr) -> expression(environment, store, expr)
+            glance.LabelledField(_, _, expr) ->
+              expression(environment, store, expr)
+            glance.ShorthandField(_, _) -> Ok(#(store, types.TodoType))
+          })
+          Ok(#(store, Nil))
+        }),
+      )
+      Ok(#(store, types.TodoType))
+    }
+    _ -> do_call(environment, store, target, arguments)
+  }
+}
+
+fn do_call(
+  environment: Environment,
+  store: TypeStore,
+  target: glance.Expression,
+  arguments: List(glance.Field(glance.Expression)),
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   // A recursive self-call is checked against the function's own rigid type
   // variables (monomorphic recursion), not a fresh instantiation: the real
   // compiler rejects a self-call that passes a different rigid type variable
@@ -2640,7 +2729,6 @@ pub fn call(
 }
 
 /// Type-check call arguments against their parameter types.
-///
 /// Arguments are aligned to parameters (by label for labelled/shorthand
 /// fields, positionally otherwise) and checked in *parameter* order so that
 /// earlier arguments can constrain generic parameters that later, callback
@@ -2723,11 +2811,15 @@ fn check_arguments(
               field,
               option.Some(resolved_param),
             ))
-            // Polymorphic arguments (e.g. a generic function or a captured
-            // call) are instantiated afresh at the call site so their type
-            // variables don't leak into the callee's inference. Concrete
-            // arguments are left as-is.
-            let #(store, arg_type) = case functions.is_generic_type(arg_type) {
+            // Polymorphic callable arguments (a generic function, capture, or
+            // constructor) are instantiated afresh at the call site so their
+            // type variables don't leak into the callee's inference. Concrete
+            // arguments — including a value like `Decoder(message)` whose type
+            // parameter is the enclosing function's rigid signature variable —
+            // are left as-is.
+            let #(store, arg_type) = case
+              functions.is_generic_callable(arg_type)
+            {
               True -> types.instantiate(store, arg_type)
               False -> #(store, arg_type)
             }

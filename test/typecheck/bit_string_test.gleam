@@ -99,3 +99,64 @@ pub fn double_variable_assignment_test() {
     )
     == error.DoubleVariableAssignment
 }
+
+pub fn signed_option_in_expression_is_rejected_test() {
+  // `signed`/`unsigned` are only valid in bit-array patterns; in an
+  // expression the segment's bytes are already being built, so the real
+  // compiler rejects the option with "Invalid bit array segment".
+  assert helpers.error_module_typecheck(
+      "pub fn f(n: Int) -> BitArray { <<n:signed>> }",
+    )
+    == error.InvalidBitStringSegment("signed")
+  assert helpers.error_module_typecheck(
+      "pub fn f(n: Int) -> BitArray { <<n:unsigned>> }",
+    )
+    == error.InvalidBitStringSegment("signed")
+}
+
+pub fn unit_without_size_is_rejected_test() {
+  // A `unit` must always be accompanied by an explicit `size`; on its own the
+  // segment width is underdetermined and the real compiler rejects it, in both
+  // expressions and patterns.
+  assert helpers.error_module_typecheck(
+      "pub fn f(n: Int) -> BitArray { <<n:unit(8)>> }",
+    )
+    == error.InvalidBitStringSegment("signed")
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<_:unit(8)>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidBitStringSegment("unit")
+}
+
+pub fn signed_in_pattern_is_fine_test() {
+  // In a pattern `signed`/`unsigned` are valid segment options.
+  helpers.ok_module_typecheck(
+    "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<n:signed-size(8), _:bits>> -> True
+        _ -> False
+      }
+    }",
+  )
+}
+
+pub fn unit_with_size_is_fine_test() {
+  // `unit` combined with an explicit `size` is valid in both expressions and
+  // patterns.
+  helpers.ok_module_typecheck(
+    "pub fn f(n: Int) -> BitArray { <<n:size(16)-unit(8)>> }",
+  )
+  helpers.ok_module_typecheck(
+    "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<_:unit(8)-size(16)>> -> True
+        _ -> False
+      }
+    }",
+  )
+}

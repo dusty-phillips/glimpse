@@ -55,6 +55,21 @@ pub fn is_generic_type(type_: Type) -> Bool {
   }
 }
 
+/// Whether a type is a callable (function value, capture, or constructor)
+/// whose parameter or return types reference a generic type variable. Only such
+/// callable arguments are instantiated afresh at a call site; a concrete value
+/// like `Decoder(message)` whose type parameter is the enclosing function's
+/// rigid signature variable must keep that linkage.
+pub fn is_generic_callable(type_: Type) -> Bool {
+  case type_ {
+    types.CallableType(parameters, _, return) ->
+      has_generic_types(parameters) || is_generic_type(return)
+    types.GenericCallableType(parameters, _, return, _) ->
+      has_generic_types(parameters) || is_generic_type(return)
+    _ -> False
+  }
+}
+
 pub fn to_callable_type_with_original(
   state: CallableState,
   return_type: Type,
