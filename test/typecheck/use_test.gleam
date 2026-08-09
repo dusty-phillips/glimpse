@@ -98,3 +98,45 @@ pub fn use_after_let_test() {
     }",
     )
 }
+
+/// A `use` against a bare value that is not callable is rejected: `use x <- 42`
+/// has no callback to bind the continuation against.
+pub fn use_noncallable_value_rejected_test() {
+  assert helpers.error_module_typecheck(
+    "pub fn main() {
+      use x <- 42
+      x
+    }",
+    )
+    == error.NotCallable("Int")
+}
+
+/// A bare (non-call) use function with more than one parameter cannot provide
+/// the single implicit callback the `use` statement requires.
+pub fn use_bare_function_with_extra_params_rejected_test() {
+  assert helpers.error_module_typecheck(
+    "fn foo(x: Int, y: Int) -> Int {
+      x + y
+    }
+  pub fn main() {
+    use a, b <- foo
+    a
+  }",
+    )
+    == error.InvalidUse(2)
+}
+
+/// A `use` whose callback parameter is itself not a function has nothing to
+/// bind the continuation against.
+pub fn use_noncallable_callback_rejected_test() {
+  assert helpers.error_module_typecheck(
+    "fn foo(x: Int, cb: Int) -> Int {
+      x
+    }
+  pub fn main() {
+    use a <- foo(1)
+    a
+  }",
+    )
+    == error.NotCallable("Int")
+}
