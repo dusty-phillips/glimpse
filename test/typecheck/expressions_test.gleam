@@ -363,6 +363,27 @@ pub fn guard_int_negation_rejected_test() {
     == error.InvalidType("Int", "Bool", "! can only negate Bool")
 }
 
+pub fn guard_record_construction_labelled_argument_allowed_test() {
+  let _ =
+    helpers.ok_module_typecheck(
+      "type Rec { Rec(a: Int) } fn foo(x: Rec) -> Int { case x { y if y == Rec(a: 1) -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_record_construction_spread_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "type Rec { Rec(a: Int) } fn foo(x: Rec) -> Int { case x { y if y == Rec(..z) -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
+pub fn guard_piped_function_literal_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if y |> fn(a) { a } -> 0 _ -> 1 } }",
+    )
+    == error.InvalidGuardExpression
+}
+
 pub fn case_pattern_mismatch_test() {
   assert helpers.error_function_typecheck(
       "fn foo(x: Int) -> String { case x { \"a\" -> \"one\" _ -> \"other\" } }",

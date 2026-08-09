@@ -80,3 +80,27 @@ pub fn shorthand_field_with_variable_in_scope_is_fine_test() {
   }",
   )
 }
+
+pub fn unknown_field_in_update_test() {
+  assert helpers.error_module_typecheck(
+    "pub type Wibble {
+    Wibble(a: Int, b: String)
+  }
+  pub fn f(base: Wibble) -> Wibble {
+    Wibble(..base, zzz: 1)
+  }",
+    )
+    == error.InvalidFieldAccess("main_module.Wibble", "zzz")
+}
+
+pub fn wrong_field_type_in_update_test() {
+  assert helpers.error_module_typecheck(
+    "pub type Wibble {
+    Wibble(a: Int, b: String)
+  }
+  pub fn f(base: Wibble) -> Wibble {
+    Wibble(..base, a: \"not an int\")
+  }",
+    )
+    == error.InvalidType("String", "Int", "in record update of field a")
+}

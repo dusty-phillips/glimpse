@@ -325,3 +325,24 @@ pub fn generic_function_wrong_arity_test() {
     )
   assert actual == error.InvalidArguments("(var_0)", "(Int, String)")
 }
+
+pub fn generic_constraints_from_complex_arguments_test() {
+  // Calling a same-module generic function (whose return is still a
+  // placeholder) with list/tuple/bit-string/call arguments exercises the
+  // argument-named-vars traversal for each expression shape.
+  let #(module, _env) =
+    helpers.ok_module_typecheck(
+      "fn later(rest: List(Int), x: Int) -> Nil {
+      let _ = consume([1, ..rest], [1, 2], #(1, 2), <<1:size(8)>>, pair(x, 0))
+      Nil
+    }
+    fn consume(a: a, b: b, c: c, d: d, e: e) -> a {
+      a
+    }
+    fn pair(x: Int, y: Int) -> #(Int, Int) {
+      #(x, y)
+    }",
+    )
+
+  assert list.length(module.module.functions) == 3
+}
