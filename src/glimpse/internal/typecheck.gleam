@@ -1429,95 +1429,103 @@ fn record_update(
       let #(store, parameters, labels, constructor_return) =
         types.instantiate_callable(store, constructor_type)
 
-      // The base record and the update result must be the same variant with the
-      // same type parameters, so the base's type parameters (e.g. the rigid
-      // signature type variables of the record being updated) are unified with
-      // the constructor's instantiated parameters before any field is checked.
-      // Unifying against the *same* instantiation that produces the result type
-      // keeps those parameters linked: updating `App(arguments, ..)` where
-      // `arguments` is a distinct signature type variable must not let the
-      // result silently become `App(arguments__zzz, ..)`.
-      //
-      // However a field whose type is exactly one of the record's type
-      // parameters (e.g. `Box(value: a)` updated as `Box(..b, value: v)`) may
-      // legitimately change that parameter, so positions updated by the update
-      // are left free for the field-value unification to set. Only the
-      // non-updated positions are unified against the base record's type.
-      let #(store, updated) =
-        updated_record_type_positions(
-          store,
-          parameters,
-          labels,
-          fields,
-          constructor_return,
-        )
-      use store <- result.try(types.unify_record_update_base(
-        store,
-        environment,
-        record_type,
-        constructor_return,
-        updated,
-      ))
+      // Record update syntax requires the constructor to have at least one
+      // labelled field: `M(..base)` on `type M { M(Int) }` is rejected by the
+      // real compiler ("This constructor has no labelled fields").
+      case dict.is_empty(labels) {
+        True -> Error(error.RecordUpdateOnUnlabelledConstructor(constructor))
+        False -> {
+          // The base record and the update result must be the same variant with the
+          // same type parameters, so the base's type parameters (e.g. the rigid
+          // signature type variables of the record being updated) are unified with
+          // the constructor's instantiated parameters before any field is checked.
+          // Unifying against the *same* instantiation that produces the result type
+          // keeps those parameters linked: updating `App(arguments, ..)` where
+          // `arguments` is a distinct signature type variable must not let the
+          // result silently become `App(arguments__zzz, ..)`.
+          //
+          // However a field whose type is exactly one of the record's type
+          // parameters (e.g. `Box(value: a)` updated as `Box(..b, value: v)`) may
+          // legitimately change that parameter, so positions updated by the update
+          // are left free for the field-value unification to set. Only the
+          // non-updated positions are unified against the base record's type.
+          let #(store, updated) =
+            updated_record_type_positions(
+              store,
+              parameters,
+              labels,
+              fields,
+              constructor_return,
+            )
+          use store <- result.try(types.unify_record_update_base(
+            store,
+            environment,
+            record_type,
+            constructor_return,
+            updated,
+          ))
 
-      list.try_fold(fields, #(store, environment), fn(state, field) {
-        let #(store, env) = state
-        dict.get(labels, field.label)
-        |> result.map_error(fn(_) {
-          error.InvalidFieldAccess(
-            types.to_string(env, record_type),
-            field.label,
-          )
-        })
-        |> result.try(fn(position) {
-          let assert Ok(expected_type) =
-            list.drop(parameters, up_to: position) |> list.first
-          let #(_, expected_type) = types.resolve(store, expected_type)
-          case field.item {
-            option.None -> {
-              // Shorthand (`index:`) references a variable in scope; its type
-              // must match the field type, and the variable must exist.
-              types.lookup_variable_type(env, field.label)
-              |> result.replace_error(error.InvalidName(field.label))
-              |> result.try(fn(var_type) {
-                // A generalised binding (e.g. `let handlers = do_remove_event(..)`)
-                // is polymorphic; instantiating at the use site lets its named
-                // generics unify with the concrete field type instead of
-                // comparing them by name.
-                let #(store, var_type) = types.instantiate(store, var_type)
-                types.unify(store, env, var_type, expected_type)
-                |> result.map(fn(store) { #(store, env) })
-                |> result.map_error(fn(_) {
-                  error.InvalidType(
-                    types.to_string(env, var_type),
-                    types.to_string(env, expected_type),
-                    "in record update of field " <> field.label,
-                  )
-                })
-              })
-            }
-            option.Some(value_expr) -> {
-              use #(store, value_type) <- result.try(expression(
-                env,
-                store,
-                value_expr,
-              ))
-              types.unify(store, env, value_type, expected_type)
-              |> result.map(fn(store) { #(store, env) })
-              |> result.map_error(fn(_) {
-                error.InvalidType(
-                  types.to_string(env, value_type),
-                  types.to_string(env, expected_type),
-                  "in record update of field " <> field.label,
-                )
-              })
-            }
-          }
-        })
-      })
-      |> result.map(fn(state) {
-        let #(store, _env) = state
-        #(store, constructor_return)
-      })
+          list.try_fold(fields, #(store, environment), fn(state, field) {
+            let #(store, env) = state
+            dict.get(labels, field.label)
+            |> result.map_error(fn(_) {
+              error.InvalidFieldAccess(
+                types.to_string(env, record_type),
+                field.label,
+              )
+            })
+            |> result.try(fn(position) {
+              let assert Ok(expected_type) =
+                list.drop(parameters, up_to: position) |> list.first
+              let #(_, expected_type) = types.resolve(store, expected_type)
+              case field.item {
+                option.None -> {
+                  // Shorthand (`index:`) references a variable in scope; its type
+                  // must match the field type, and the variable must exist.
+                  types.lookup_variable_type(env, field.label)
+                  |> result.replace_error(error.InvalidName(field.label))
+                  |> result.try(fn(var_type) {
+                    // A generalised binding (e.g. `let handlers = do_remove_event(..)`)
+                    // is polymorphic; instantiating at the use site lets its named
+                    // generics unify with the concrete field type instead of
+                    // comparing them by name.
+                    let #(store, var_type) = types.instantiate(store, var_type)
+                    types.unify(store, env, var_type, expected_type)
+                    |> result.map(fn(store) { #(store, env) })
+                    |> result.map_error(fn(_) {
+                      error.InvalidType(
+                        types.to_string(env, var_type),
+                        types.to_string(env, expected_type),
+                        "in record update of field " <> field.label,
+                      )
+                    })
+                  })
+                }
+                option.Some(value_expr) -> {
+                  use #(store, value_type) <- result.try(expression(
+                    env,
+                    store,
+                    value_expr,
+                  ))
+                  types.unify(store, env, value_type, expected_type)
+                  |> result.map(fn(store) { #(store, env) })
+                  |> result.map_error(fn(_) {
+                    error.InvalidType(
+                      types.to_string(env, value_type),
+                      types.to_string(env, expected_type),
+                      "in record update of field " <> field.label,
+                    )
+                  })
+                }
+              }
+            })
+          })
+          |> result.map(fn(state) {
+            let #(store, _env) = state
+            #(store, constructor_return)
+          })
+        }
+      }
     }
     _ ->
       Error(error.NotCallable(types.to_string(environment, constructor_type)))

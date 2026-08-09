@@ -68,6 +68,10 @@ pub type TypeCheckError {
   /// Raised when a `..` record update is unsafe because the spread value's
   /// variant is open or its type parameters would change.
   UnsafeRecordUpdate(name: String)
+  /// Raised when `..` record update syntax is used with a constructor that has
+  /// no labelled fields. Only constructors with at least one labelled field
+  /// can be used with the update syntax.
+  RecordUpdateOnUnlabelledConstructor(constructor: String)
   /// Raised when a record update lists a field more than once.
   DuplicateArgument(field: String)
   /// Raised when a field access is attempted on a label that is not present on
@@ -88,6 +92,16 @@ pub type TypeCheckError {
   PrivateTypeLeak(name: String)
   /// Raised when `todo` is used in a module constant value.
   TodoInConstant
+  /// Raised when a module constant value contains an expression that is not
+  /// allowed in constants, e.g. `const x = 1 + 2`. The Gleam compiler only
+  /// permits literal values, constants references, list/tuple/bit-array
+  /// literals, record construction and updates, string concatenation, and
+  /// negation of numeric literals.
+  InvalidConstantExpression
+  /// Raised when an anonymous function literal appears in a module constant
+  /// value (including nested inside variants, tuples, lists, etc.). The Gleam
+  /// compiler rejects this at parse time.
+  FnInConstant
   /// Raised when a type alias declares a type parameter it never uses.
   UnusedTypeParameter(name: String)
   /// Raised when a constructor pattern lists every field yet also uses `..`.
@@ -135,6 +149,13 @@ pub type TypeCheckError {
   /// exist, e.g. `@external(rust, ...)`. The Gleam compiler rejects this at
   /// parse time.
   UnknownExternalTarget(name: String)
+  /// Raised when an `@external` attribute has the wrong shape, e.g. a
+  /// non-Variable target, or a target/module/function count other than three.
+  InvalidExternalAttribute
+  /// Raised when an attribute such as `@deprecated` or `@target` has arguments
+  /// of the wrong shape, e.g. `@deprecated` without a string message, or
+  /// `@target` without a single variable target.
+  InvalidAttributeShape(attribute: String)
   /// Raised when an attribute is not a recognised Gleam attribute, e.g.
   /// `@deprecated__zzz(...)`. The only valid attributes are `@external`,
   /// `@internal`, `@deprecated` and `@target`; the compiler rejects anything

@@ -165,9 +165,27 @@ pub fn module(
     ),
   )
 
+  // The Gleam compiler also checks each known attribute's argument shape:
+  // `@deprecated` takes exactly one string message, `@target` exactly one
+  // variable target, and `@internal` no arguments at all.
+  use _ <- result.try(
+    list.fold(
+      all_module_attributes(glimpse_module.module),
+      Ok(Nil),
+      fn(result, attribute) {
+        case result, attribute_shape_is_valid(attribute) {
+          Error(e), _ -> Error(e)
+          Ok(_), True -> Ok(Nil)
+          Ok(_), False -> Error(error.InvalidAttributeShape(attribute.name))
+        }
+      },
+    ),
+  )
+
   // The Gleam compiler rejects `@external` attributes naming a build target it
   // does not know (`@external(rust, ...)`) at parse time; the only valid
-  // targets are erlang and javascript.
+  // targets are erlang and javascript. It also requires exactly three
+  // arguments (target, module, function) with a `Variable` target.
   use _ <- result.try(
     glimpse_module.module.functions
     |> list.map(fn(definition) { definition.attributes })
@@ -182,12 +200,17 @@ pub fn module(
         Ok(_), False -> Ok(Nil)
         Ok(_), True ->
           case attribute.arguments {
-            [glance.Variable(_, name), ..] ->
+            [glance.Variable(_, name), glance.String(_, _), glance.String(_, _)] ->
               case name == "erlang" || name == "javascript" {
                 True -> Ok(Nil)
                 False -> Error(error.UnknownExternalTarget(name))
               }
-            _ -> Ok(Nil)
+            [glance.Variable(_, name), ..] ->
+              case name == "erlang" || name == "javascript" {
+                True -> Error(error.InvalidExternalAttribute)
+                False -> Error(error.UnknownExternalTarget(name))
+              }
+            _ -> Error(error.InvalidExternalAttribute)
           }
       }
     }),
@@ -692,6 +715,20 @@ fn is_known_attribute(name: String) -> Bool {
   list.contains(["external", "internal", "deprecated", "target"], name)
 }
 
+/// Whether an attribute's arguments match the shape the Gleam compiler
+/// expects: `@external` is checked separately (target name + three arguments);
+/// `@deprecated` takes one string message, `@target` one variable target, and
+/// `@internal` no arguments at all.
+fn attribute_shape_is_valid(attribute: glance.Attribute) -> Bool {
+  case attribute.name, attribute.arguments {
+    "external", _ -> True
+    "deprecated", [glance.String(_, _)] -> True
+    "target", [glance.Variable(_, _)] -> True
+    "internal", [] -> True
+    _, _ -> False
+  }
+}
+
 fn type_variables_used(type_: glance.Type) -> List(String) {
   case type_ {
     glance.NamedType(_, _, _, parameters) ->
@@ -751,10 +788,135 @@ pub fn constant(
   environment: Environment,
   constant: glance.Constant,
 ) -> types.EnvStateResult(glance.Constant) {
-  // `todo` and `panic` expressions are not allowed in constants.
-  case constant_has_todo(constant.value) {
-    True -> Error(error.TodoInConstant)
-    False -> constant_(environment, constant)
+  // Constants are restricted to a subset of the expression grammar (the real
+  // compiler parses them with a dedicated grammar): literal values, references
+  // to other constants, list/tuple/bit-array literals, record construction and
+  // updates, string concatenation, and nothing else. `todo`, `panic`,
+  // anonymous functions, operators, blocks, `case`, captures and field access
+  // are all rejected.
+  case constant_value_error(constant.value) {
+    option.Some(e) -> Error(e)
+    option.None -> constant_(environment, constant)
+  }
+}
+
+/// Whether a constant value expression violates the constant grammar, and if
+/// so which error to report. `None` means the value is a valid constant.
+fn constant_value_error(
+  expr: glance.Expression,
+) -> option.Option(error.TypeCheckError) {
+  case expr {
+    // `todo` and `panic` are not allowed in constants at all.
+    glance.Todo(_, _) -> option.Some(error.TodoInConstant)
+    glance.Panic(_, _) -> option.Some(error.InvalidConstantExpression)
+    glance.Fn(_, _, _, _) -> option.Some(error.FnInConstant)
+    // Literals and constant references.
+    glance.Int(_, _)
+    | glance.Float(_, _)
+    | glance.String(_, _)
+    | glance.Variable(_, _) -> option.None
+    // String concatenation is the only allowed binary operator.
+    glance.BinaryOperator(_, glance.Concatenate, left, right) ->
+      case constant_value_error(left) {
+        option.Some(e) -> option.Some(e)
+        option.None -> constant_value_error(right)
+      }
+    glance.BinaryOperator(_, _, _, _) ->
+      option.Some(error.InvalidConstantExpression)
+    // Negation is lexed as part of a numeric literal, so a standalone
+    // `NegateInt`/`NegateBool` (e.g. `-x`, `!True`) is not a constant.
+    glance.NegateInt(_, _) | glance.NegateBool(_, _) ->
+      option.Some(error.InvalidConstantExpression)
+    // Blocks, `case`, captures, tuple index and echo are not constants.
+    glance.Block(_, _)
+    | glance.Case(_, _, _)
+    | glance.FnCapture(_, _, _, _, _)
+    | glance.TupleIndex(_, _, _)
+    | glance.Echo(_, _, _) -> option.Some(error.InvalidConstantExpression)
+    glance.FieldAccess(_, container, _) ->
+      // `module.name` is a qualified reference to another module's constant;
+      // any other field access (e.g. `R(1).a`) is not a constant.
+      case container {
+        glance.Variable(_, _) -> option.None
+        _ -> option.Some(error.InvalidConstantExpression)
+      }
+    glance.Tuple(_, elements) -> constant_value_list_error(elements)
+    glance.List(_, [], option.Some(_)) ->
+      option.Some(error.InvalidConstantExpression)
+    glance.List(_, elements, rest) ->
+      case constant_value_list_error(elements) {
+        option.Some(e) -> option.Some(e)
+        option.None ->
+          case rest {
+            option.Some(r) -> constant_value_error(r)
+            option.None -> option.None
+          }
+      }
+    glance.Call(_, function, arguments) -> {
+      // A call is a record construction when the callee is a plain constructor
+      // reference (upper-case name, possibly module-qualified). Any other call
+      // (a lower-case function name) is a function call, which is not allowed.
+      let callee_ok = case function {
+        glance.Variable(_, name) -> is_constructor_name(name)
+        glance.FieldAccess(_, glance.Variable(_, _), label) ->
+          is_constructor_name(label)
+        _ -> False
+      }
+      case callee_ok {
+        False -> option.Some(error.InvalidConstantExpression)
+        True ->
+          constant_value_list_error(
+            list.map(arguments, fn(field) { field_item(field) }),
+          )
+      }
+    }
+    glance.RecordUpdate(_, _, _, record, fields) ->
+      case constant_value_error(record) {
+        option.Some(e) -> option.Some(e)
+        option.None ->
+          constant_value_list_error(
+            fields
+            |> list.map(fn(field) {
+              case field {
+                glance.RecordUpdateField(_, option.Some(item)) -> [item]
+                glance.RecordUpdateField(_, option.None) -> []
+              }
+            })
+            |> list.flatten,
+          )
+      }
+    glance.BitString(_, segments) ->
+      constant_value_list_error(list.map(segments, fn(pair) { pair.0 }))
+  }
+}
+
+fn constant_value_list_error(
+  expressions: List(glance.Expression),
+) -> option.Option(error.TypeCheckError) {
+  case expressions {
+    [] -> option.None
+    [first, ..rest] ->
+      case constant_value_error(first) {
+        option.Some(e) -> option.Some(e)
+        option.None -> constant_value_list_error(rest)
+      }
+  }
+}
+
+fn field_item(field: glance.Field(glance.Expression)) -> glance.Expression {
+  case field {
+    glance.LabelledField(_, _, item) -> item
+    glance.UnlabelledField(item) -> item
+    // A shorthand field (`Foo(name)` in a construction) references a variable,
+    // which is a valid constant value.
+    glance.ShorthandField(label, _) -> glance.Variable(glance.Span(0, 0), label)
+  }
+}
+
+fn is_constructor_name(name: String) -> Bool {
+  case string.first(name) {
+    Ok(first) -> string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", first)
+    Error(_) -> False
   }
 }
 
@@ -798,97 +960,6 @@ fn constant_(
     glance.Private -> environment
   }
   Ok(types.EnvState(environment, constant))
-}
-
-/// Whether an expression (recursively) contains a `todo`. Constants may not
-/// reference `todo`.
-fn constant_has_todo(expr: glance.Expression) -> Bool {
-  case expr {
-    glance.Todo(_, _) -> True
-    glance.Int(_, _)
-    | glance.Float(_, _)
-    | glance.String(_, _)
-    | glance.Variable(_, _)
-    | glance.Panic(_, _) -> False
-    glance.NegateInt(_, inner) -> constant_has_todo(inner)
-    glance.NegateBool(_, inner) -> constant_has_todo(inner)
-    glance.Block(_, statements) ->
-      list.any(statements, fn(statement) { statement_has_todo(statement) })
-    glance.Tuple(_, elements) -> list.any(elements, constant_has_todo)
-    glance.List(_, elements, rest) ->
-      list.any(elements, constant_has_todo)
-      || case rest {
-        option.Some(r) -> constant_has_todo(r)
-        option.None -> False
-      }
-    glance.Fn(_, _, _, body) ->
-      list.any(body, fn(statement) { statement_has_todo(statement) })
-    glance.RecordUpdate(_, _, _, record, fields) ->
-      constant_has_todo(record)
-      || list.any(fields, fn(field) {
-        case field {
-          glance.RecordUpdateField(_, option.Some(item)) ->
-            constant_has_todo(item)
-          glance.RecordUpdateField(_, option.None) -> False
-        }
-      })
-    glance.FieldAccess(_, container, _) -> constant_has_todo(container)
-    glance.Call(_, function, arguments) ->
-      constant_has_todo(function) || list.any(arguments, field_has_todo)
-    glance.TupleIndex(_, tuple, _) -> constant_has_todo(tuple)
-    glance.FnCapture(_, _, function, before, after) ->
-      constant_has_todo(function)
-      || list.any(before, field_has_todo)
-      || list.any(after, field_has_todo)
-    glance.BitString(_, segments) ->
-      list.any(segments, fn(pair) {
-        let #(value, options) = pair
-        constant_has_todo(value)
-        || list.any(options, fn(option) {
-          case option {
-            glance.SizeValueOption(inner) -> constant_has_todo(inner)
-            _ -> False
-          }
-        })
-      })
-    glance.Case(_, subjects, clauses) ->
-      list.any(subjects, constant_has_todo)
-      || list.any(clauses, fn(clause) {
-        constant_has_todo(clause.body)
-        || case clause.guard {
-          option.Some(guard) -> constant_has_todo(guard)
-          option.None -> False
-        }
-      })
-    glance.BinaryOperator(_, _, left, right) ->
-      constant_has_todo(left) || constant_has_todo(right)
-    glance.Echo(_, echoed, message) ->
-      case echoed {
-        option.Some(e) -> constant_has_todo(e)
-        option.None ->
-          case message {
-            option.Some(m) -> constant_has_todo(m)
-            option.None -> False
-          }
-      }
-  }
-}
-
-fn statement_has_todo(statement: glance.Statement) -> Bool {
-  case statement {
-    glance.Use(_, _, function) -> constant_has_todo(function)
-    glance.Assignment(_, _, _, _, value) -> constant_has_todo(value)
-    glance.Assert(_, expression_, _) -> constant_has_todo(expression_)
-    glance.Expression(expression_) -> constant_has_todo(expression_)
-  }
-}
-
-fn field_has_todo(field: glance.Field(glance.Expression)) -> Bool {
-  case field {
-    glance.UnlabelledField(expr) -> constant_has_todo(expr)
-    glance.LabelledField(_, _, expr) -> constant_has_todo(expr)
-    glance.ShorthandField(_, _) -> False
-  }
 }
 
 /// Takes a glance function as input and returns the same function, but

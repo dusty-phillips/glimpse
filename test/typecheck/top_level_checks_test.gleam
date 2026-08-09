@@ -72,8 +72,142 @@ pub fn todo_in_a_constant_test() {
     == error.TodoInConstant
 }
 
+pub fn fn_literal_in_a_constant_test() {
+  assert helpers.error_module_typecheck("pub const f = fn(x) { x }")
+    == error.FnInConstant
+}
+
+pub fn fn_literal_nested_in_constant_test() {
+  assert helpers.error_module_typecheck(
+      "type Box(a) { Box(a) } pub const b = Box(fn() { 1 })",
+    )
+    == error.FnInConstant
+}
+
+pub fn fn_capture_in_constant_is_fine_test() {
+  helpers.ok_module_typecheck("fn id(x: Int) -> Int { x } pub const f = id")
+}
+
 pub fn constant_with_value_is_fine_test() {
   helpers.ok_module_typecheck("pub const wibble = 42")
+}
+
+pub fn constant_with_operator_expression_test() {
+  assert helpers.error_module_typecheck("pub const wibble = 1 + 2")
+    == error.InvalidConstantExpression
+}
+
+pub fn constant_with_arithmetic_comparison_test() {
+  assert helpers.error_module_typecheck("pub const wibble = 1 == 2")
+    == error.InvalidConstantExpression
+}
+
+pub fn constant_with_block_test() {
+  assert helpers.error_module_typecheck("pub const wibble = { 1 }")
+    == error.InvalidConstantExpression
+}
+
+pub fn constant_with_panic_test() {
+  assert helpers.error_module_typecheck("pub const wibble = panic")
+    == error.InvalidConstantExpression
+}
+
+pub fn constant_with_string_concat_is_fine_test() {
+  helpers.ok_module_typecheck("pub const wibble = \"a\" <> \"b\"")
+}
+
+pub fn constant_with_record_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "type Box(a) { Box(a) } pub const wibble = Box(1)",
+  )
+}
+
+pub fn constant_with_negated_literal_is_fine_test() {
+  helpers.ok_module_typecheck("pub const wibble = -1")
+}
+
+pub fn external_attribute_wrong_arity_test() {
+  assert helpers.error_module_typecheck(
+      "@external(erlang, \"a\")
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidExternalAttribute
+}
+
+pub fn external_attribute_non_variable_target_test() {
+  assert helpers.error_module_typecheck(
+      "@external(\"str\", \"a\", \"b\")
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidExternalAttribute
+}
+
+pub fn deprecated_attribute_without_message_test() {
+  assert helpers.error_module_typecheck(
+      "@deprecated
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidAttributeShape("deprecated")
+}
+
+pub fn deprecated_attribute_with_non_string_message_test() {
+  assert helpers.error_module_typecheck(
+      "@deprecated(123)
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidAttributeShape("deprecated")
+}
+
+pub fn deprecated_attribute_with_message_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@deprecated(\"use g instead\")
+pub fn f() -> Int { 1 }",
+  )
+}
+
+pub fn target_attribute_with_wrong_arity_test() {
+  assert helpers.error_module_typecheck(
+      "@target(erlang, javascript)
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidAttributeShape("target")
+}
+
+pub fn target_attribute_with_non_variable_test() {
+  assert helpers.error_module_typecheck(
+      "@target(\"erlang\")
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidAttributeShape("target")
+}
+
+pub fn internal_attribute_with_argument_test() {
+  assert helpers.error_module_typecheck(
+      "@internal(\"x\")
+    pub fn f() -> Int { 1 }",
+    )
+    == error.InvalidAttributeShape("internal")
+}
+
+pub fn record_update_on_unlabelled_constructor_test() {
+  assert helpers.error_module_typecheck(
+      "pub type M { M(Int) }
+    pub fn f() -> M {
+      let base = M(1)
+      M(..base)
+    }",
+    )
+    == error.RecordUpdateOnUnlabelledConstructor("M")
+}
+
+pub fn record_update_on_labelled_constructor_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type M { M(a: Int) }
+pub fn f() -> M {
+  let base = M(1)
+  M(..base, a: 2)
+}",
+  )
 }
 
 pub fn type_alias_with_unused_parameter_test() {
