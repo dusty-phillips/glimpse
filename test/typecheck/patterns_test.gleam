@@ -303,13 +303,14 @@ pub fn string_concat_pattern_with_typed_tail_is_fine_test() {
 }
 
 pub fn string_concat_pattern_rebinding_subject_variable_test() {
-  // A string-concatenation pattern whose tail rebinds the subject variable
-  // (`"a" <> state`) means the name now refers to the tail, so the subject
-  // variable must not be refined as a variant. Exercises the
-  // `pattern_binds_name` PatternConcatenate branch.
+  // A constructor-pattern argument that is a string-concatenation pattern
+  // rebinding the subject variable (`Box("a" <> state)`) means the name now
+  // refers to the tail, so the subject must not be refined as a variant.
+  // Exercises the `pattern_binds_name` PatternConcatenate branch.
   let _ =
-    helpers.ok_function_typecheck(
-      "fn foo(state: String) -> Int { case state { \"a\" <> state -> 1 _ -> 0 } }",
+    helpers.ok_module_typecheck(
+      "pub type Box(a) { Box(a) }
+    pub fn foo(state: Box(String)) -> Int { case state { Box(\"a\" <> state) -> 1 _ -> 0 } }",
     )
 }
 
