@@ -927,6 +927,7 @@ pub fn function(
     types.Environment(
       ..param_state.environment,
       generic_vars: param_state.generic_vars,
+      current_function: option.Some(function.name),
     ),
     param_state.store,
     function.body,

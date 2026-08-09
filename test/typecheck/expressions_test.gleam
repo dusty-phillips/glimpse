@@ -805,6 +805,7 @@ pub fn valid_record_update_on_polymorphic_const_with_lambda_annotation_test() {
   }",
   )
 }
+
 pub fn capture_with_rigid_param_test() {
   assert helpers.error_module_typecheck(
       "pub type Subject(a) { Subject }
@@ -932,6 +933,54 @@ pub fn pipe_into_capture_with_same_rigid_type_var_is_fine_test() {
     event: Blob,
   ) -> #(Cache(message), Result(Handler(message), Nil)) {
     decode(cache, path, name, event) |> dispatch(cache, _)
+  }",
+  )
+}
+
+pub fn recursive_call_keeps_rigid_type_var_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Element(a) { Element(keyed_children: MutableMap(String, Element(a))) }
+  pub type MutableMap(k, v) { MutableMap }
+  pub fn work(
+    new new: List(Element(message)),
+    new_keyed new_keyed: MutableMap(String, Element(message__zzz)),
+    n n: Int,
+  ) -> Int {
+    case n {
+      0 -> 0
+      _ ->
+        case new {
+          [] -> 0
+          [next, ..rest] ->
+            work(new: rest, new_keyed: next.keyed_children, n: n - 1)
+        }
+    }
+  }",
+    )
+    == error.InvalidArguments(
+      "(List(main_module.Element(var_0)), main_module.MutableMap(String, main_module.Element(var_1)), Int)",
+      "(List(main_module.Element(var_0)), main_module.MutableMap(String, main_module.Element(var_0)))",
+    )
+}
+
+pub fn recursive_call_with_same_rigid_type_var_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Element(a) { Element(keyed_children: MutableMap(String, Element(a))) }
+  pub type MutableMap(k, v) { MutableMap }
+  pub fn work(
+    new new: List(Element(message)),
+    new_keyed new_keyed: MutableMap(String, Element(message)),
+    n n: Int,
+  ) -> Int {
+    case n {
+      0 -> 0
+      _ ->
+        case new {
+          [] -> 0
+          [next, ..rest] ->
+            work(new: rest, new_keyed: next.keyed_children, n: n - 1)
+        }
+    }
   }",
   )
 }

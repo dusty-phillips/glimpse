@@ -2528,18 +2528,76 @@ pub fn call(
   target: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  use #(store, glimpse_target) <- result.try(expression(
-    environment,
-    store,
-    target,
-  ))
-
-  use #(store, parameters, labels, return) <- result.try(calls.callable_parts(
-    environment,
-    store,
-    glimpse_target,
-    list.length(arguments),
-  ))
+  // A recursive self-call is checked against the function's own rigid type
+  // variables (monomorphic recursion), not a fresh instantiation: the real
+  // compiler rejects a self-call that passes a different rigid type variable
+  // for a parameter. Look the callee's stored signature up and substitute its
+  // declared type variables with the enclosing function's rigid variables, so
+  // the argument unification sees the same rigid variables the body uses.
+  use #(store, parameters, labels, return) <- result.try(case target {
+    glance.Variable(_, callee)
+      if environment.current_function == option.Some(callee)
+    -> {
+      case calls.placeholder_callee(environment, callee) {
+        True ->
+          expression(environment, store, target)
+          |> result.try(fn(state) {
+            let #(store, glimpse_target) = state
+            calls.callable_parts(
+              environment,
+              store,
+              glimpse_target,
+              list.length(arguments),
+            )
+          })
+        False ->
+          case dict.get(environment.scope.definitions, callee) {
+            Ok(callee_type) -> {
+              // Substitute the enclosing function's declared type variables
+              // (the rigid vars) for the callee's same-named generics, so the
+              // self-call is checked against the enclosing rigid vars rather
+              // than fresh instantiations. Any generics the enclosing function
+              // does not declare (unannotated inferred params) are
+              // instantiated to fresh vars afterwards.
+              let substituted =
+                types.substitute_type_variables(
+                  callee_type,
+                  environment.generic_vars,
+                )
+              let #(store, instantiated) = types.instantiate(store, substituted)
+              case instantiated {
+                types.GenericCallableType(parameters, labels, return, _)
+                | types.CallableType(parameters, labels, return) ->
+                  Ok(#(store, parameters, labels, return))
+                _ -> Ok(#(store, [], dict.new(), types.NilType))
+              }
+            }
+            Error(_) ->
+              expression(environment, store, target)
+              |> result.try(fn(state) {
+                let #(store, glimpse_target) = state
+                calls.callable_parts(
+                  environment,
+                  store,
+                  glimpse_target,
+                  list.length(arguments),
+                )
+              })
+          }
+      }
+    }
+    _ ->
+      expression(environment, store, target)
+      |> result.try(fn(state) {
+        let #(store, glimpse_target) = state
+        calls.callable_parts(
+          environment,
+          store,
+          glimpse_target,
+          list.length(arguments),
+        )
+      })
+  })
 
   use #(store, _argument_types) <- result.try(check_arguments(
     environment,
