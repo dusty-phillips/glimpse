@@ -107,6 +107,12 @@ pub fn module(
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
   let environment = types.new_env(glimpse_module.name)
 
+  // The raw, unfiltered module. Attribute validation and the constant grammar
+  // are parse-time checks in the real compiler, so they must run on every
+  // definition even ones that are filtered out for the current build target
+  // (e.g. a `@target(javascript)` constant with an anonymous-function value).
+  let raw_module = glimpse_module.module
+
   // Drop definitions that are not active for the build target before
   // typechecking, mirroring the real compiler.
   let glimpse_module =
@@ -114,6 +120,18 @@ pub fn module(
       ..glimpse_module,
       module: target.filter_for_target(glimpse_module.module, target),
     )
+
+  // The constant grammar is validated before target filtering: a constant
+  // value that is not a valid constant expression is a parse error in the real
+  // compiler regardless of which target it is active for.
+  use _ <- result.try(
+    list.try_fold(raw_module.constants, Nil, fn(_, definition) {
+      case constant_value_error(definition.definition.value) {
+        option.Some(e) -> Error(e)
+        option.None -> Ok(Nil)
+      }
+    }),
+  )
 
   // Function and constant names share one namespace; the official compiler
   // rejects a module that defines the same name twice, in any combination.
@@ -186,7 +204,7 @@ pub fn module(
   // fields), type aliases and imports.
   use _ <- result.try(
     list.fold(
-      all_module_attributes(glimpse_module.module),
+      all_module_attributes(raw_module),
       Ok(Nil),
       fn(result, attribute) {
         case result, is_known_attribute(attribute.name) {
@@ -203,7 +221,7 @@ pub fn module(
   // variable target, and `@internal` no arguments at all.
   use _ <- result.try(
     list.fold(
-      all_module_attributes(glimpse_module.module),
+      all_module_attributes(raw_module),
       Ok(Nil),
       fn(result, attribute) {
         case result, attribute_shape_is_valid(attribute) {
@@ -219,9 +237,7 @@ pub fn module(
   // real compiler rejects `@deprecated("a") @deprecated("b")` on one function
   // with "Duplicate attribute".
   use _ <- result.try(
-    case
-      duplicate_attribute_name(attribute_scope_names(glimpse_module.module))
-    {
+    case duplicate_attribute_name(attribute_scope_names(raw_module)) {
       option.Some(key) -> {
         let name = case string.starts_with(key, "external:") {
           True -> "external"
@@ -238,10 +254,10 @@ pub fn module(
   // targets are erlang and javascript. It also requires exactly three
   // arguments (target, module, function) with a `Variable` target.
   use _ <- result.try(
-    glimpse_module.module.functions
+    raw_module.functions
     |> list.map(fn(definition) { definition.attributes })
     |> list.append(
-      glimpse_module.module.constants
+      raw_module.constants
       |> list.map(fn(definition) { definition.attributes }),
     )
     |> list.flatten
