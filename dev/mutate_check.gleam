@@ -478,6 +478,8 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "fntype ",
     "alias ",
     "pipestep ",
+    "attrib ",
+    "const ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -3620,6 +3622,344 @@ fn import_path(rest: String) -> String {
   }
 }
 
+/// Kind `attrib`: mutate the arguments of a top-level attribute so its shape
+/// no longer matches what the compiler expects. `@external(target, module, fn)`
+/// takes exactly three arguments with a `Variable` target; `@deprecated(msg)`
+/// takes exactly one string; `@target(name)` exactly one variable; `@internal`
+/// no arguments. Mutating the shape (dropping/adding arguments, or changing an
+/// argument's kind) makes the real compiler reject the attribute at parse time.
+/// The `var` kind skips `@` lines entirely, so attributes have no other
+/// coverage.
+fn attrib_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_attribute_name(line) {
+      option.None -> []
+      option.Some(#(name, body_start)) -> {
+        let args = attribute_args(line, body_start)
+        case name, args {
+          "external", [_target, _module, _fn] ->
+            // Drop the module argument, add a fourth, or make the target a
+            // string literal.
+            attribute_drop_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "attrib external drop-module",
+            )
+            |> list.append(attribute_add_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "\"c\"",
+              "attrib external add-fn",
+            ))
+            |> list.append(attribute_string_target(lines, idx, line, body_start))
+          "external", [_target, _module] ->
+            attribute_add_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "\"b\"",
+              "attrib external add-module",
+            )
+          "external", _ ->
+            attribute_drop_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "attrib external drop-arg",
+            )
+          "deprecated", [_message] ->
+            // Drop the message argument entirely.
+            attribute_drop_all_args(
+              lines,
+              idx,
+              line,
+              body_start,
+              "attrib deprecated drop-msg",
+            )
+            |> list.append(attribute_replace_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "attrib deprecated int-msg",
+            ))
+          "target", [_name] ->
+            // Add a second target, or replace the variable with a string.
+            attribute_add_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "javascript",
+              "attrib target add-arg",
+            )
+            |> list.append(attribute_replace_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "attrib target string-name",
+            ))
+          "internal", [] ->
+            attribute_add_arg(
+              lines,
+              idx,
+              line,
+              body_start,
+              "\"x\"",
+              "attrib internal add-arg",
+            )
+          _, _ -> []
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// The attribute name and the offset just after its opening `(` (or the offset
+/// of the end of the name when the attribute has no argument list).
+fn find_attribute_name(line: String) -> option.Option(#(String, Int)) {
+  case find_substring(line, "@") {
+    option.None -> option.None
+    option.Some(at) -> {
+      case first_simple_start(line, at + 1) {
+        option.None -> option.None
+        option.Some(name_start) -> {
+          let name_end = simple_token_end(line, name_start)
+          let name =
+            string.slice(
+              line,
+              at_index: name_start,
+              length: name_end - name_start,
+            )
+          case string.slice(line, at_index: name_end, length: 1) {
+            "(" -> option.Some(#(name, name_end + 1))
+            _ -> option.Some(#(name, name_end))
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The raw text of the argument list between `body_start` and the matching
+/// `)` (or `[]` when the attribute has no parens).
+fn attribute_args(line: String, body_start: Int) -> List(String) {
+  case find_char_from(line, body_start, ")") {
+    option.None -> []
+    option.Some(close) ->
+      string.slice(line, at_index: body_start, length: close - body_start)
+      |> string.split(",")
+      |> list.map(string.trim)
+      |> list.filter(fn(arg) { arg != "" })
+  }
+}
+
+/// Drop the last argument of an attribute with an argument list.
+fn attribute_drop_arg(
+  lines: List(String),
+  index: Int,
+  line: String,
+  body_start: Int,
+  desc: String,
+) -> List(Mutant) {
+  case find_char_from(line, body_start, ")") {
+    option.None -> []
+    option.Some(close) ->
+      // Find the last comma inside the args and cut from just after it.
+      case find_last_comma(line, body_start, close) {
+        option.None -> []
+        option.Some(comma) -> {
+          let rebuilt =
+            string.slice(line, at_index: 0, length: comma)
+            <> ")"
+            <> string.slice(
+              line,
+              at_index: close + 1,
+              length: string.length(line) - close - 1,
+            )
+          [#(desc, source_of(lines, index, rebuilt))]
+        }
+      }
+  }
+}
+
+/// Drop the entire argument list of an attribute (used for `@deprecated`).
+fn attribute_drop_all_args(
+  lines: List(String),
+  index: Int,
+  line: String,
+  body_start: Int,
+  desc: String,
+) -> List(Mutant) {
+  case find_char_from(line, body_start, ")") {
+    option.None -> []
+    option.Some(close) -> {
+      let rebuilt =
+        string.slice(line, at_index: 0, length: body_start - 1)
+        <> string.slice(
+          line,
+          at_index: close + 1,
+          length: string.length(line) - close - 1,
+        )
+      [#(desc, source_of(lines, index, rebuilt))]
+    }
+  }
+}
+
+/// Add an argument to an attribute with an argument list.
+fn attribute_add_arg(
+  lines: List(String),
+  index: Int,
+  line: String,
+  body_start: Int,
+  extra: String,
+  desc: String,
+) -> List(Mutant) {
+  case find_char_from(line, body_start, ")") {
+    option.None -> []
+    option.Some(close) -> {
+      let rebuilt =
+        string.slice(line, at_index: 0, length: close)
+        <> ", "
+        <> extra
+        <> ")"
+        <> string.slice(
+          line,
+          at_index: close + 1,
+          length: string.length(line) - close - 1,
+        )
+      [#(desc, source_of(lines, index, rebuilt))]
+    }
+  }
+}
+
+/// Replace the first argument of an attribute's argument list with a literal
+/// of a different kind (string for a variable target, int for a message).
+fn attribute_replace_arg(
+  lines: List(String),
+  index: Int,
+  line: String,
+  body_start: Int,
+  desc: String,
+) -> List(Mutant) {
+  case first_simple_start(line, body_start) {
+    option.None -> []
+    option.Some(arg_start) -> {
+      let arg_end = simple_token_end(line, arg_start)
+      let replacement = case desc {
+        "attrib deprecated int-msg" -> "123"
+        _ -> "\"erlang\""
+      }
+      let rebuilt =
+        string.slice(line, at_index: 0, length: arg_start)
+        <> replacement
+        <> string.slice(
+          line,
+          at_index: arg_end,
+          length: string.length(line) - arg_end,
+        )
+      [#(desc, source_of(lines, index, rebuilt))]
+    }
+  }
+}
+
+/// Replace the `@external` target variable with a string literal.
+fn attribute_string_target(
+  lines: List(String),
+  index: Int,
+  line: String,
+  body_start: Int,
+) -> List(Mutant) {
+  attribute_replace_arg(
+    lines,
+    index,
+    line,
+    body_start,
+    "attrib external string-target",
+  )
+}
+
+/// The index of the last comma strictly between `from` and `to` on `line`.
+fn find_last_comma(line: String, from: Int, to: Int) -> option.Option(Int) {
+  case from >= to {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: from, length: 1) {
+        "," -> {
+          case find_last_comma(line, from + 1, to) {
+            option.Some(_) -> find_last_comma(line, from + 1, to)
+            option.None -> option.Some(from)
+          }
+        }
+        _ -> find_last_comma(line, from + 1, to)
+      }
+  }
+}
+
+/// Kind `const`: mutate the value of a module constant (`const x = ...`).
+/// Constants are restricted to a strict expression grammar (literals, constant
+/// references, list/tuple/bit-array literals, record construction and updates,
+/// string concatenation, and numeric negation). Replacing a constant's value
+/// with an operator expression, an anonymous function, or a block is rejected
+/// by the real compiler at parse time. The `literal`/`binop` kinds fire on
+/// whatever tokens happen to be in the value, but do not target the constant
+/// grammar as a whole.
+fn const_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    let trimmed = string.trim(line)
+    case
+      string.starts_with(trimmed, "const ")
+      || string.starts_with(trimmed, "pub const ")
+    {
+      False -> []
+      True ->
+        case find_char(line, "=") {
+          option.None -> []
+          option.Some(eq) ->
+            case first_simple_start(line, eq + 1) {
+              option.None -> []
+              option.Some(value_start) -> {
+                let value_end = simple_token_end(line, value_start)
+                let before =
+                  string.slice(line, at_index: 0, length: value_start)
+                let after =
+                  string.slice(
+                    line,
+                    at_index: value_end,
+                    length: string.length(line) - value_end,
+                  )
+                [
+                  #(
+                    "const ->fn-literal",
+                    source_of(lines, idx, before <> "fn() { 1 }" <> after),
+                  ),
+                  #(
+                    "const ->block",
+                    source_of(lines, idx, before <> "{ 1 }" <> after),
+                  ),
+                  #(
+                    "const ->operator",
+                    source_of(lines, idx, before <> "1 + 1" <> after),
+                  ),
+                ]
+              }
+            }
+        }
+    }
+  })
+  |> list.flatten
+}
+
 /// Everything we can mutate in a file, one kind's mutants appended to the next.
 fn mutate_file(source: String) -> List(Mutant) {
   let lines = split_lines(source)
@@ -3664,6 +4004,8 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(fntype_mutants(lines))
   |> list.append(alias_mutants(lines))
   |> list.append(pipestep_mutants(lines))
+  |> list.append(attrib_mutants(lines))
+  |> list.append(const_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that
