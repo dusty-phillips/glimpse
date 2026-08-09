@@ -114,6 +114,34 @@ pub fn signed_option_in_expression_is_rejected_test() {
     == error.InvalidBitStringSegment("signed")
 }
 
+pub fn bytes_option_in_expression_is_rejected_test() {
+  // A `bytes` (or `binary`, which glance lexes as `bytes`) type option is only
+  // valid in bit-array *patterns*; in an expression the segment is already a
+  // BitArray value, so the real compiler rejects the option with
+  // "This option is only allowed in BitArray patterns".
+  assert helpers.error_module_typecheck(
+      "pub fn f(b: BitArray) -> BitArray { <<b:bytes>> }",
+    )
+    == error.InvalidBitStringSegment("signed")
+  assert helpers.error_module_typecheck(
+      "pub fn f(b: BitArray) -> BitArray { <<b:binary>> }",
+    )
+    == error.InvalidBitStringSegment("signed")
+}
+
+pub fn bytes_option_in_pattern_is_fine_test() {
+  // In a pattern a `bytes` type option selects the BitArray family, matching
+  // the segment value (a whole BitArray), which the real compiler accepts.
+  helpers.ok_module_typecheck(
+    "pub fn f(b: BitArray) -> Int {
+    case b {
+      <<x:bytes>> -> 1
+      _ -> 0
+    }
+  }",
+  )
+}
+
 pub fn unit_without_size_is_rejected_test() {
   // A `unit` must always be accompanied by an explicit `size`; on its own the
   // segment width is underdetermined and the real compiler rejects it, in both

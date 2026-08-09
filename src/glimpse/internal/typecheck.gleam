@@ -1903,9 +1903,10 @@ fn check_bit_string_sizes(
 }
 
 /// Reject segment options that the real compiler only allows in bit-array
-/// *patterns*: `signed`/`unsigned` are meaningless for an expression that is
-/// just built (its byte order and interpretation are fixed). A `unit` without
-/// an accompanying `size` is also rejected, in both expressions and patterns.
+/// *patterns*: `signed`/`unsigned` and a `bytes` type option are meaningless
+/// for an expression that is just built (its byte order, interpretation and
+/// segment type are fixed by the value). A `unit` without an accompanying
+/// `size` is also rejected, in both expressions and patterns.
 fn check_expression_options(
   options: List(glance.BitStringSegmentOption(glance.Expression)),
   store: TypeStore,
@@ -1924,14 +1925,14 @@ fn check_expression_options(
         _ -> False
       }
     })
-  let has_signed =
+  let has_pattern_only =
     list.any(options, fn(option) {
       case option {
-        glance.SignedOption | glance.UnsignedOption -> True
+        glance.SignedOption | glance.UnsignedOption | glance.BytesOption -> True
         _ -> False
       }
     })
-  case has_signed || has_unit && !has_size {
+  case has_pattern_only || has_unit && !has_size {
     True -> Error(error.InvalidBitStringSegment("signed"))
     False -> Ok(store)
   }
