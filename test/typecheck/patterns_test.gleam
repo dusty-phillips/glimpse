@@ -301,3 +301,22 @@ pub fn string_concat_pattern_with_typed_tail_is_fine_test() {
       "fn foo(x: String) -> Int { case x { \"a\" <> rest if rest == \"\" -> 1 _ -> 0 } }",
     )
 }
+
+pub fn string_concat_pattern_rebinding_subject_variable_test() {
+  // A string-concatenation pattern whose tail rebinds the subject variable
+  // (`"a" <> state`) means the name now refers to the tail, so the subject
+  // variable must not be refined as a variant. Exercises the
+  // `pattern_binds_name` PatternConcatenate branch.
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(state: String) -> Int { case state { \"a\" <> state -> 1 _ -> 0 } }",
+    )
+}
+
+pub fn unknown_label_in_constructor_pattern_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Wibble { Wibble(a: Int) }
+    pub fn foo(w: Wibble) -> Int { case w { Wibble(zzz: _) -> 1 } }",
+    )
+    == error.InvalidArgumentLabel("(a)", "zzz")
+}
