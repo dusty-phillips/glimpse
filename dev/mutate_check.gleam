@@ -480,6 +480,7 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "pipestep ",
     "attrib ",
     "const ",
+    "constrdup ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -837,6 +838,234 @@ fn find_constr_fields(line: String) -> option.Option(#(Int, Int, Int, Int)) {
 
 /// Kind `tuple`: index a tuple with an out-of-range `.N`, or swap between the
 /// two positions when the tuple's elements have different types.
+/// Kind `constrdup`: rename a custom type's variant constructor to the name of
+/// a constructor declared by a *different* custom type in the same module, so
+/// the module defines the same constructor twice. The real compiler rejects
+/// this ("Duplicate definition") even when the type names differ; the `constr`
+/// kind only swaps field labels and `var` only renames constructors to unique
+/// `__zzz` names, so cross-type collisions had no coverage.
+fn constrdup_mutants(lines: List(String)) -> List(Mutant) {
+  let blocks = find_type_blocks(lines)
+  let per_block =
+    list.map(blocks, fn(block) { #(block, block_constructors(lines, block)) })
+  let with_constrs = list.filter(per_block, fn(entry) { entry.1 != [] })
+  list.index_map(with_constrs, fn(entry, i) {
+    let #(_block, constrs) = entry
+    let target = find_collision_target(with_constrs, i)
+    case target {
+      option.None -> []
+      option.Some(target_name) ->
+        list.filter(constrs, fn(c) { c.2 != target_name })
+        |> list.map(fn(c) {
+          let #(line_idx, start, name) = c
+          let mutated =
+            replace_token_at(
+              lines,
+              line_idx,
+              start,
+              string.length(name),
+              target_name,
+            )
+          [#("constrdup " <> name <> "->" <> target_name, mutated)]
+        })
+        |> list.flatten
+    }
+  })
+  |> list.flatten
+}
+
+/// The name of the first constructor of any custom type block other than the
+/// one at `skip_index`, or `option.None` if no other block has a constructor.
+fn find_collision_target(
+  blocks: List(#(#(Int, Int), List(#(Int, Int, String)))),
+  skip_index: Int,
+) -> option.Option(String) {
+  list.index_fold(blocks, option.None, fn(acc, entry, idx) {
+    case acc {
+      option.Some(_) -> acc
+      option.None ->
+        case idx == skip_index {
+          True -> acc
+          False ->
+            case entry.1 {
+              [first, ..] -> option.Some(first.2)
+              [] -> acc
+            }
+        }
+    }
+  })
+}
+
+/// The `(start_line, end_line)` indices of every custom type definition in the
+/// file, i.e. lines beginning (trimmed) with `type `/`pub type ` and containing
+/// `{`. A block ends on the first line at or after its start that contains `}`.
+fn find_type_blocks(lines: List(String)) -> List(#(Int, Int)) {
+  find_type_blocks_from(lines, 0, [])
+}
+
+fn find_type_blocks_from(
+  lines: List(String),
+  index: Int,
+  acc: List(#(Int, Int)),
+) -> List(#(Int, Int)) {
+  case index >= list.length(lines) {
+    True -> list.reverse(acc)
+    False -> {
+      let trimmed = string.trim(fetch(lines, index))
+      let is_type_start =
+        is_type_def_line(trimmed) && string.contains(fetch(lines, index), "{")
+      case is_type_start {
+        True -> {
+          let end = type_block_end(lines, index)
+          find_type_blocks_from(lines, end + 1, [#(index, end), ..acc])
+        }
+        False -> find_type_blocks_from(lines, index + 1, acc)
+      }
+    }
+  }
+}
+
+/// Whether a trimmed line starts a custom type definition (`type ` or
+/// `pub type `).
+fn is_type_def_line(line: String) -> Bool {
+  string.starts_with(line, "type ") || string.starts_with(line, "pub type ")
+}
+
+fn type_block_end(lines: List(String), start: Int) -> Int {
+  case string.contains(fetch(lines, start), "}") {
+    True -> start
+    False -> type_block_end(lines, start + 1)
+  }
+}
+
+/// The variant constructors inside a type block, as `#(line, start, name)`.
+/// The start line's tokens after `{` (single-line `type X { A B }`) and the
+/// first uppercase token of each continuation line (skipping `@attribute`
+/// lines and the closing `}`) are constructors.
+fn block_constructors(
+  lines: List(String),
+  block: #(Int, Int),
+) -> List(#(Int, Int, String)) {
+  let start = block.0
+  let end = block.1
+  let first = fetch(lines, start)
+  let from = case find_char(first, "{") {
+    option.Some(open) -> open + 1
+    option.None -> 0
+  }
+  let on_start =
+    uppercase_spans_after(first, from)
+    |> list.map(fn(span) { #(start, span.0, span.1) })
+  list.append(on_start, constructor_lines(lines, start + 1, end))
+}
+
+/// The first uppercase token of each line in `[index, end]`, skipping lines
+/// that are empty, `}`, or start with `@` (variant attributes). Later uppercase
+/// tokens on a line (field types like `Int` in `A(x: Int)`) are not
+/// constructors, so only the first is taken.
+fn constructor_lines(
+  lines: List(String),
+  index: Int,
+  end: Int,
+) -> List(#(Int, Int, String)) {
+  case index > end {
+    True -> []
+    False -> {
+      let line = fetch(lines, index)
+      let trimmed = string.trim(line)
+      let is_skipped =
+        trimmed == "" || trimmed == "}" || string.starts_with(trimmed, "@")
+      case is_skipped {
+        True -> constructor_lines(lines, index + 1, end)
+        False -> {
+          let found =
+            uppercase_spans_after(line, 0)
+            |> list.take(1)
+            |> list.map(fn(span) { #(index, span.0, span.1) })
+          list.append(found, constructor_lines(lines, index + 1, end))
+        }
+      }
+    }
+  }
+}
+
+/// Uppercase-starting tokens in `line` at or after `from`, as `#(start, name)`.
+/// `name_spans` drops a word that runs to the very end of the line (e.g. `  A`),
+/// so this scans identifiers directly and flushes a trailing word.
+fn uppercase_spans_after(line: String, from: Int) -> List(#(Int, String)) {
+  uppercase_scan(line, from, option.None, [])
+}
+
+fn uppercase_scan(
+  line: String,
+  index: Int,
+  word_start: option.Option(Int),
+  acc: List(#(Int, String)),
+) -> List(#(Int, String)) {
+  case index < string.length(line) {
+    False ->
+      case word_start {
+        option.Some(start) -> {
+          let word = string.slice(line, at_index: start, length: index - start)
+          case starts_upper(word) {
+            True -> list.reverse([#(start, word), ..acc])
+            False -> list.reverse(acc)
+          }
+        }
+        option.None -> list.reverse(acc)
+      }
+    True -> {
+      let ch = string.slice(line, at_index: index, length: 1)
+      case is_identifier_char(ch), word_start {
+        True, option.None ->
+          uppercase_scan(line, index + 1, option.Some(index), acc)
+        True, option.Some(_) -> uppercase_scan(line, index + 1, word_start, acc)
+        False, option.None -> uppercase_scan(line, index + 1, option.None, acc)
+        False, option.Some(start) -> {
+          let word = string.slice(line, at_index: start, length: index - start)
+          let acc = case starts_upper(word) {
+            True -> [#(start, word), ..acc]
+            False -> acc
+          }
+          uppercase_scan(line, index + 1, option.None, acc)
+        }
+      }
+    }
+  }
+}
+
+/// Whether a word begins with an upper-case ASCII letter.
+fn starts_upper(word: String) -> Bool {
+  case string.length(word) {
+    0 -> False
+    _ ->
+      string.contains(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        string.slice(word, at_index: 0, length: 1),
+      )
+  }
+}
+
+/// Replace the token at `(line_idx, start, length)` with `new`.
+fn replace_token_at(
+  lines: List(String),
+  line_idx: Int,
+  start: Int,
+  length: Int,
+  new: String,
+) -> String {
+  let line = fetch(lines, line_idx)
+  let mutated =
+    string.slice(line, at_index: 0, length: start)
+    <> new
+    <> string.slice(
+      line,
+      at_index: start + length,
+      length: string.length(line) - start - length,
+    )
+  source_of(lines, line_idx, mutated)
+}
+
 fn tuple_mutants(lines: List(String)) -> List(Mutant) {
   list.index_map(lines, fn(_line, idx) {
     swap_on_line(lines, idx, "tuple .0->.9", ".0", ".9")
@@ -4006,6 +4235,7 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(pipestep_mutants(lines))
   |> list.append(attrib_mutants(lines))
   |> list.append(const_mutants(lines))
+  |> list.append(constrdup_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that
@@ -4034,7 +4264,14 @@ fn name_spans_from(
   acc: List(Span),
 ) -> List(Span) {
   case index < string.length(line) {
-    False -> list.reverse(acc)
+    False ->
+      case prev {
+        option.None -> list.reverse(acc)
+        option.Some(_) -> {
+          let kind = classify(line, start, index, prev)
+          list.reverse([kind, ..acc])
+        }
+      }
     True -> {
       let ch = string.slice(line, at_index: index, length: 1)
       let is_word = is_identifier_char(ch)
