@@ -121,14 +121,14 @@ pub fn private_function_generic_multiple_params_test() {
     pair_type
   assert parameters
     == [
-      types.GenericTypeVariable("t_pair_0"),
-      types.GenericTypeVariable("t_pair_1"),
+      types.GenericTypeVariable("t_pair_0", False),
+      types.GenericTypeVariable("t_pair_1", False),
     ]
   assert labels == dict.new()
   assert return_
     == types.TupleType([
-      types.GenericTypeVariable("t_pair_0"),
-      types.GenericTypeVariable("t_pair_1"),
+      types.GenericTypeVariable("t_pair_0", False),
+      types.GenericTypeVariable("t_pair_1", False),
     ])
 
   let assert [pair_def] = module.module.functions
@@ -164,7 +164,7 @@ pub fn private_function_discard_param_test() {
   let foo_type = dict.get(env.scope.definitions, "foo")
   let assert Ok(types.GenericCallableType(parameters, labels, return_, _)) =
     foo_type
-  assert parameters == [types.GenericTypeVariable("t_foo_0")]
+  assert parameters == [types.GenericTypeVariable("t_foo_0", False)]
   assert labels == dict.new()
   assert return_ == types.IntType
 
@@ -287,9 +287,9 @@ pub fn private_function_unannotated_then_used_polymorphically_test() {
   let id_type = dict.get(env.scope.definitions, "id")
   let assert Ok(apply_type) = id_type
   let assert types.GenericCallableType(
-    [types.GenericTypeVariable("t_id_0")],
+    [types.GenericTypeVariable("t_id_0", False)],
     _labels,
-    types.GenericTypeVariable("t_id_0"),
+    types.GenericTypeVariable("t_id_0", False),
     _original,
   ) = apply_type
 

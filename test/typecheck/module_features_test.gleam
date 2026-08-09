@@ -122,9 +122,9 @@ pub fn generic_function_stored_as_generic_callable_test() {
   let assert types.GenericCallableType(parameters, labels, return, _original) =
     identity_type
 
-  assert parameters == [types.GenericTypeVariable("a")]
+  assert parameters == [types.GenericTypeVariable("a", False)]
   assert labels == dict.new()
-  assert return == types.GenericTypeVariable("a")
+  assert return == types.GenericTypeVariable("a", False)
 }
 
 pub fn generic_function_called_with_int_test() {

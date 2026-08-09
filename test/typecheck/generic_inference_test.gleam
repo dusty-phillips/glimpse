@@ -15,14 +15,14 @@ pub fn higher_order_apply_test() {
   assert parameters
     == [
       types.CallableType(
-        [types.GenericTypeVariable("a")],
+        [types.GenericTypeVariable("a", False)],
         dict.new(),
-        types.GenericTypeVariable("b"),
+        types.GenericTypeVariable("b", False),
       ),
-      types.GenericTypeVariable("a"),
+      types.GenericTypeVariable("a", False),
     ]
   assert labels == dict.new()
-  assert return == types.GenericTypeVariable("b")
+  assert return == types.GenericTypeVariable("b", False)
 
   let assert [apply_def] = module.module.functions
   let assert option.Some(glance.VariableType(_, "b")) =
@@ -66,13 +66,13 @@ pub fn recursive_generic_map_list_test() {
       types.CustomType(
         "gleam",
         "List",
-        [types.GenericTypeVariable("a")],
+        [types.GenericTypeVariable("a", False)],
         option.None,
       ),
       types.CallableType(
-        [types.GenericTypeVariable("a")],
+        [types.GenericTypeVariable("a", False)],
         dict.new(),
-        types.GenericTypeVariable("b"),
+        types.GenericTypeVariable("b", False),
       ),
     ]
   assert labels == dict.new()
@@ -80,7 +80,7 @@ pub fn recursive_generic_map_list_test() {
     == types.CustomType(
       "gleam",
       "List",
-      [types.GenericTypeVariable("b")],
+      [types.GenericTypeVariable("b", False)],
       option.None,
     )
 
@@ -105,13 +105,13 @@ pub fn parametric_type_generic_test() {
   let assert types.GenericCallableType(parameters, labels, return, _) =
     make_type
 
-  assert parameters == [types.GenericTypeVariable("a")]
+  assert parameters == [types.GenericTypeVariable("a", False)]
   assert labels == dict.new()
   assert return
     == types.CustomType(
       "main_module",
       "Box",
-      [types.GenericTypeVariable("a")],
+      [types.GenericTypeVariable("a", False)],
       option.None,
     )
 

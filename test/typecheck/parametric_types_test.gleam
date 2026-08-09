@@ -16,20 +16,20 @@ pub fn parametric_custom_type_def_test() {
       "main_module",
       "Box",
       [
-        types.GenericTypeVariable("a"),
+        types.GenericTypeVariable("a", False),
       ],
       option.None,
     ))
 
   assert dict.get(env.scope.definitions, "Box")
     == Ok(types.GenericCallableType(
-      [types.GenericTypeVariable("a")],
+      [types.GenericTypeVariable("a", False)],
       dict.from_list([#("value", 0)]),
       types.CustomType(
         "main_module",
         "Box",
         [
-          types.GenericTypeVariable("a"),
+          types.GenericTypeVariable("a", False),
         ],
         option.Some(0),
       ),

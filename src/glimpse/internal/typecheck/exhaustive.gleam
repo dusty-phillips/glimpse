@@ -381,7 +381,7 @@ fn constructors_(
               |> list.fold([], fn(acc, pair) {
                 let #(formal, actual) = pair
                 case formal {
-                  types.GenericTypeVariable(parameter_name) -> [
+                  types.GenericTypeVariable(parameter_name, _) -> [
                     #(parameter_name, actual),
                     ..acc
                   ]

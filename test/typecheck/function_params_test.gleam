@@ -143,7 +143,7 @@ pub fn generic_function_parameter_test() {
   assert dict.size(env.scope.definitions) == 8
   assert dict.get(env.scope.definitions, "consume")
     == Ok(types.GenericCallableType(
-      [types.GenericTypeVariable("a")],
+      [types.GenericTypeVariable("a", False)],
       dict.new(),
       types.NilType,
       glance.Function(

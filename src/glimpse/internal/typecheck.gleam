@@ -1121,7 +1121,11 @@ fn fn_literal(
         }
         let resolved = case is_annotated {
           True ->
-            types.substitute_type_variables(resolved, environment.generic_vars)
+            resolved
+            // The lambda's own type is polymorphic, so its named generics are
+            // not rigid even though they were rigid inside the body.
+            |> types.strip_rigidity
+            |> types.substitute_type_variables(environment.generic_vars)
           False -> resolved
         }
         #(store, [resolved, ..acc])
@@ -1133,7 +1137,10 @@ fn fn_literal(
   // body pinned to a rigid parameter of the enclosing function must stay rigid
   // (resolving it to a named generic would let a later call instantiate it).
   let #(store, return_type) = case return_annotation {
-    option.Some(_) -> types.resolve(store, return_type)
+    option.Some(_) -> {
+      let #(store, resolved) = types.resolve(store, return_type)
+      #(store, types.strip_rigidity(resolved))
+    }
     option.None -> #(store, return_type)
   }
 
@@ -1652,7 +1659,7 @@ fn check_update_linked_field(
     |> list.index_map(fn(param, index) {
       let updated = list.contains(updated_positions, index)
       case param {
-        types.GenericTypeVariable(_) -> option.Some(#(param, updated))
+        types.GenericTypeVariable(_, _) -> option.Some(#(param, updated))
         _ -> option.None
       }
     })
@@ -2776,7 +2783,7 @@ fn check_arguments(
                 store,
                 shorthand_types
                   |> dict.get(label)
-                  |> result.unwrap(types.GenericTypeVariable(label)),
+                  |> result.unwrap(types.GenericTypeVariable(label, False)),
               ))
             _ -> field_expression_type(environment, store, field, option.None)
           })
@@ -2811,15 +2818,13 @@ fn check_arguments(
               field,
               option.Some(resolved_param),
             ))
-            // Polymorphic callable arguments (a generic function, capture, or
+            // Polymorphic arguments (a generic function, capture, or
             // constructor) are instantiated afresh at the call site so their
             // type variables don't leak into the callee's inference. Concrete
             // arguments — including a value like `Decoder(message)` whose type
-            // parameter is the enclosing function's rigid signature variable —
-            // are left as-is.
-            let #(store, arg_type) = case
-              functions.is_generic_callable(arg_type)
-            {
+            // parameter is the enclosing function's rigid signature variable
+            // (marked `rigid: True` on the generic) — are left as-is.
+            let #(store, arg_type) = case functions.is_generic_type(arg_type) {
               True -> types.instantiate(store, arg_type)
               False -> #(store, arg_type)
             }

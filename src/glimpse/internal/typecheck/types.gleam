@@ -78,7 +78,13 @@ pub type Type {
   /// type uses `GenericTypeVariable` for the parameter names; applying the alias
   /// substitutes those variables (see `type_`).
   TypeAlias(parameters: List(String), aliased: Type)
-  GenericTypeVariable(name: String)
+  /// A named type variable. The `rigid` flag marks a variable introduced by the
+  /// current function's declared type parameters: rigidity is part of the type
+  /// itself, so any operation (instantiation, generalisation, `is_generic_type`)
+  /// can tell a pinned variable from a free generic without consulting the
+  /// transient type store. Stored signatures use `rigid: False` so cross-module
+  /// calls instantiate them afresh.
+  GenericTypeVariable(name: String, rigid: Bool)
   /// An inference/instantiation variable created while checking a call. These
   /// only exist transiently during call checking and are resolved or generalised
   /// back to `GenericTypeVariable` before being stored.
@@ -184,7 +190,7 @@ pub fn nested_var_has_source(
 ) -> Bool {
   case type_ {
     Var(_) -> False
-    GenericTypeVariable(_)
+    GenericTypeVariable(_, _)
     | IntType
     | FloatType
     | StringType
@@ -435,7 +441,7 @@ fn unify_rigid(
           }
         TodoType -> Ok(store)
         InferredReturn -> Ok(store)
-        GenericTypeVariable(other_name) ->
+        GenericTypeVariable(other_name, _) ->
           case other_name == name {
             True -> Ok(store)
             False -> {
@@ -586,7 +592,12 @@ fn do_instantiate(
 ) -> #(TypeStore, dict.Dict(String, Type), Type) {
   case type_ {
     TodoType -> #(store, substitutions, TodoType)
-    GenericTypeVariable(name) -> {
+    GenericTypeVariable(name, True) -> #(
+      store,
+      substitutions,
+      GenericTypeVariable(name, True),
+    )
+    GenericTypeVariable(name, False) -> {
       case dict.get(substitutions, name) {
         Ok(type_) -> #(store, substitutions, type_)
         Error(_) -> {
@@ -787,7 +798,7 @@ pub fn unify(
     _, TodoType -> Ok(store)
     InferredReturn, _ -> Ok(store)
     _, InferredReturn -> Ok(store)
-    GenericTypeVariable(ln), GenericTypeVariable(rn) -> {
+    GenericTypeVariable(ln, _), GenericTypeVariable(rn, _) -> {
       case ln == rn {
         True -> Ok(store)
         False -> {
@@ -1004,12 +1015,13 @@ pub fn rename_parameter_generics(
       case is_unannotated {
         True ->
           case type_ {
-            GenericTypeVariable(name) ->
+            GenericTypeVariable(name, _) ->
               dict.insert(
                 substitutions,
                 name,
                 GenericTypeVariable(
                   "t_" <> function_name <> "_" <> int.to_string(index),
+                  False,
                 ),
               )
             _ -> substitutions
@@ -1059,13 +1071,13 @@ fn do_generalise(
             Ok(Link(linked)) -> do_generalise(store, names, linked)
             Ok(Unbound) | Error(_) -> {
               case dict.get(names, id) {
-                Ok(name) -> #(store, names, GenericTypeVariable(name))
+                Ok(name) -> #(store, names, GenericTypeVariable(name, False))
                 Error(_) -> {
                   let name = generalise_name(dict.size(names))
                   #(
                     store,
                     dict.insert(names, id, name),
-                    GenericTypeVariable(name),
+                    GenericTypeVariable(name, False),
                   )
                 }
               }
@@ -1206,7 +1218,7 @@ pub fn raw_show(type_: Type) -> String {
       "GenCallable(" <> raw_show_list(p) <> " -> " <> raw_show(r) <> ")"
     NamespaceType(_, _) -> "Namespace"
     TypeAlias(_, aliased) -> "Alias(" <> raw_show(aliased) <> ")"
-    GenericTypeVariable(n) -> "G:" <> n
+    GenericTypeVariable(n, _) -> "G:" <> n
     TodoType -> "Todo"
     InferredReturn -> "InferredReturn"
   }
@@ -1345,7 +1357,7 @@ fn reaches(
 pub fn named_vars_in(type_: Type) -> List(String) {
   fold_type([], type_, fn(acc, type_) {
     case type_ {
-      GenericTypeVariable(name) -> [name, ..acc]
+      GenericTypeVariable(name, _) -> [name, ..acc]
       _ -> acc
     }
   })
@@ -1373,14 +1385,14 @@ pub fn named_vars_including_sources(
 /// explicit definition, e.g. `UtfCodepoint`.
 fn prelude_custom_types() -> dict.Dict(String, Type) {
   let list =
-    CustomType("gleam", "List", [GenericTypeVariable("a")], option.None)
+    CustomType("gleam", "List", [GenericTypeVariable("a", False)], option.None)
   let result =
     CustomType(
       "gleam",
       "Result",
       [
-        GenericTypeVariable("a"),
-        GenericTypeVariable("e"),
+        GenericTypeVariable("a", False),
+        GenericTypeVariable("e", False),
       ],
       option.None,
     )
@@ -1410,8 +1422,8 @@ fn prelude_definitions() -> dict.Dict(String, Type) {
       option.None,
       [],
     )
-  let value = GenericTypeVariable("a")
-  let error = GenericTypeVariable("e")
+  let value = GenericTypeVariable("a", False)
+  let error = GenericTypeVariable("e", False)
   let utf_codepoint = CustomType("prelude", "UtfCodepoint", [], option.None)
   let utf_codepoint_label =
     CustomType("prelude", "UtfCodepointLabel", [], option.None)
@@ -1507,7 +1519,9 @@ pub fn add_custom_type_to_env(
       CustomType(
         environment.current_module,
         name,
-        list.map(parameters, fn(parameter) { GenericTypeVariable(parameter) }),
+        list.map(parameters, fn(parameter) {
+          GenericTypeVariable(parameter, False)
+        }),
         option.None,
       ),
     ),
@@ -1821,7 +1835,7 @@ fn do_type_(
 
     glance.VariableType(_, name) -> {
       case is_type_variable(name) {
-        True -> Ok(#(store, next_hole, GenericTypeVariable(name)))
+        True -> Ok(#(store, next_hole, GenericTypeVariable(name, False)))
         False ->
           lookup_variable_type(environment, name)
           |> result.map(fn(type_) { #(store, next_hole, type_) })
@@ -1844,7 +1858,7 @@ fn do_type_(
           Ok(#(
             store,
             next_hole + 1,
-            GenericTypeVariable("hole" <> int.to_string(next_hole)),
+            GenericTypeVariable("hole" <> int.to_string(next_hole), False),
           ))
       }
   }
@@ -1901,6 +1915,19 @@ pub fn map_type(type_: Type, on_leaf: fn(Type) -> Type) -> Type {
   }
 }
 
+/// Convert every rigid-flagged `GenericTypeVariable(name, True)` in a type to a
+/// non-rigid one. Used when a lambda's annotated parameters (rigid inside its
+/// body) are resolved back into the lambda's own type, which must be
+/// polymorphic and instantiable at each use site.
+pub fn strip_rigidity(type_: Type) -> Type {
+  map_type(type_, fn(type_) {
+    case type_ {
+      GenericTypeVariable(name, True) -> GenericTypeVariable(name, False)
+      _ -> type_
+    }
+  })
+}
+
 pub fn map_types(types: List(Type), on_leaf: fn(Type) -> Type) -> List(Type) {
   list.map(types, fn(type_) { map_type(type_, on_leaf) })
 }
@@ -1939,7 +1966,7 @@ pub fn substitute_type_variables(
 ) -> Type {
   map_type(type_, fn(type_) {
     case type_ {
-      GenericTypeVariable(name) ->
+      GenericTypeVariable(name, _) ->
         dict.get(substitutions, name) |> result.unwrap(type_)
       _ -> type_
     }
@@ -2033,7 +2060,7 @@ pub fn to_string(environment: Environment, type_: Type) -> String {
       <> to_string(environment, return)
     NamespaceType(..) -> "<Namespace>"
     TypeAlias(_, aliased) -> to_string(environment, aliased)
-    GenericTypeVariable(name) -> name
+    GenericTypeVariable(name, _) -> name
     Var(id) -> "var_" <> int.to_string(id)
     TodoType -> "todo"
     InferredReturn -> ""
@@ -2113,7 +2140,7 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
       )
     NamespaceType(..) -> panic as "Cannot convert namespace to glance"
     TypeAlias(_, aliased) -> to_glance(environment, aliased)
-    GenericTypeVariable(name) -> glance.VariableType(unknown_span, name)
+    GenericTypeVariable(name, _) -> glance.VariableType(unknown_span, name)
     Var(id) -> glance.VariableType(unknown_span, "var_" <> int.to_string(id))
     TodoType -> glance.VariableType(unknown_span, "todo")
     InferredReturn ->

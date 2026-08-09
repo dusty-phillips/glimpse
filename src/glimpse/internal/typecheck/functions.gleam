@@ -43,25 +43,10 @@ pub fn has_generic_types(types: List(Type)) -> Bool {
 
 pub fn is_generic_type(type_: Type) -> Bool {
   case type_ {
-    types.GenericTypeVariable(_) -> True
+    types.GenericTypeVariable(_, rigid) -> !rigid
     types.CustomType(_, _, parameters, _) ->
       list.any(parameters, is_generic_type)
     types.TupleType(elements) -> list.any(elements, is_generic_type)
-    types.CallableType(parameters, _, return) ->
-      has_generic_types(parameters) || is_generic_type(return)
-    types.GenericCallableType(parameters, _, return, _) ->
-      has_generic_types(parameters) || is_generic_type(return)
-    _ -> False
-  }
-}
-
-/// Whether a type is a callable (function value, capture, or constructor)
-/// whose parameter or return types reference a generic type variable. Only such
-/// callable arguments are instantiated afresh at a call site; a concrete value
-/// like `Decoder(message)` whose type parameter is the enclosing function's
-/// rigid signature variable must keep that linkage.
-pub fn is_generic_callable(type_: Type) -> Bool {
-  case type_ {
     types.CallableType(parameters, _, return) ->
       has_generic_types(parameters) || is_generic_type(return)
     types.GenericCallableType(parameters, _, return, _) ->
@@ -190,9 +175,10 @@ fn fold_parameter_into_callable_inner(
                   [
                     types.GenericTypeVariable(
                       "t_"
-                      <> function_name
-                      <> "_"
-                      <> int.to_string(generic_var_counter),
+                        <> function_name
+                        <> "_"
+                        <> int.to_string(generic_var_counter),
+                      False,
                     ),
                     ..reversed_by_position
                   ],
@@ -216,9 +202,10 @@ fn fold_parameter_into_callable_inner(
                   [
                     types.GenericTypeVariable(
                       "t_"
-                      <> function_name
-                      <> "_"
-                      <> int.to_string(generic_var_counter),
+                        <> function_name
+                        <> "_"
+                        <> int.to_string(generic_var_counter),
+                      False,
                     ),
                     ..reversed_by_position
                   ],
@@ -404,7 +391,7 @@ pub fn freshen_generics(
   type_: Type,
 ) -> #(TypeStore, dict.Dict(String, Type), Type) {
   case type_ {
-    types.GenericTypeVariable(name) ->
+    types.GenericTypeVariable(name, _) ->
       case dict.get(generic_vars, name) {
         Ok(existing) -> #(store, generic_vars, existing)
         Error(_) -> {
@@ -416,10 +403,16 @@ pub fn freshen_generics(
           // what lets generalization and error messages still show `a`, and it
           // keeps type parameter names locally scoped (no cross-function
           // collisions, since rigidity is tracked per variable, not per name).
+          // The link target carries `rigid: True`, so any operation that sees
+          // the resolved type knows it is pinned and must not be instantiated.
           let #(store, fresh) =
             types.fresh_var_with_source(store, "rigid:" <> name)
           let store =
-            types.link_var_to(store, fresh, types.GenericTypeVariable(name))
+            types.link_var_to(
+              store,
+              fresh,
+              types.GenericTypeVariable(name, True),
+            )
           #(store, dict.insert(generic_vars, name, fresh), fresh)
         }
       }
@@ -597,7 +590,7 @@ fn signature_parameter_name(
 ) -> String {
   let fallback = "t_" <> function_name <> "_" <> int.to_string(index)
   case signature_parameter_type(environment, function_name, index) {
-    types.GenericTypeVariable(name) -> name
+    types.GenericTypeVariable(name, _) -> name
     _ -> fallback
   }
 }
@@ -610,6 +603,7 @@ fn signature_parameter_type(
   let fallback =
     types.GenericTypeVariable(
       "t_" <> function_name <> "_" <> int.to_string(index),
+      False,
     )
   case dict.get(environment.scope.definitions, function_name) {
     Ok(types.GenericCallableType(parameters, _, _, _)) ->

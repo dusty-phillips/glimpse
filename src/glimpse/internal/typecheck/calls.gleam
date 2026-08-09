@@ -69,7 +69,7 @@ pub fn record_generic_constraints(
             fn(store, pair) {
               let #(parameter, argument) = pair
               case parameter {
-                types.GenericTypeVariable(name) ->
+                types.GenericTypeVariable(name, _) ->
                   types.record_generic_edge(
                     store,
                     name,
