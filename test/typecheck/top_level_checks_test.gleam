@@ -10,6 +10,15 @@ pub fn distinct_constructor_names_test() {
   helpers.ok_module_typecheck("pub type Boxy { Box(Int) Wobble(Float) }")
 }
 
+pub fn duplicate_constructor_names_across_types_test() {
+  assert helpers.error_module_typecheck("pub type X { A } pub type Y { A }")
+    == error.DuplicateConstructor("A")
+}
+
+pub fn duplicate_constructor_names_across_types_is_fine_test() {
+  helpers.ok_module_typecheck("pub type X { A } pub type Y { B }")
+}
+
 pub fn private_type_leaking_through_public_signature_test() {
   assert helpers.error_module_typecheck(
       "type PrivateType
@@ -217,4 +226,91 @@ pub fn type_alias_with_unused_parameter_test() {
 
 pub fn type_alias_using_parameter_test() {
   helpers.ok_module_typecheck("type A(a) = List(a)")
+}
+
+pub fn duplicate_attribute_on_function_test() {
+  assert helpers.error_module_typecheck(
+      "@deprecated(\"a\")
+    @deprecated(\"b\")
+    pub fn f() -> Int { 1 }",
+    )
+    == error.DuplicateAttribute("deprecated")
+}
+
+pub fn duplicate_target_attribute_test() {
+  assert helpers.error_module_typecheck(
+      "@target(erlang)
+    @target(javascript)
+    pub fn f() -> Int { 1 }",
+    )
+    == error.DuplicateAttribute("target")
+}
+
+pub fn duplicate_internal_attribute_test() {
+  assert helpers.error_module_typecheck(
+      "@internal
+    @internal
+    pub fn f() -> Int { 1 }",
+    )
+    == error.DuplicateAttribute("internal")
+}
+
+pub fn duplicate_external_attribute_same_target_test() {
+  assert helpers.error_module_typecheck(
+      "@external(erlang, \"m\", \"f\")
+    @external(erlang, \"m\", \"f\")
+    pub fn f() -> Int",
+    )
+    == error.DuplicateAttribute("external")
+}
+
+pub fn external_attribute_for_multiple_targets_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(erlang, \"m\", \"f\")
+    @external(javascript, \"m\", \"f\")
+    pub fn f() -> Int",
+  )
+}
+
+pub fn duplicate_attribute_on_type_and_variant_test() {
+  assert helpers.error_module_typecheck(
+      "@deprecated(\"a\")
+    pub type X {
+      @deprecated(\"b\")
+      A
+    }",
+    )
+    == error.DuplicateAttribute("deprecated")
+}
+
+pub fn duplicate_attribute_on_separate_types_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@deprecated(\"a\")
+    pub type X { A }
+
+    @deprecated(\"b\")
+    pub type Y { B }",
+  )
+}
+
+pub fn public_unsupported_target_external_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"m\", \"f\")
+    pub fn f() -> Int",
+    )
+    == error.UnsupportedTarget("f")
+}
+
+pub fn private_unsupported_target_external_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"m\", \"f\")
+    fn f() -> Int",
+  )
+}
+
+pub fn supported_target_external_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(erlang, \"m\", \"f\")
+    pub fn f() -> Int",
+  )
 }

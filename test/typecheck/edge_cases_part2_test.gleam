@@ -243,12 +243,15 @@ pub fn pipe_into_zero_argument_result_test() {
 }
 
 pub fn public_other_target_external_is_fine_test() {
-  // The defining module may declare an external for another target; real
-  // Gleam only rejects calls to it, and only from a project's own modules.
-  helpers.ok_module_typecheck(
-    "@external(javascript, \"one\", \"two\")
+  // A public body-less function must have an `@external` for the active build
+  // target; one that only implements another target is rejected with
+  // "Unsupported target" because every public function must compile for the
+  // current target.
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"one\", \"two\")
     pub fn js_only() -> Int",
-  )
+    )
+    == error.UnsupportedTarget("js_only")
 }
 
 pub fn other_target_external_call_within_module_is_fine_test() {

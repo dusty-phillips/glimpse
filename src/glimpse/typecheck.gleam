@@ -129,6 +129,39 @@ pub fn module(
     option.None -> Ok(Nil)
   })
 
+  // Variant constructor names share a namespace with function and constant
+  // names, so two custom types may not declare the same constructor even
+  // though the type names themselves differ.
+  let constructor_names =
+    glimpse_module.module.custom_types
+    |> list.map(fn(definition) { definition.definition })
+    |> list.map(fn(custom_type) {
+      custom_type.variants |> list.map(fn(variant) { variant.name })
+    })
+    |> list.flatten
+  use _ <- result.try(case intern.find_duplicate(constructor_names) {
+    option.Some(name) -> Error(error.DuplicateConstructor(name))
+    option.None -> Ok(Nil)
+  })
+
+  // A public function with no body must have an `@external` implementation for
+  // the active build target; otherwise it is unsupported on that target. The
+  // real compiler reports `Unsupported target` for e.g. a public `@external`
+  // function that only implements javascript while checking the erlang target.
+  use _ <- result.try(
+    list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
+      let glance_function = definition.definition
+      case
+        glance_function.publicity == glance.Public
+        && glance_function.body == []
+        && !target.function_supported(target, definition)
+      {
+        True -> Error(error.UnsupportedTarget(glance_function.name))
+        False -> Ok(Nil)
+      }
+    }),
+  )
+
   // A custom type annotated `@external` may not declare constructors.
   use _ <- result.try(
     list.try_fold(glimpse_module.module.custom_types, Nil, fn(_, definition) {
@@ -180,6 +213,24 @@ pub fn module(
         }
       },
     ),
+  )
+
+  // An attribute may not be declared twice within one declaration scope. The
+  // real compiler rejects `@deprecated("a") @deprecated("b")` on one function
+  // with "Duplicate attribute".
+  use _ <- result.try(
+    case
+      duplicate_attribute_name(attribute_scope_names(glimpse_module.module))
+    {
+      option.Some(key) -> {
+        let name = case string.starts_with(key, "external:") {
+          True -> "external"
+          False -> key
+        }
+        Error(error.DuplicateAttribute(name))
+      }
+      option.None -> Ok(Nil)
+    },
   )
 
   // The Gleam compiler rejects `@external` attributes naming a build target it
@@ -707,6 +758,59 @@ fn all_module_attributes(module: glance.Module) -> List(glance.Attribute) {
     module.constants |> list.map(fn(d) { d.attributes }) |> list.flatten,
     module.functions |> list.map(fn(d) { d.attributes }) |> list.flatten,
   ])
+}
+
+/// The attribute names attached to each declaration scope: one scope per
+/// import, function, constant and type alias, and one scope per custom type
+/// (a type and its variants share a scope, so `@deprecated` on the type and on
+/// a variant is a duplicate). The real compiler rejects a scope that declares
+/// the same attribute twice.
+fn attribute_scope_names(module: glance.Module) -> List(List(String)) {
+  let scopes =
+    module.imports
+    |> list.map(fn(d) { d.attributes })
+    |> list.append(module.functions |> list.map(fn(d) { d.attributes }))
+    |> list.append(module.constants |> list.map(fn(d) { d.attributes }))
+    |> list.append(module.type_aliases |> list.map(fn(d) { d.attributes }))
+    |> list.append(
+      module.custom_types
+      |> list.map(fn(d) {
+        list.flatten([
+          d.attributes,
+          d.definition.variants
+            |> list.map(fn(variant) { variant.attributes })
+            |> list.flatten,
+        ])
+      }),
+    )
+  list.map(scopes, fn(attributes) { list.map(attributes, attribute_key) })
+}
+
+/// The key that determines whether two attributes are duplicates: the
+/// attribute name, except that `@external` is keyed by its target (first
+/// argument), since a function may have one `@external` per target.
+fn attribute_key(attribute: glance.Attribute) -> String {
+  case attribute.name {
+    "external" ->
+      case attribute.arguments {
+        [glance.Variable(_, target_name), ..] -> "external:" <> target_name
+        _ -> "external"
+      }
+    name -> name
+  }
+}
+
+/// The name of an attribute declared twice within one declaration scope, if
+/// any.
+fn duplicate_attribute_name(
+  scopes: List(List(String)),
+) -> option.Option(String) {
+  list.fold(scopes, option.None, fn(found, scope) {
+    case found {
+      option.Some(_) -> found
+      option.None -> intern.find_duplicate(scope)
+    }
+  })
 }
 
 /// Whether an attribute name is one of the attributes the Gleam compiler

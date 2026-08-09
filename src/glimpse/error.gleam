@@ -161,6 +161,11 @@ pub type TypeCheckError {
   /// `@internal`, `@deprecated` and `@target`; the compiler rejects anything
   /// else at parse time.
   UnknownAttribute(name: String)
+  /// Raised when the same attribute is declared twice on one declaration (e.g.
+  /// `@deprecated("a") @deprecated("b")` on a single function). The compiler
+  /// rejects this with "Duplicate attribute"; `@external` is exempt since a
+  /// function may have one `@external` per target.
+  DuplicateAttribute(name: String)
   /// Raised when a value is only implemented for another build target.
   UnsupportedTarget(name: String)
   /// Raised when two imports resolve to the same local module name.
