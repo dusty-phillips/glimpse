@@ -131,6 +131,15 @@ pub type TypeCheckError {
   /// Raised when a string literal contains an invalid escape sequence, e.g.
   /// `"\1"`, which the Gleam compiler rejects at parse time.
   InvalidEscape(value: String)
+  /// Raised when an `@external` attribute names a build target that does not
+  /// exist, e.g. `@external(rust, ...)`. The Gleam compiler rejects this at
+  /// parse time.
+  UnknownExternalTarget(name: String)
+  /// Raised when an attribute is not a recognised Gleam attribute, e.g.
+  /// `@deprecated__zzz(...)`. The only valid attributes are `@external`,
+  /// `@internal`, `@deprecated` and `@target`; the compiler rejects anything
+  /// else at parse time.
+  UnknownAttribute(name: String)
   /// Raised when a value is only implemented for another build target.
   UnsupportedTarget(name: String)
   /// Raised when two imports resolve to the same local module name.

@@ -504,3 +504,304 @@ pub fn invalid_escape_bit_string_test() {
     )
     == error.InvalidEscape("x\\1y")
 }
+
+pub fn record_update_keeps_distinct_signature_type_var_test() {
+  assert helpers.error_module_typecheck(
+      "pub type App(arguments, model, message) {
+    App(
+      arguments: arguments,
+      model: model,
+      message: message,
+      name: String,
+    )
+  }
+  fn named(app: App(arguments__zzz, model, message), name: String) -> App(arguments, model, message) {
+    App(..app, name: name)
+  }",
+    )
+    == error.InvalidReturnType(
+      "named",
+      "main_module.App(arguments__zzz, model, message)",
+      "main_module.App(arguments, model, message)",
+    )
+}
+
+pub fn record_update_may_change_type_parameter_field_test() {
+  helpers.ok_module_typecheck(
+    "type Box(a) { Box(value: a) }
+  fn change_val(b: Box(Int), v: String) -> Box(String) {
+    Box(..b, value: v)
+  }",
+  )
+}
+
+pub fn record_update_phantom_type_parameter_is_free_test() {
+  helpers.ok_module_typecheck(
+    "pub type Accepted
+  pub type New
+  pub type Snapshot(status) {
+    Snapshot(title: String, content: String, info: Bool)
+  }
+  fn serialise(snapshot: Snapshot(New)) -> String {
+    snapshot.title
+  }
+  fn accept(snapshot: Snapshot(Accepted), title: String) -> String {
+    Snapshot(..snapshot, info: True) |> serialise
+  }",
+  )
+}
+
+pub fn record_update_nested_type_parameter_field_test() {
+  helpers.ok_module_typecheck(
+    "type Option(a) { None Some(a) }
+  type Selector(message) { Selector }
+  type Initialised(state, message, return) {
+    Initialised(
+      state: state,
+      selector: Option(Selector(message)),
+      result: return,
+    )
+  }
+  fn with_selector(
+    initialised: Initialised(state, message, return),
+    selector: Selector(message),
+  ) -> Initialised(state, message, return) {
+    Initialised(..initialised, selector: Some(selector))
+  }",
+  )
+}
+
+pub fn unknown_external_target_test() {
+  assert helpers.error_module_typecheck(
+      "@external(rust, \"gleam@erlang@process\", \"send\")
+  fn send(pid: BitArray) -> Nil {
+    todo
+  }",
+    )
+    == error.UnknownExternalTarget("rust")
+}
+
+pub fn valid_external_target_test() {
+  helpers.ok_module_typecheck(
+    "@external(erlang, \"gleam@erlang@process\", \"send\")
+  fn send(pid: BitArray) -> Nil {
+    todo
+  }",
+  )
+}
+
+pub fn undeclared_type_variable_in_custom_type_field_test() {
+  assert helpers.error_module_typecheck(
+      "pub type App(args, model) {
+    App(update: fn(args) -> List(missing), view: model)
+  }",
+    )
+    == error.UnknownCustomType("missing")
+}
+
+pub fn declared_type_variable_in_custom_type_field_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type App(args, model) {
+    App(update: fn(args) -> List(args), view: model)
+  }",
+  )
+}
+
+pub fn unknown_attribute_test() {
+  assert helpers.error_module_typecheck(
+      "@deprecated__zzz(\"use foo instead\")
+  fn foo() -> Nil {
+    Nil
+  }",
+    )
+    == error.UnknownAttribute("deprecated__zzz")
+}
+
+pub fn known_attributes_are_fine_test() {
+  helpers.ok_module_typecheck(
+    "@deprecated(\"old\")
+  @target(erlang)
+  @internal
+  pub fn foo() -> Nil {
+    Nil
+  }",
+  )
+}
+
+pub fn unknown_attribute_on_custom_type_test() {
+  assert helpers.error_module_typecheck(
+      "@foo
+  pub type Bar {
+    Bar
+  }",
+    )
+    == error.UnknownAttribute("foo")
+}
+
+pub fn record_update_as_call_argument_keeps_rigid_type_vars_test() {
+  assert helpers.error_module_typecheck(
+      "pub opaque type Simulation(model, message) {
+    Simulation(
+      update: fn(model, message) -> #(model, String),
+      view: fn(model) -> String,
+      history: List(Int),
+      model: model,
+      html: String,
+    )
+  }
+  pub type Result(a, b) {
+    Ok(a)
+    Error(b)
+  }
+  fn event(
+    simulation: Simulation(model__zzz, message),
+    msg: message,
+  ) -> Simulation(model, message) {
+    let #(model, _) = simulation.update(simulation.model, msg)
+    let html = simulation.view(model)
+    let history = [1, ..simulation.history]
+    let updated = Ok(Simulation(..simulation, history:, model:, html:))
+    case updated {
+      Ok(s) -> s
+      Error(e) -> e
+    }
+  }",
+    )
+    == error.InvalidReturnType(
+      "event",
+      "main_module.Simulation(model__zzz, message)",
+      "main_module.Simulation(model, message)",
+    )
+}
+
+pub fn record_update_in_use_continuation_keeps_rigid_type_vars_test() {
+  assert helpers.error_module_typecheck(
+      "pub opaque type Simulation(model, message) {
+    Simulation(
+      update: fn(model, message) -> #(model, String),
+      view: fn(model) -> String,
+      history: List(Int),
+      model: model,
+      html: String,
+    )
+  }
+  pub type Result(a, b) {
+    Ok(a)
+    Error(b)
+  }
+  fn wrap(f: fn(Int) -> Result(a, b)) -> Result(a, b) {
+    f(1)
+  }
+  fn event(
+    simulation: Simulation(model__zzz, message),
+    msg: message,
+  ) -> Simulation(model, message) {
+    let result = {
+      use path <- wrap
+      let #(model, _) = simulation.update(simulation.model, msg)
+      let html = simulation.view(model)
+      let history = [1, ..simulation.history]
+      Ok(Simulation(..simulation, history:, model:, html:))
+    }
+    case result {
+      Ok(simulation) -> simulation
+      Error(problem) -> problem
+    }
+  }",
+    )
+    == error.InvalidReturnType(
+      "event",
+      "main_module.Simulation(model__zzz, message)",
+      "main_module.Simulation(model, message)",
+    )
+}
+
+pub fn valid_record_update_in_use_continuation_test() {
+  helpers.ok_module_typecheck(
+    "pub opaque type Simulation(model, message) {
+    Simulation(
+      update: fn(model, message) -> #(model, String),
+      view: fn(model) -> String,
+      history: List(Int),
+      model: model,
+      html: String,
+    )
+  }
+  pub type Result(a, b) {
+    Ok(a)
+    Error(b)
+  }
+  fn wrap(f: fn(Int) -> Result(a, b)) -> Result(a, b) {
+    f(1)
+  }
+  fn event(
+    simulation: Simulation(model, message),
+    msg: message,
+  ) -> Simulation(model, message) {
+    let result = {
+      use path <- wrap
+      let #(model, _) = simulation.update(simulation.model, msg)
+      let html = simulation.view(model)
+      let history = [1, ..simulation.history]
+      Ok(Simulation(..simulation, history:, model:, html:))
+    }
+    case result {
+      Ok(simulation) -> simulation
+      Error(problem) -> problem
+    }
+  }",
+  )
+}
+
+pub fn record_update_on_polymorphic_const_with_lambda_annotation_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Actions(a) {
+    Actions(dispatch: fn(a) -> Nil, root: fn() -> Nil)
+  }
+  pub type Box(a) {
+    Box(
+      synchronous: List(fn(Actions(a)) -> Nil),
+      before_paint: List(fn(Actions(a)) -> Nil),
+      after_paint: List(fn(Actions(a)) -> Nil),
+    )
+  }
+  const empty: Box(a) = Box([], [], [])
+  pub fn take(effect: fn(fn(a) -> Nil, a) -> Nil, x: a) -> Box(b) {
+    Box(..empty, before_paint: [
+      fn(actions: Actions(a)) {
+        let dispatch = actions.dispatch
+        effect(dispatch, x)
+      },
+    ])
+  }",
+    )
+    == error.InvalidReturnType(
+      "take",
+      "main_module.Box(a)",
+      "main_module.Box(b)",
+    )
+}
+
+pub fn valid_record_update_on_polymorphic_const_with_lambda_annotation_test() {
+  helpers.ok_module_typecheck(
+    "pub type Actions(a) {
+    Actions(dispatch: fn(a) -> Nil, root: fn() -> Nil)
+  }
+  pub type Box(a) {
+    Box(
+      synchronous: List(fn(Actions(a)) -> Nil),
+      before_paint: List(fn(Actions(a)) -> Nil),
+      after_paint: List(fn(Actions(a)) -> Nil),
+    )
+  }
+  const empty: Box(a) = Box([], [], [])
+  pub fn take(effect: fn(fn(a) -> Nil, a) -> Nil, x: a) -> Box(a) {
+    Box(..empty, before_paint: [
+      fn(actions: Actions(a)) {
+        let dispatch = actions.dispatch
+        effect(dispatch, x)
+      },
+    ])
+  }",
+  )
+}

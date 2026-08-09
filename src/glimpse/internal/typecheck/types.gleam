@@ -365,6 +365,16 @@ fn follow_rigid(store: TypeStore, id: Int) -> #(TypeStore, Type) {
   }
 }
 
+/// Resolve a type and return the id of the var it ends at, if it is an unbound
+/// type variable. Returns `None` for types that are not simple vars (literals,
+/// CustomType, GenericTypeVariable, callables, etc).
+pub fn resolved_var_id(store: TypeStore, type_: Type) -> Option(Int) {
+  case resolve(store, type_) {
+    #(_, Var(id)) -> option.Some(id)
+    #(_, _) -> option.None
+  }
+}
+
 /// Whether the type itself is a rigid type variable (tagged `rigid:`), as
 /// opposed to merely containing one. Flexible vars linked to a rigid var also
 /// report rigid through `var_source`'s link-following.
@@ -807,6 +817,61 @@ fn unify_list_of_types(
   }
 }
 
+/// Unify a record-update base's type with the constructor's instantiated return
+/// type, but only at the type-parameter positions that the update does NOT set.
+/// `updated_positions` holds the indices of `constructor_return`'s CustomType
+/// parameters that an updated field is expected to replace (those positions are
+/// left free so the field-value unification determines them). This keeps the
+/// base's parameters (e.g. rigid signature type variables) linked into the
+/// result for untouched positions, so updating `App(arguments, ..)` where the
+/// signature names the record `App(arguments__zzz, ..)` cannot silently unify
+/// the result with `App(arguments, ..)`, while still allowing fields typed by a
+/// type parameter to change it.
+pub fn unify_record_update_base(
+  store: TypeStore,
+  environment: Environment,
+  record_type: Type,
+  constructor_return: Type,
+  updated_positions: set.Set(Int),
+) -> Result(TypeStore, error.TypeCheckError) {
+  // Resolve while keeping rigid vars rigid: following a rigid var's link to its
+  // named generic (as `resolve` does) would let the update's fresh constructor
+  // vars link to the *generic name* instead of the rigid var, so the result
+  // type would silently lose the base's rigid signature type variables and
+  // unify with any same-named generic in the return annotation.
+  let #(store, record_type) = resolve_keep_rigid(store, record_type)
+  let #(store, constructor_return) =
+    resolve_keep_rigid(store, constructor_return)
+  case record_type, constructor_return {
+    CustomType(_, _, record_params, _), CustomType(_, _, return_params, _) -> {
+      case list.length(record_params) == list.length(return_params) {
+        False ->
+          Error(mismatch_error(environment, record_type, constructor_return))
+        True ->
+          list.index_map(return_params, fn(param, index) {
+            case set.contains(updated_positions, index) {
+              True -> option.None
+              False ->
+                case list.drop(record_params, up_to: index) |> list.first {
+                  Ok(record_param) -> option.Some(#(record_param, param))
+                  Error(_) -> option.None
+                }
+            }
+          })
+          |> list.fold(Ok(store), fn(acc, pair) {
+            case acc, pair {
+              Error(e), _ -> Error(e)
+              Ok(store), option.Some(#(record_param, return_param)) ->
+                unify(store, environment, record_param, return_param)
+              Ok(store), option.None -> Ok(store)
+            }
+          })
+      }
+    }
+    _, _ -> unify(store, environment, record_type, constructor_return)
+  }
+}
+
 fn unify_callable_types(
   store: TypeStore,
   environment: Environment,
@@ -1088,6 +1153,12 @@ pub type Environment {
     // first function-body pass from calls to placeholder signatures. A cycle
     // means a value's type is defined in terms of itself.
     generic_edges: dict.Dict(String, List(String)),
+    // The rigid type variables introduced by the enclosing function's
+    // signature, keyed by their declared name. Threaded into function literals
+    // so a lambda annotation that names one of the enclosing function's type
+    // parameters (e.g. `fn(x: a)` inside `fn f(x: a)`) reuses the same rigid
+    // variable instead of creating an unrelated one.
+    generic_vars: dict.Dict(String, Type),
   )
 }
 
@@ -1152,6 +1223,7 @@ pub fn new_env(current_module: String) -> Environment {
     ),
     defer_unknown: False,
     generic_edges: dict.new(),
+    generic_vars: dict.new(),
   )
 }
 
@@ -1177,6 +1249,7 @@ pub fn prelude_module_env(module_name: String) -> Environment {
     ),
     defer_unknown: False,
     generic_edges: dict.new(),
+    generic_vars: dict.new(),
   )
 }
 

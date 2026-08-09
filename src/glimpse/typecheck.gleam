@@ -146,6 +146,53 @@ pub fn module(
     }),
   )
 
+  // The Gleam compiler rejects attributes it does not recognise (`@foo(...)`,
+  // or a misspelling like `@deprecated__zzz(...)`) at parse time. The only
+  // valid attributes are `@external`, `@internal`, `@deprecated` and `@target`,
+  // on functions, constants, custom types (including their variants and
+  // fields), type aliases and imports.
+  use _ <- result.try(
+    list.fold(
+      all_module_attributes(glimpse_module.module),
+      Ok(Nil),
+      fn(result, attribute) {
+        case result, is_known_attribute(attribute.name) {
+          Error(e), _ -> Error(e)
+          Ok(_), True -> Ok(Nil)
+          Ok(_), False -> Error(error.UnknownAttribute(attribute.name))
+        }
+      },
+    ),
+  )
+
+  // The Gleam compiler rejects `@external` attributes naming a build target it
+  // does not know (`@external(rust, ...)`) at parse time; the only valid
+  // targets are erlang and javascript.
+  use _ <- result.try(
+    glimpse_module.module.functions
+    |> list.map(fn(definition) { definition.attributes })
+    |> list.append(
+      glimpse_module.module.constants
+      |> list.map(fn(definition) { definition.attributes }),
+    )
+    |> list.flatten
+    |> list.fold(Ok(Nil), fn(result, attribute) {
+      case result, attribute.name == "external" {
+        Error(e), _ -> Error(e)
+        Ok(_), False -> Ok(Nil)
+        Ok(_), True ->
+          case attribute.arguments {
+            [glance.Variable(_, name), ..] ->
+              case name == "erlang" || name == "javascript" {
+                True -> Ok(Nil)
+                False -> Error(error.UnknownExternalTarget(name))
+              }
+            _ -> Ok(Nil)
+          }
+      }
+    }),
+  )
+
   let imports_result =
     glimpse_module.module.imports
     |> list.map(fn(definition) { definition.definition })
@@ -591,7 +638,72 @@ pub fn custom_type_constructors(
       }
     }),
   )
+  // A field annotation may only reference type variables declared as
+  // parameters of the custom type. Unlike a function signature, a custom type
+  // does not introduce new type variables implicitly.
+  use _ <- result.try(
+    list.try_fold(custom_type.variants, Nil, fn(_, variant) {
+      let used =
+        variant.fields
+        |> list.fold([], fn(acc, field) {
+          case field {
+            glance.LabelledVariantField(item: type_, label: _) ->
+              list.append(acc, type_variables_used(type_))
+            glance.UnlabelledVariantField(type_) ->
+              list.append(acc, type_variables_used(type_))
+          }
+        })
+      case intern.find_first_not_in(used, custom_type.parameters) {
+        option.Some(name) -> Error(error.UnknownCustomType(name))
+        option.None -> Ok(Nil)
+      }
+    }),
+  )
   custom_type_constructors_(environment, custom_type)
+}
+
+/// The names of every `VariableType` occurring anywhere within a type
+/// annotation, recursively. Used to check that a custom type's field
+/// annotations only reference declared type parameters.
+/// Collect every attribute attached anywhere in the module: on imports,
+/// custom types (and their variants), type aliases, constants and functions.
+fn all_module_attributes(module: glance.Module) -> List(glance.Attribute) {
+  list.flatten([
+    module.imports |> list.map(fn(d) { d.attributes }) |> list.flatten,
+    module.custom_types
+      |> list.map(fn(d) {
+        list.flatten([
+          d.attributes,
+          d.definition.variants
+            |> list.map(fn(variant) { variant.attributes })
+            |> list.flatten,
+        ])
+      })
+      |> list.flatten,
+    module.type_aliases |> list.map(fn(d) { d.attributes }) |> list.flatten,
+    module.constants |> list.map(fn(d) { d.attributes }) |> list.flatten,
+    module.functions |> list.map(fn(d) { d.attributes }) |> list.flatten,
+  ])
+}
+
+/// Whether an attribute name is one of the attributes the Gleam compiler
+/// recognises: `@external`, `@internal`, `@deprecated` and `@target`.
+fn is_known_attribute(name: String) -> Bool {
+  list.contains(["external", "internal", "deprecated", "target"], name)
+}
+
+fn type_variables_used(type_: glance.Type) -> List(String) {
+  case type_ {
+    glance.NamedType(_, _, _, parameters) ->
+      list.flatten(list.map(parameters, type_variables_used))
+    glance.TupleType(_, elements) ->
+      list.flatten(list.map(elements, type_variables_used))
+    glance.FunctionType(_, parameters, return) ->
+      list.flatten(list.map(parameters, type_variables_used))
+      |> list.append(type_variables_used(return))
+    glance.VariableType(_, name) -> [name]
+    glance.HoleType(_, _) -> []
+  }
 }
 
 fn custom_type_constructors_(
@@ -812,7 +924,10 @@ pub fn function(
 
   // Typecheck the function body with the threaded store
   use #(store, body_type) <- result.try(intern.block(
-    param_state.environment,
+    types.Environment(
+      ..param_state.environment,
+      generic_vars: param_state.generic_vars,
+    ),
     param_state.store,
     function.body,
   ))

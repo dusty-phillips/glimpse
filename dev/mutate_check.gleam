@@ -7,6 +7,7 @@ import gleam/list
 import gleam/option
 import gleam/result
 import gleam/string
+import monotime
 import shellout
 import simplifile
 
@@ -128,8 +129,14 @@ fn run(opts: Options) {
       let mutants = dedup(mutants)
       let mutants = case kind {
         option.None -> mutants
-        option.Some(k) ->
-          list.filter(mutants, fn(m) { string.starts_with(m.0, k) })
+        option.Some(k) -> {
+          // `--kind` accepts comma-separated prefixes, e.g. `--kind var,constr`
+          // to sweep only the new kinds without re-running the whole harness.
+          let prefixes = string.split(k, ",")
+          list.filter(mutants, fn(m) {
+            list.any(prefixes, fn(prefix) { string.starts_with(m.0, prefix) })
+          })
+        }
       }
       case count {
         True -> {
@@ -251,12 +258,33 @@ fn check_all(
         // copying it into this worker's heap.
         let baseline = option.map(baseline_key, dev_check.fetch_baseline)
         hide_test_dir(worker_root)
+        let batch_start = monotime.now_ms()
         let results =
           list.map(batch, fn(mut) {
             check_one_worker(i, worker_root, src, original, mut, baseline)
           })
+        // Aggregate per-worker phase timings and print a summary line so we can
+        // see where time goes (real `gleam check` subprocesses vs in-process
+        // glimpse recheck) without an echo per mutant.
+        let #(real_total, glimpse_total) =
+          list.fold(results, #(0, 0), fn(acc, r) { #(acc.0 + r.1, acc.1 + r.2) })
+        let batch_ms = monotime.now_ms() - batch_start
+        let _ =
+          io.println(
+            "worker "
+            <> int.to_string(i)
+            <> ": "
+            <> int.to_string(list.length(results))
+            <> " mutants, real "
+            <> int.to_string(real_total)
+            <> "ms, glimpse "
+            <> int.to_string(glimpse_total)
+            <> "ms, total "
+            <> int.to_string(batch_ms)
+            <> "ms",
+          )
         show_test_dir(worker_root)
-        process.send(subject, #(i, results))
+        process.send(subject, #(i, list.map(results, fn(r) { r.0 })))
       })
     })
 
@@ -365,6 +393,8 @@ fn worker_token() -> String {
 
 /// Run one mutant in a worker: write the mutant into the worker's copy, run
 /// the real and glimpse checks in *that* copy, and restore the worker's source.
+/// Returns `#(verdict, real_ms, glimpse_ms)` so the worker can report how its
+/// time was spent.
 fn check_one_worker(
   _worker_i: Int,
   worker_root: String,
@@ -372,13 +402,20 @@ fn check_one_worker(
   original: String,
   mut: Mutant,
   baseline: option.Option(dev_check.Baseline),
-) -> String {
+) -> #(String, Int, Int) {
   let path = "/" <> string.join([worker_root, src], "/")
   write(path, mut.1)
-  let result = case real_check(worker_root) {
-    Ok(_) -> "real-accepts :: " <> mut.0
-    Error(_) ->
-      case glimpse_check(worker_root, src, baseline) {
+  let real_start = monotime.now_ms()
+  let real_verdict = case real_check(worker_root) {
+    Ok(_) -> "real-accepts"
+    Error(_) -> "real-rejects"
+  }
+  let real_ms = monotime.now_ms() - real_start
+  let result = case real_verdict {
+    "real-accepts" -> #("real-accepts :: " <> mut.0, real_ms, 0)
+    _ -> {
+      let glimpse_start = monotime.now_ms()
+      let verdict = case glimpse_check(worker_root, src, baseline) {
         True -> {
           let record = "FALSE-NEG :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
           let _ =
@@ -390,6 +427,8 @@ fn check_one_worker(
         }
         False -> "ok :: " <> mut.0
       }
+      #(verdict, real_ms, monotime.now_ms() - glimpse_start)
+    }
   }
   write(path, original)
   result
@@ -433,6 +472,12 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "casepat2 ",
     "recupd ",
     "bitsize ",
+    "var ",
+    "constr ",
+    "letassert ",
+    "fntype ",
+    "alias ",
+    "pipestep ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -633,6 +678,159 @@ fn label_mutants(lines: List(String)) -> List(Mutant) {
     |> list.flatten
   })
   |> list.flatten
+}
+
+/// Kind `var`: rename a plain identifier (an `Other` span, i.e. not a `name:`
+/// label and not a `.field` access) to a name that is not in scope, so variable
+/// lookup must fail with `InvalidName`. This covers argument names, let-bound
+/// variables, function parameters, and case-clause pattern bindings, which no
+/// other kind renames (the `label` kind only renames `name:`/`.name` spans).
+fn var_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case
+      string.starts_with(string.trim(line), "import ")
+      || string.starts_with(string.trim(line), "use ")
+      // Attribute lines (`@external(javascript, ..)`, `@deprecated("..")`) name
+      // parser-recognised attribute/target keywords; renaming them only
+      // re-finds the already-fixed UnknownExternalTarget / UnknownAttribute
+      // bugs, so skip the whole line.
+      || string.starts_with(string.trim(line), "@")
+    {
+      True -> []
+      False ->
+        name_spans(line)
+        |> list.filter(fn(span) { span.2 == Other })
+        |> list.filter(fn(span) { !is_keyword(line, span.0, span.1) })
+        // Renaming a word inside a string literal never changes the program's
+        // types (and invalid-escape handling is covered separately), so it only
+        // wastes a `gleam check` round-trip. Skip spans inside `"..."`.
+        |> list.filter(fn(span) { !inside_string(line, span.0) })
+        |> list.map(fn(span) {
+          let word = string.slice(line, at_index: span.0, length: span.1)
+          let renamed = word <> "__zzz"
+          swap_on_line(lines, idx, "var " <> word, word, renamed)
+        })
+        |> list.flatten
+    }
+  })
+  |> list.flatten
+}
+
+/// Whether the byte at `index` on `line` sits inside a `"..."` string literal
+/// (does not handle escapes or `"""` raw strings precisely; good enough for
+/// skipping string-content renames).
+fn inside_string(line: String, index: Int) -> Bool {
+  inside_string_(line, 0, False, index)
+}
+
+fn inside_string_(
+  line: String,
+  pos: Int,
+  in_string: Bool,
+  target: Int,
+) -> Bool {
+  case pos > target {
+    True -> in_string
+    False -> {
+      let ch = byte_at(line, pos)
+      case ch {
+        "\"" -> inside_string_(line, pos + 1, !in_string, target)
+        _ -> inside_string_(line, pos + 1, in_string, target)
+      }
+    }
+  }
+}
+
+/// Whether the word at [start, end) on `line` is a reserved keyword or a
+/// literal value (`True`/`False`/`Nil`), which cannot be renamed.
+fn is_keyword(line: String, start: Int, len: Int) -> Bool {
+  let word = string.slice(line, at_index: start, length: len)
+  list.contains(
+    [
+      "fn",
+      "let",
+      "pub",
+      "import",
+      "type",
+      "case",
+      "if",
+      "else",
+      "use",
+      "as",
+      "assert",
+      "const",
+      "external",
+      "opaque",
+      "panic",
+      "todo",
+      "loop",
+      "echo",
+      "True",
+      "False",
+      "Nil",
+    ],
+    word,
+  )
+}
+
+/// Kind `constr`: swap the labels of the first two fields of a record
+/// constructor (`Foo(age: Int, name: String)` -> `Foo(name: Int, age: String)`).
+/// The constructor now expects its arguments under swapped labels, so any
+/// construction or pattern that used the original labels is rejected. This
+/// targets record *type definitions* (whose field lists are untouched by the
+/// `label` kind's `name:` renames and `lblarg`'s value swaps) and labelled
+/// constructions whose label-order is checked against the definition.
+fn constr_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_constr_fields(line) {
+      option.None -> []
+      option.Some(#(first_start, first_end, second_start, second_end)) ->
+        swap_token_spans(
+          lines,
+          idx,
+          first_start,
+          first_end,
+          second_start,
+          second_end,
+          "constr swap",
+        )
+    }
+  })
+  |> list.flatten
+}
+
+/// Find the two field labels of a record constructor definition or labelled
+/// construction on `line`. Requires the line to start (trimmed) with an
+/// uppercase constructor name, contain `(` and `: `, and end with `)`. Uses
+/// `name_spans` to collect the `name:` labels and takes the first two.
+fn find_constr_fields(line: String) -> option.Option(#(Int, Int, Int, Int)) {
+  let trimmed = string.trim(line)
+  let first_char = string.slice(trimmed, at_index: 0, length: 1)
+  let looks_like_constr =
+    string.contains(line, "(")
+    && string.contains(line, ": ")
+    && string.ends_with(string.trim(line), ")")
+    && string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", first_char)
+  case looks_like_constr {
+    False -> option.None
+    True -> {
+      let labels =
+        name_spans(line)
+        |> list.filter(fn(span) { span.2 == Label })
+      case labels {
+        [first, second, ..] ->
+          option.Some(#(
+            first.0,
+            first.0 + first.1,
+            second.0,
+            second.0 + second.1,
+          ))
+        _ -> option.None
+      }
+    }
+  }
 }
 
 /// Kind `tuple`: index a tuple with an out-of-range `.N`, or swap between the
@@ -1094,6 +1292,49 @@ fn assert_mutants(lines: List(String)) -> List(Mutant) {
           }
         }
       }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `letassert`: replace the first simple token of the right-hand side of a
+/// `let assert <pattern> = <expr>` binding with a literal of a different type,
+/// so the pattern can no longer match the value. The `assert` kind skips
+/// `let assert` lines, so this statement form has no other coverage.
+fn letassert_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    let trimmed = string.trim(line)
+    case string.starts_with(trimmed, "let assert ") {
+      False -> []
+      True ->
+        case find_substring(line, "=") {
+          option.None -> []
+          option.Some(eq_index) ->
+            case first_simple_start(line, eq_index + 1) {
+              option.None -> []
+              option.Some(start) -> {
+                let end = simple_token_end(line, start)
+                let before = string.slice(line, at_index: 0, length: start)
+                let after =
+                  string.slice(
+                    line,
+                    at_index: end,
+                    length: string.length(line) - end,
+                  )
+                [
+                  #(
+                    "letassert ->str",
+                    source_of(lines, idx, before <> "\"a\"" <> after),
+                  ),
+                  #(
+                    "letassert ->int",
+                    source_of(lines, idx, before <> "1" <> after),
+                  ),
+                ]
+              }
+            }
+        }
     }
   })
   |> list.flatten
@@ -1747,6 +1988,47 @@ fn import_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `alias`: rename the alias in an `import x as g` line (`g` -> `g__zzz`),
+/// so every `g.fn()` qualified call on subsequent lines resolves against a
+/// module name that no longer exists. The `import` kind renames the module
+/// *path* (`x`), not the alias, so aliased imports have no other coverage.
+fn alias_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case string.starts_with(line, "import ") {
+      False -> []
+      True ->
+        case find_substring(line, " as ") {
+          option.None -> []
+          option.Some(as_index) ->
+            case first_simple_start(line, as_index + 4) {
+              option.None -> []
+              option.Some(alias_start) -> {
+                let alias_end = simple_token_end(line, alias_start)
+                let alias =
+                  string.slice(
+                    line,
+                    at_index: alias_start,
+                    length: alias_end - alias_start,
+                  )
+                let renamed = alias <> "__zzz"
+                let mutated =
+                  string.slice(line, at_index: 0, length: alias_start)
+                  <> renamed
+                  <> string.slice(
+                    line,
+                    at_index: alias_end,
+                    length: string.length(line) - alias_end,
+                  )
+                [#("alias rename", source_of(lines, idx, mutated))]
+              }
+            }
+        }
+    }
+  })
+  |> list.flatten
+}
+
 /// Kind `sigswap`: swap the type annotations of two adjacent parameters in a
 /// function signature, e.g. `fn go(a: Int, b: String)` becomes
 /// `fn go(a: String, b: Int)`. The body still uses each parameter name as
@@ -1791,6 +2073,139 @@ fn sigswap_mutants(lines: List(String)) -> List(Mutant) {
     }
   })
   |> list.flatten
+}
+
+/// Kind `fntype`: swap the first parameter type and the return type inside a
+/// function *type annotation* (`fn(Int) -> String` becomes `fn(String) -> Int`).
+/// The annotated callable's actual type no longer matches, so call sites and
+/// assignments are rejected. Lambdas (`fn(x) { ... }`, which contain `{`) and
+/// `sigswap`'s `name: Type` parameter pairs are excluded.
+fn fntype_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_fn_annotation_swap(line) {
+      option.None -> []
+      option.Some(#(param_start, param_end, ret_start, ret_end)) ->
+        swap_token_spans(
+          lines,
+          idx,
+          param_start,
+          param_end,
+          ret_start,
+          ret_end,
+          "fntype swap",
+        )
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a `fn(...) -> Ret` type annotation on `line`. Returns the offsets of the
+/// first parameter type and the return type. Requires the line to contain `fn(`,
+/// `->`, and `:` (an annotation context). The `fn(` must be a type annotation,
+/// not a lambda definition: the byte after its matching `)` must be `-` (the
+/// arrow), not `{`. The word before `fn(` must not be an identifier char, so
+/// `myfn(...)` calls are not matched.
+fn find_fn_annotation_swap(
+  line: String,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case
+    string.contains(line, "fn(")
+    && string.contains(line, "->")
+    && string.contains(line, ":")
+  {
+    False -> option.None
+    True -> find_fn_annotation_swap_from(line, 0)
+  }
+}
+
+fn find_fn_annotation_swap_from(
+  line: String,
+  index: Int,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case find_substring_from(line, index, "fn(") {
+    option.None -> option.None
+    option.Some(fn_start) -> {
+      let prev = byte_at(line, fn_start - 1)
+      case prev == "" || !is_identifier_char(prev) {
+        False -> find_fn_annotation_swap_from(line, fn_start + 3)
+        True -> {
+          let open = fn_start + 3
+          case fn_type_close(line, open) {
+            option.None -> find_fn_annotation_swap_from(line, fn_start + 3)
+            option.Some(close) ->
+              case skip_spaces(line, close + 1) {
+                option.Some(after_close) ->
+                  case string.slice(line, at_index: after_close, length: 1) {
+                    "-" ->
+                      case first_simple_start(line, open) {
+                        option.None -> option.None
+                        option.Some(param_start) -> {
+                          let param_end = simple_token_end(line, param_start)
+                          case find_substring_from(line, close, "->") {
+                            option.None -> option.None
+                            option.Some(arrow) ->
+                              case skip_spaces(line, arrow + 2) {
+                                option.None -> option.None
+                                option.Some(ret_start) -> {
+                                  let ret_end =
+                                    simple_token_end(line, ret_start)
+                                  case
+                                    ret_end == ret_start
+                                    || param_end == param_start
+                                  {
+                                    True -> option.None
+                                    False ->
+                                      option.Some(#(
+                                        param_start,
+                                        param_end,
+                                        ret_start,
+                                        ret_end,
+                                      ))
+                                  }
+                                }
+                              }
+                          }
+                        }
+                      }
+                    _ -> find_fn_annotation_swap_from(line, fn_start + 3)
+                  }
+                option.None -> option.None
+              }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Return the index of the `)` that closes the `(` at `open_index`, correctly
+/// tracking nested brackets. (Unlike `find_matching_close`, this returns the
+/// immediate group's own close.)
+fn fn_type_close(line: String, open_index: Int) -> option.Option(Int) {
+  fn_type_close_from(line, open_index + 1, 1)
+}
+
+fn fn_type_close_from(
+  line: String,
+  index: Int,
+  depth: Int,
+) -> option.Option(Int) {
+  case index >= string.length(line) {
+    True -> option.None
+    False ->
+      case string.slice(line, at_index: index, length: 1) {
+        "(" -> fn_type_close_from(line, index + 1, depth + 1)
+        "[" -> fn_type_close_from(line, index + 1, depth + 1)
+        "{" -> fn_type_close_from(line, index + 1, depth + 1)
+        ")" ->
+          case depth <= 1 {
+            True -> option.Some(index)
+            False -> fn_type_close_from(line, index + 1, depth - 1)
+          }
+        _ -> fn_type_close_from(line, index + 1, depth)
+      }
+  }
 }
 
 /// Find two `name: Type` parameters on a signature line where both types are
@@ -2940,6 +3355,78 @@ fn find_pipe_two_args(
   }
 }
 
+/// Kind `pipestep`: swap the piped value with an argument of a call after the
+/// SECOND pipe in a chained pipeline (`a |> b |> f(x, y)` becomes
+/// `a |> x |> f(b, y)` and `a |> y |> f(x, b)`). `pipe2` only matches the first
+/// `|>` on a line; this exercises later stages of multi-stage pipes.
+fn pipestep_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_pipe_step(line) {
+      option.None -> []
+      option.Some(#(
+        pipe_index,
+        first_start,
+        first_end,
+        second_start,
+        second_end,
+      )) ->
+        case find_token_before(line, pipe_index) {
+          option.None -> []
+          option.Some(#(val_start, val_end)) ->
+            swap_token_spans(
+              lines,
+              idx,
+              val_start,
+              val_end,
+              first_start,
+              first_end,
+              "pipestep swap arg1",
+            )
+            |> list.append(swap_token_spans(
+              lines,
+              idx,
+              val_start,
+              val_end,
+              second_start,
+              second_end,
+              "pipestep swap arg2",
+            ))
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find the SECOND `|>` on `line` and a call with at least two balanced
+/// arguments after it. Returns the same 5-tuple as `find_pipe_two_args`, but
+/// anchored at the second pipe so later pipeline stages are targeted.
+fn find_pipe_step(line: String) -> option.Option(#(Int, Int, Int, Int, Int)) {
+  case string.contains(line, "|>") {
+    False -> option.None
+    True ->
+      find_pipe_index(line, 0)
+      |> option.then(fn(first_pipe) { find_pipe_index(line, first_pipe + 2) })
+      |> option.then(fn(pipe_index) {
+        case find_first_paren_after(line, pipe_index + 2) {
+          option.Some(call_open) ->
+            case find_two_arg_spans(line, call_open) {
+              option.Some(#(first_start, first_end, second_start, second_end)) ->
+                option.Some(#(
+                  pipe_index,
+                  first_start,
+                  first_end,
+                  second_start,
+                  second_end,
+                ))
+              option.None -> option.None
+            }
+          option.None -> option.None
+        }
+      })
+  }
+}
+
 /// Read the first two arguments of a call starting at `open_index` (the `(`),
 /// as balanced spans. Returns `#(first_start, first_end, second_start, second_end)`
 /// where `first_end` points at the top-level comma after the first argument and
@@ -3171,6 +3658,12 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(use_mutants(lines))
   |> list.append(usepat_mutants(lines))
   |> list.append(import_mutants(lines))
+  |> list.append(var_mutants(lines))
+  |> list.append(constr_mutants(lines))
+  |> list.append(letassert_mutants(lines))
+  |> list.append(fntype_mutants(lines))
+  |> list.append(alias_mutants(lines))
+  |> list.append(pipestep_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that

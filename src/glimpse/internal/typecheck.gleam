@@ -227,7 +227,7 @@ fn check_continuation(
     callback_return,
     continuation_type,
   ))
-  let #(store, resolved) = types.resolve(store, return)
+  let #(store, resolved) = types.resolve_keep_rigid(store, return)
   Ok(#(store, environment, resolved))
 }
 
@@ -975,25 +975,29 @@ fn fn_literal(
   use _store <- result.try(check_duplicate_fn_parameter_names(arguments))
 
   use #(store, _, param_types, annotated_flags) <- result.try(
-    list.try_fold(arguments, #(store, dict.new(), [], []), fn(state, param) {
-      let #(store, generic_vars, reversed, flags) = state
-      case param {
-        glance.FnParameter(_, type_: option.Some(annotation)) ->
-          types.type_with_store(environment, store, annotation)
-          |> result.try(fn(state) {
-            let #(store, type_) = state
-            // A lambda's annotated type variables are rigid within its body,
-            // like a function's declared type parameters.
-            let #(store, generic_vars, type_) =
-              functions.freshen_generics(store, generic_vars, type_)
-            Ok(#(store, generic_vars, [type_, ..reversed], [True, ..flags]))
-          })
-        glance.FnParameter(_, type_: option.None) -> {
-          let #(store, type_) = types.fresh_var(store)
-          Ok(#(store, generic_vars, [type_, ..reversed], [False, ..flags]))
+    list.try_fold(
+      arguments,
+      #(store, environment.generic_vars, [], []),
+      fn(state, param) {
+        let #(store, generic_vars, reversed, flags) = state
+        case param {
+          glance.FnParameter(_, type_: option.Some(annotation)) ->
+            types.type_with_store(environment, store, annotation)
+            |> result.try(fn(state) {
+              let #(store, type_) = state
+              // A lambda's annotated type variables are rigid within its body,
+              // like a function's declared type parameters.
+              let #(store, generic_vars, type_) =
+                functions.freshen_generics(store, generic_vars, type_)
+              Ok(#(store, generic_vars, [type_, ..reversed], [True, ..flags]))
+            })
+          glance.FnParameter(_, type_: option.None) -> {
+            let #(store, type_) = types.fresh_var(store)
+            Ok(#(store, generic_vars, [type_, ..reversed], [False, ..flags]))
+          }
         }
-      }
-    }),
+      },
+    ),
   )
   let param_types = list.reverse(param_types)
   let annotated_flags = list.reverse(annotated_flags)
@@ -1091,6 +1095,14 @@ fn fn_literal(
   // gave them (which may be a rigid parameter of the enclosing function), so a
   // wrapper lambda whose parameters were pinned to rigid types stays
   // monomorphic and cannot be re-instantiated past a conflicting call.
+  //
+  // A lambda annotation that names one of the enclosing function's type
+  // parameters refers to that enclosing rigid variable, not a fresh generic:
+  // after resolving back to named generics, re-substitute the enclosing rigid
+  // variables for those names so the lambda's type stays tied to them. Without
+  // this, `fn(x: a)` inside `fn f(x: a)` would be re-instantiable past the
+  // enclosing `a`, letting a record update on a polymorphic const accept a
+  // result type the real compiler rejects.
   let #(store, param_types) =
     list.fold(
       list.zip(param_types, annotated_flags),
@@ -1101,6 +1113,11 @@ fn fn_literal(
         let #(store, resolved) = case is_annotated {
           True -> types.resolve(store, param_type)
           False -> #(store, param_type)
+        }
+        let resolved = case is_annotated {
+          True ->
+            types.substitute_type_variables(resolved, environment.generic_vars)
+          False -> resolved
         }
         #(store, [resolved, ..acc])
       },
@@ -1412,14 +1429,34 @@ fn record_update(
       let #(store, parameters, labels, constructor_return) =
         types.instantiate_callable(store, constructor_type)
 
-      let #(store, _, _, record_check_return) =
-        types.instantiate_callable(store, constructor_type)
-
-      use store <- result.try(types.unify(
+      // The base record and the update result must be the same variant with the
+      // same type parameters, so the base's type parameters (e.g. the rigid
+      // signature type variables of the record being updated) are unified with
+      // the constructor's instantiated parameters before any field is checked.
+      // Unifying against the *same* instantiation that produces the result type
+      // keeps those parameters linked: updating `App(arguments, ..)` where
+      // `arguments` is a distinct signature type variable must not let the
+      // result silently become `App(arguments__zzz, ..)`.
+      //
+      // However a field whose type is exactly one of the record's type
+      // parameters (e.g. `Box(value: a)` updated as `Box(..b, value: v)`) may
+      // legitimately change that parameter, so positions updated by the update
+      // are left free for the field-value unification to set. Only the
+      // non-updated positions are unified against the base record's type.
+      let #(store, updated) =
+        updated_record_type_positions(
+          store,
+          parameters,
+          labels,
+          fields,
+          constructor_return,
+        )
+      use store <- result.try(types.unify_record_update_base(
         store,
         environment,
         record_type,
-        record_check_return,
+        constructor_return,
+        updated,
       ))
 
       list.try_fold(fields, #(store, environment), fn(state, field) {
@@ -1484,6 +1521,92 @@ fn record_update(
     }
     _ ->
       Error(error.NotCallable(types.to_string(environment, constructor_type)))
+  }
+}
+
+/// Find the indices of `constructor_return`'s CustomType parameters that the
+/// record update must leave free, so they are NOT unified against the base
+/// record's type. A position is left free when:
+///   - an updated field's expected type contains that parameter anywhere
+///     (including nested inside other types, as with a field
+///     `Option(Selector(message))` whose `message` parameter changes), or
+///   - no field of the record references the parameter at all (a phantom
+///     parameter, like `Snapshot(status)` where `status` never appears in a
+///     field type).
+/// Every other position is referenced only by non-updated fields, so it must
+/// match the base record's type and is unified against it.
+fn updated_record_type_positions(
+  store: TypeStore,
+  parameters: List(Type),
+  labels: dict.Dict(String, Int),
+  fields: List(glance.RecordUpdateField(glance.Expression)),
+  constructor_return: Type,
+) -> #(TypeStore, set.Set(Int)) {
+  let #(store, constructor_return) = types.resolve(store, constructor_return)
+  case constructor_return {
+    types.CustomType(_, _, return_params, _) -> {
+      let updated_field_positions =
+        fields
+        |> list.filter_map(fn(field) { dict.get(labels, field.label) })
+        |> set.from_list
+
+      // For each return parameter position, which field positions reference it.
+      let referencing =
+        list.index_map(return_params, fn(param, param_index) {
+          let referencing_positions =
+            list.index_map(parameters, fn(_field_type, field_index) {
+              case field_index {
+                _ ->
+                  case list.drop(parameters, up_to: field_index) |> list.first {
+                    Error(_) -> False
+                    Ok(field_type) ->
+                      case types.resolved_var_id(store, param) {
+                        option.None -> False
+                        option.Some(param_id) ->
+                          types.fold_type(False, field_type, fn(found, leaf) {
+                            case found {
+                              True -> True
+                              False ->
+                                types.resolved_var_id(store, leaf)
+                                == option.Some(param_id)
+                            }
+                          })
+                      }
+                  }
+              }
+            })
+          #(
+            param_index,
+            set.from_list(
+              list.index_map(referencing_positions, fn(is_ref, index) {
+                case is_ref {
+                  True -> index
+                  False -> -1
+                }
+              })
+              |> list.filter(fn(i) { i >= 0 }),
+            ),
+          )
+        })
+
+      // A position is left free if it is referenced by no field at all (a
+      // phantom parameter), or if every field that references it is updated by
+      // the update. When a parameter is shared between an updated field and a
+      // field left untouched, updating only some of them would implicitly
+      // change the untouched ones' types — the official compiler rejects this
+      // as an "incomplete record update".
+      list.fold(referencing, #(store, set.new()), fn(state, entry) {
+        let #(store, acc) = state
+        let #(param_index, ref_positions) = entry
+        let all_referencing_updated =
+          set.is_subset(ref_positions, of: updated_field_positions)
+        case set.size(ref_positions) == 0 || all_referencing_updated {
+          True -> #(store, set.insert(acc, param_index))
+          False -> #(store, acc)
+        }
+      })
+    }
+    _ -> #(store, set.new())
   }
 }
 
@@ -1563,6 +1686,21 @@ pub fn find_duplicate(names: List(String)) -> Option(String) {
       }
     })
   found
+}
+
+/// The first element of `names` that is not a member of `known`, if any.
+pub fn find_first_not_in(
+  names: List(String),
+  known: List(String),
+) -> Option(String) {
+  case names {
+    [] -> option.None
+    [name, ..rest] ->
+      case list.contains(known, name) {
+        True -> find_first_not_in(rest, known)
+        False -> option.Some(name)
+      }
+  }
 }
 
 /// Duplicate field labels within a single record update are an error.
