@@ -160,3 +160,40 @@ pub fn unit_with_size_is_fine_test() {
     }",
   )
 }
+
+pub fn size_variable_in_pattern_is_fine_test() {
+  // A size expression may reference a variable bound elsewhere in the module,
+  // exercising the bit-array size-variable checks.
+  helpers.ok_module_typecheck(
+    "pub fn f(bits: BitArray, n: Int) -> Bool {
+      case bits {
+        <<value:size(n), _:bits>> -> True
+        _ -> False
+      }
+    }",
+  )
+}
+
+pub fn size_variable_must_be_int_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray, n: String) -> Bool {
+      case bits {
+        <<value:size(n), _:bits>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidType("String", "Int", "size variables must be Int")
+}
+
+pub fn size_variable_must_exist_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<value:size(n), _:bits>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidName("n")
+}

@@ -278,3 +278,26 @@ pub fn lowercase_bool_shadow_test() {
     )
     == error.LowercaseBoolPattern("false")
 }
+
+pub fn string_concat_pattern_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: String) -> Int { case x { \"a\" <> rest -> 1 _ -> 0 } }",
+    )
+}
+
+pub fn string_concat_pattern_prefix_must_match_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { \"a\" <> rest -> 1 _ -> 0 } }",
+    )
+    == error.PatternMismatch("string concatenation pattern", "String", "Int")
+}
+
+pub fn string_concat_pattern_with_typed_tail_is_fine_test() {
+  // The tail of a string-concatenation pattern may be a typed pattern that
+  // refines the subject further.
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: String) -> Int { case x { \"a\" <> rest if rest == \"\" -> 1 _ -> 0 } }",
+    )
+}

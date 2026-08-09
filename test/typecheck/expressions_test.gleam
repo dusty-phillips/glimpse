@@ -328,6 +328,41 @@ pub fn guard_record_construction_allowed_test() {
     )
 }
 
+pub fn guard_tuple_literal_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: #(Int, Int)) -> Int { case x { y if y == #(1, 2) -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_list_literal_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: List(Int)) -> Int { case x { y if y == [1, 2] -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_field_access_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: #(Int, Int)) -> Int { case x { y if y.0 == 1 -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_bool_negation_allowed_test() {
+  let _ =
+    helpers.ok_function_typecheck(
+      "fn foo(x: Bool) -> Int { case x { y if !y -> 0 _ -> 1 } }",
+    )
+}
+
+pub fn guard_int_negation_rejected_test() {
+  assert helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { case x { y if !y == 1 -> 0 _ -> 1 } }",
+    )
+    == error.InvalidType("Int", "Bool", "! can only negate Bool")
+}
+
 pub fn case_pattern_mismatch_test() {
   assert helpers.error_function_typecheck(
       "fn foo(x: Int) -> String { case x { \"a\" -> \"one\" _ -> \"other\" } }",
@@ -443,6 +478,34 @@ pub fn pipe_extra_args_test() {
     fn foo() -> Int { 1 |> add(2, 3) }",
     )
     == error.InvalidArguments("()", "a piped value")
+}
+
+pub fn pipe_into_fn_literal_test() {
+  // A function literal piped a value has its first parameter bound to the
+  // piped value, so the callable shape must agree.
+  let #(_module, _env) =
+    helpers.ok_module_typecheck(
+      "fn first(xs: List(a)) -> a {
+        case xs {
+          [x, ..] -> x
+          [] -> panic
+        }
+      }
+    fn foo(xs: List(Int)) -> Int {
+      xs |> fn(x) { x } |> first
+    }",
+    )
+}
+
+pub fn pipe_into_fn_literal_arity_mismatch_test() {
+  // A two-parameter function literal piped a single value has an unfilled
+  // parameter, which the real compiler rejects.
+  assert helpers.error_module_typecheck(
+      "fn foo(xs: List(Int)) -> Int {
+      xs |> fn(a, b) { a }
+    }",
+    )
+    == error.InvalidReturnType("foo", "List(Int)", "Int")
 }
 
 pub fn let_bound_used_test() {

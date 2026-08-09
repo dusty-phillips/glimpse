@@ -765,7 +765,17 @@ fn check_bit_array_size_variables(
   case size {
     glance.BitArraySizeVariable(_, name) ->
       case types.lookup_variable_type(environment, name) {
-        Ok(_) -> Ok(store)
+        Ok(var_type) ->
+          // A size variable must be an `Int`: `<<value:size(n)>>` with `n`
+          // bound to a non-Int is a type mismatch in the real compiler.
+          case types.unify(store, environment, var_type, types.IntType) {
+            Ok(store) -> Ok(store)
+            Error(_) -> Error(error.InvalidType(
+              types.to_string(environment, var_type),
+              "Int",
+              "size variables must be Int",
+            ))
+          }
         Error(_) -> Error(error.InvalidName(name))
       }
     glance.BitArraySizeBinaryOperator(_, _, left, right) ->
