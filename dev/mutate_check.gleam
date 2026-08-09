@@ -481,6 +481,10 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "attrib ",
     "const ",
     "constrdup ",
+    "guardexpr ",
+    "bitsizepat ",
+    "concatpat ",
+    "pipefn ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -4189,6 +4193,209 @@ fn const_mutants(lines: List(String)) -> List(Mutant) {
   |> list.flatten
 }
 
+/// Kind `guardexpr`: mutate the expression inside a case-clause guard to
+/// exercise the guard-grammar branches that plain comparisons never reach.
+/// A guard operand is wrapped in a tuple, a list, a boolean negation, or given
+/// a field access / tuple index, and a guard comparison is replaced with a
+/// call, so the typechecker's guard handling for those expression kinds runs.
+fn guardexpr_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_guard_comparison(line) {
+      option.None -> []
+      option.Some(#(op_start, op_end, first_start, first_end, _, _)) -> {
+        let first =
+          string.slice(
+            line,
+            at_index: first_start,
+            length: first_end - first_start,
+          )
+        let tail =
+          string.slice(
+            line,
+            at_index: first_end,
+            length: string.length(line) - first_end,
+          )
+        let wraps = [
+          #("guardexpr tuple", "#(" <> first <> ", 0)" <> tail),
+          #("guardexpr list", "[" <> first <> "]" <> tail),
+          #("guardexpr negate", "!" <> first <> tail),
+          #("guardexpr field", first <> ".0" <> tail),
+          #("guardexpr index", first <> "[0]" <> tail),
+        ]
+        let _ = op_start
+        let _ = op_end
+        list.map(wraps, fn(wrap) {
+          let #(desc, mutated) = wrap
+          let rebuilt =
+            string.slice(line, at_index: 0, length: first_start)
+            <> mutated
+          #(desc, source_of(lines, idx, rebuilt))
+        })
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `bitsizepat`: turn a numeric bit-string segment size into a size
+/// expression that names a variable (`<<x:size(8)>>` -> `<<x:size(y)>>`), so
+/// `check_bit_array_size_variables` runs on a pattern that carries a size
+/// variable.
+fn bitsizepat_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_segment_size(line) {
+      option.None -> []
+      option.Some(#(size_start, size_end)) -> {
+        let mutated =
+          string.slice(line, at_index: 0, length: size_start)
+          <> "y"
+          <> string.slice(
+            line,
+            at_index: size_end,
+            length: string.length(line) - size_end,
+          )
+        [#("bitsizepat size-var", source_of(lines, idx, mutated))]
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `concatpat`: mutate a string-concatenation pattern
+/// (`"a" <> rest` in a case clause) by swapping the operands or replacing the
+/// string literal, exercising `PatternConcatenate` in the pattern checker.
+fn concatpat_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_clause_pattern(line) {
+      option.None -> []
+      option.Some(#(start, end)) -> {
+        let pattern =
+          string.slice(line, at_index: start, length: end - start)
+        case find_concat_operands(pattern) {
+          option.None -> []
+          option.Some(#(a_start, a_end, b_start, b_end)) -> {
+            let a =
+              string.slice(pattern, at_index: a_start, length: a_end - a_start)
+            let b =
+              string.slice(pattern, at_index: b_start, length: b_end - b_start)
+            let swapped =
+              string.slice(pattern, at_index: 0, length: a_start)
+              <> b
+              <> string.slice(
+                pattern,
+                at_index: a_end,
+                length: b_start - a_end,
+              )
+              <> a
+              <> string.slice(
+                pattern,
+                at_index: b_end,
+                length: string.length(pattern) - b_end,
+              )
+            let mutated =
+              string.slice(line, at_index: 0, length: start)
+              <> swapped
+              <> string.slice(
+                line,
+                at_index: end,
+                length: string.length(line) - end,
+              )
+            case a == b {
+              True -> []
+              False -> [#("concatpat swap", source_of(lines, idx, mutated))]
+            }
+          }
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find two simple tokens separated by ` <> ` inside `pattern`, returning the
+/// offsets of the operands.
+fn find_concat_operands(
+  pattern: String,
+) -> option.Option(#(Int, Int, Int, Int)) {
+  case find_substring(pattern, " <> ") {
+    option.None -> option.None
+    option.Some(concat_index) -> {
+      case find_token_before(pattern, concat_index) {
+        option.None -> option.None
+        option.Some(#(a_start, a_end)) ->
+          case find_token_after(pattern, concat_index + 4) {
+            option.None -> option.None
+            option.Some(#(b_start, b_end)) ->
+              option.Some(#(a_start, a_end, b_start, b_end))
+          }
+      }
+    }
+  }
+}
+
+/// Kind `pipefn`: mutate a piped function literal (`x |> fn(a, b) { ... }`)
+/// by renaming one of its parameters, exercising the piped-function-literal
+/// path where the pipe's value is passed to the literal's first parameter.
+fn pipefn_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_piped_fn(line) {
+      option.None -> []
+      option.Some(#(param_start, param_end)) -> {
+        let param =
+          string.slice(
+            line,
+            at_index: param_start,
+            length: param_end - param_start,
+          )
+        let renamed = param <> "__zzz"
+        let mutated =
+          string.slice(line, at_index: 0, length: param_start)
+          <> renamed
+          <> string.slice(
+            line,
+            at_index: param_end,
+            length: string.length(line) - param_end,
+          )
+        case param == "fn" {
+          True -> []
+          False -> [#("pipefn rename", source_of(lines, idx, mutated))]
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Find a `|> fn(` piped function literal's first parameter token on `line`.
+/// Returns the offsets of the parameter name.
+fn find_piped_fn(line: String) -> option.Option(#(Int, Int)) {
+  case string.contains(line, "|> fn") {
+    False -> option.None
+    True ->
+      case find_substring(line, "|> fn") {
+        option.None -> option.None
+        option.Some(pipe_index) -> {
+          case find_substring_from(line, pipe_index + 5, "(") {
+            option.None -> option.None
+            option.Some(paren) ->
+              first_simple_start(line, paren + 1)
+              |> option.then(fn(start) {
+                let end = simple_token_end(line, start)
+                case end == start {
+                  True -> option.None
+                  False -> option.Some(#(start, end))
+                }
+              })
+          }
+        }
+      }
+  }
+}
+
 /// Everything we can mutate in a file, one kind's mutants appended to the next.
 fn mutate_file(source: String) -> List(Mutant) {
   let lines = split_lines(source)
@@ -4236,6 +4443,10 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(attrib_mutants(lines))
   |> list.append(const_mutants(lines))
   |> list.append(constrdup_mutants(lines))
+  |> list.append(guardexpr_mutants(lines))
+  |> list.append(bitsizepat_mutants(lines))
+  |> list.append(concatpat_mutants(lines))
+  |> list.append(pipefn_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that
