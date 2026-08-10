@@ -290,6 +290,7 @@ pub fn missing_module_import_returns_error_test() {
       glimpse.Module("main_module", module, []),
       dict.new(),
       target.Erlang,
+      True,
     )
   assert error == error.InvalidName("one/two")
 }

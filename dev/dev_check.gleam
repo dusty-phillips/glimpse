@@ -128,11 +128,17 @@ pub fn build_baseline(
 
   use ordered <- result.try(sort_from_all_roots(import_graph))
 
+  let project_modules =
+    list.map(src_entries, fn(entry) { entry.0 })
+    |> list.append(list.map(dev_entries, fn(entry) { entry.0 }))
+    |> set.from_list
+
   use envs <- result.try(fold_typecheck(
     module_dict,
     ordered,
     dict.new(),
     build_target,
+    project_modules,
   ))
 
   Ok(Baseline(
@@ -176,7 +182,13 @@ pub fn recheck_mutated(
   let affected_ordered =
     list.filter(baseline.ordered, fn(name) { list.contains(affected, name) })
 
-  fold_typecheck(modules, affected_ordered, envs, baseline.target)
+  fold_typecheck(
+    modules,
+    affected_ordered,
+    envs,
+    baseline.target,
+    set.from_list(affected),
+  )
   |> result.map(fn(_) { Nil })
 }
 
@@ -242,12 +254,16 @@ fn with_trailing_slash(dir: String) -> String {
 
 /// Typecheck `ordered` modules (dependencies first) in turn, threading the
 /// growing map of module environments seeded from `envs`. `modules` must
-/// contain every name in `ordered`.
+/// contain every name in `ordered`. Target support (a public bodyless
+/// external without an implementation for the active target) is enforced only
+/// for the package's own modules — `project_modules` — matching the real
+/// compiler, which does not enforce it for dependencies.
 fn fold_typecheck(
   modules: dict.Dict(String, glimpse.Module),
   ordered: List(String),
   envs: dict.Dict(String, types.Environment),
   target: target.Target,
+  project_modules: set.Set(String),
 ) -> Result(dict.Dict(String, types.Environment), String) {
   list.try_fold(
     ordered,
@@ -259,7 +275,14 @@ fn fold_typecheck(
       case dict.get(modules, next_module) {
         Error(_) -> Error("missing module " <> next_module)
         Ok(glimpse_module) ->
-          case typecheck.module(glimpse_module, module_envs, target) {
+          case
+            typecheck.module(
+              glimpse_module,
+              module_envs,
+              target,
+              set.contains(project_modules, next_module),
+            )
+          {
             Error(err) -> Error(next_module <> ": " <> string.inspect(err))
             Ok(#(_, module_env)) ->
               Ok(dict.insert(module_envs, next_module, module_env))

@@ -1,4 +1,9 @@
+import glance
+import gleam/dict
+import glimpse
 import glimpse/error
+import glimpse/target
+import glimpse/typecheck
 import typecheck/helpers
 
 pub fn duplicate_constructor_names_test() {
@@ -315,6 +320,25 @@ pub fn supported_target_external_is_fine_test() {
   )
 }
 
+pub fn unsupported_target_external_in_dependency_is_fine_test() {
+  // The real compiler only enforces target support for the package being
+  // checked, not its dependencies: a dependency's erlang-only external must
+  // not fail a javascript-target project (and vice versa).
+  let assert Ok(module) =
+    glance.module(
+      "@external(erlang, \"m\", \"f\")
+    pub fn f() -> Int",
+    )
+  let assert Ok(result) =
+    typecheck.module(
+      glimpse.Module("dep_module", module, []),
+      dict.new(),
+      target.Javascript,
+      False,
+    )
+  let #(_module, _env) = result
+}
+
 pub fn invalid_external_on_other_target_is_rejected_test() {
   // Attribute and constant grammar are parse-time checks in the real compiler:
   // a definition filtered out for the current build target is still validated.
@@ -348,13 +372,11 @@ pub fn invalid_constant_on_other_target_typechecks_value_test() {
 
 pub fn duplicate_parameter_names_in_definition_test() {
   assert helpers.error_module_typecheck(
-    "pub fn start(conn, params, params) -> Int { conn }",
+      "pub fn start(conn, params, params) -> Int { conn }",
     )
     == error.DuplicateArgumentName("params")
 }
 
 pub fn distinct_parameter_names_in_definition_is_fine_test() {
-  helpers.ok_module_typecheck(
-    "pub fn start(conn, params) -> Int { conn }",
-  )
+  helpers.ok_module_typecheck("pub fn start(conn, params) -> Int { conn }")
 }

@@ -21,6 +21,7 @@ fn typecheck_with_deps(
     glimpse.Module("main_module", module, []),
     module_envs,
     target.Erlang,
+    True,
   )
 }
 
@@ -34,6 +35,7 @@ fn dep_env(
       glimpse.Module(name, module, []),
       dict.new(),
       target.Erlang,
+      True,
     )
   let #(_module, env) = result
   #(name, #(source, env))

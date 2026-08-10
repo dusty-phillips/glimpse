@@ -16,7 +16,7 @@ pub fn import_adds_function_to_env_test() {
   let assert Ok(parsed_module) = glance.module("import foo")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.size(main_env.scope.definitions) == 7
   let assert Ok(foo_namespace) =
@@ -41,7 +41,7 @@ pub fn import_no_add_private_function_to_env_test() {
   let assert Ok(parsed_module) = glance.module("import foo")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.size(main_env.scope.definitions) == 7
   let assert Ok(foo_namespace) =
@@ -60,7 +60,7 @@ pub fn import_adds_variant_to_env_test() {
   let assert Ok(parsed_module) = glance.module("import foo")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.size(main_env.scope.definitions) == 7
   let assert Ok(foo_namespace) =
@@ -87,7 +87,7 @@ pub fn import_no_add_private_variant_to_env_test() {
   let assert Ok(parsed_module) = glance.module("import foo")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.size(main_env.scope.definitions) == 7
   let assert Ok(foo_namespace) =
@@ -115,6 +115,7 @@ pub fn import_call_function_field_access_test() {
       glimpse.Module("main_module", glance_module, ["foo"]),
       other_envs,
       target.Erlang,
+      True,
     )
 
   assert dict.size(main_env.scope.definitions) == 8
@@ -148,6 +149,7 @@ pub fn variant_call_function_field_access_test() {
       glimpse.Module("main_module", glance_module, ["foo"]),
       other_envs,
       target.Erlang,
+      True,
     )
 
   assert dict.size(main_env.scope.definitions) == 8

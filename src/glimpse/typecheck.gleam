@@ -76,7 +76,7 @@ pub fn package(
               ),
             )
             use #(new_module, module_env) <- result.try(
-              module(glimpse_module, module_envs, target)
+              module(glimpse_module, module_envs, target, True)
               |> result.map_error(error.TypeCheckError),
             )
 
@@ -104,6 +104,7 @@ pub fn module(
   glimpse_module: glimpse.Module,
   module_envs: dict.Dict(String, Environment),
   target: target.Target,
+  check_target_support: Bool,
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
   let environment = types.new_env(glimpse_module.name)
 
@@ -166,19 +167,24 @@ pub fn module(
   // the active build target; otherwise it is unsupported on that target. The
   // real compiler reports `Unsupported target` for e.g. a public `@external`
   // function that only implements javascript while checking the erlang target.
-  use _ <- result.try(
-    list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
-      let glance_function = definition.definition
-      case
-        glance_function.publicity == glance.Public
-        && glance_function.body == []
-        && !target.function_supported(target, definition)
-      {
-        True -> Error(error.UnsupportedTarget(glance_function.name))
-        False -> Ok(Nil)
-      }
-    }),
-  )
+  // Like the real compiler, this is enforced only for the package being
+  // checked, not for its dependencies: a dependency's erlang-only externals
+  // must not fail a javascript-target project, and vice versa.
+  use _ <- result.try(case check_target_support {
+    False -> Ok(Nil)
+    True ->
+      list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
+        let glance_function = definition.definition
+        case
+          glance_function.publicity == glance.Public
+          && glance_function.body == []
+          && !target.function_supported(target, definition)
+        {
+          True -> Error(error.UnsupportedTarget(glance_function.name))
+          False -> Ok(Nil)
+        }
+      })
+  })
 
   // A function may not declare the same parameter name twice; the real
   // compiler rejects `fn start(conn, params, params)` at parse time with
@@ -1370,37 +1376,33 @@ pub fn function(
                 list.index_map(function.parameters, fn(param, index) {
                   build_updated_param(param, index)
                 })
-              let function = glance.Function(
-                ..function,
-                parameters: updated_parameters,
-              )
+              let function =
+                glance.Function(..function, parameters: updated_parameters)
 
               case types.type_contains_hole(expected_type) {
                 False -> {
                   use updated_environment <- result.try(
-                    functions.update_function_signature(
-                      environment,
-                      function,
-                    ),
+                    functions.update_function_signature(environment, function),
                   )
                   Ok(types.EnvState(updated_environment, function))
                 }
                 True -> {
                   let #(_store, resolved_return) =
                     types.resolve(store, expected)
-                  let updated_function = glance.Function(
-                    ..function,
-                    return: case
-                      types.can_render(environment, resolved_return)
-                    {
-                      True ->
-                        option.Some(types.to_glance(
-                          environment,
-                          resolved_return,
-                        ))
-                      False -> function.return
-                    },
-                  )
+                  let updated_function =
+                    glance.Function(
+                      ..function,
+                      return: case
+                        types.can_render(environment, resolved_return)
+                      {
+                        True ->
+                          option.Some(types.to_glance(
+                            environment,
+                            resolved_return,
+                          ))
+                        False -> function.return
+                      },
+                    )
                   use updated_environment <- result.try(
                     functions.update_function_signature(
                       environment,

@@ -65,6 +65,7 @@ pub fn ok_module_typecheck(
       glimpse.Module("main_module", module, []),
       dict.new(),
       target.Erlang,
+      True,
     )
   result
 }
@@ -76,6 +77,7 @@ pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
       glimpse.Module("main_module", module, []),
       dict.new(),
       target.Erlang,
+      True,
     )
   error
 }

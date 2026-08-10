@@ -16,7 +16,7 @@ pub fn unqualified_value_import_test() {
   let assert Ok(parsed_module) = glance.module("import foo.{bar}")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "bar")
     == Ok(types.CallableType([], dict.new(), types.IntType))
@@ -34,7 +34,7 @@ pub fn unqualified_value_import_usable_in_body_test() {
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "main")
     == Ok(types.CallableType([], dict.new(), types.IntType))
@@ -49,7 +49,7 @@ pub fn imported_value_resolves_to_full_callable_type_test() {
   let assert Ok(parsed_module) = glance.module("import foo.{map}")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "map")
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
@@ -68,7 +68,7 @@ pub fn aliased_module_import_field_access_test() {
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "main")
     == Ok(types.CallableType([], dict.new(), types.IntType))
@@ -86,7 +86,7 @@ pub fn unqualified_type_import_test() {
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.custom_types, "Bar")
     == Ok(types.CustomType("main_module", "Bar", [], option.None))
@@ -100,7 +100,7 @@ pub fn unqualified_constructor_import_test() {
   let assert Ok(parsed_module) = glance.module("import foo.{Foo}")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "Foo")
     == Ok(types.CustomType("main_module", "Foo", [], option.Some(0)))
@@ -114,7 +114,7 @@ pub fn renamed_unqualified_import_test() {
   let assert Ok(parsed_module) = glance.module("import foo.{Foo as Baz}")
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.has_key(main_env.scope.definitions, "Baz")
   assert dict.has_key(main_env.scope.definitions, "Foo") == False
@@ -136,7 +136,7 @@ pub fn combined_value_and_type_import_test() {
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "f")
     == Ok(types.CallableType(

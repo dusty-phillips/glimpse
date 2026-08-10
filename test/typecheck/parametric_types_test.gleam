@@ -206,7 +206,7 @@ pub fn parametric_unqualified_cross_module_test() {
     )
   let assert Ok(#(_, main_env)) =
     glimpse.Module("main_module", parsed_module, ["foo"])
-    |> typecheck.module(other_envs, target.Erlang)
+    |> typecheck.module(other_envs, target.Erlang, True)
 
   assert dict.get(main_env.scope.definitions, "use_it")
     == Ok(types.CallableType(
