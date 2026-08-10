@@ -1295,7 +1295,7 @@ pub fn function(
               case types.type_contains_hole(expected_type) {
                 False -> Ok(types.EnvState(environment, function))
                 True -> {
-                  let #(store, resolved_return) =
+                  let #(_store, resolved_return) =
                     types.resolve(store, expected)
                   let updated_function = glance.Function(
                     ..function,
