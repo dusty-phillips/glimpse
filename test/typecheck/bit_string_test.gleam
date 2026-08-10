@@ -253,3 +253,40 @@ pub fn size_variable_referencing_earlier_segment_typechecking_test() {
     )
     == error.InvalidName("length")
 }
+
+pub fn string_literal_pattern_segment_size_is_rejected_test() {
+  // A String literal in a bit string pattern is implicitly a UTF-8 segment,
+  // which cannot take a size or non-utf option in the real compiler.
+  assert helpers.error_module_typecheck(
+      "pub fn f(packet: BitArray) -> Bool {
+      case packet {
+        <<\"P\":8, rest:bytes>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidBitStringSegment("utf8")
+}
+
+pub fn string_literal_pattern_segment_utf_option_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f(packet: BitArray) -> Bool {
+    case packet {
+      <<\"P\":utf8, rest:bytes>> -> True
+      _ -> False
+    }
+  }",
+  )
+}
+
+pub fn string_literal_pattern_segment_binary_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(packet: BitArray) -> Bool {
+      case packet {
+        <<\"P\":binary, rest:bytes>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidBitStringSegment("utf8")
+}

@@ -458,18 +458,35 @@ fn check_pattern_segment_options(
         _ -> False
       }
     })
-  case !is_last && has_bits_or_bytes && !has_size {
-    True -> Error(error.InvalidBitStringSegment("bits"))
-    False ->
-      case has_utf && is_variable {
-        True -> Error(error.InvalidBitStringSegment("utf8"))
+  case pattern {
+    // A string literal in a bit string is implicitly a UTF-8 segment, and the
+    // real compiler rejects any explicit size/unit/type option on it (`8`,
+    // `unit(8)`, `bits`, `binary`, ... all error) because a UTF segment cannot
+    // take a size. Only the utf8/utf16/utf32 options (and no option) are
+    // valid on a string literal.
+    glance.PatternString(_, _) ->
+      case list.any(options, bit_string_segment.is_utf_option) {
+        True -> Ok(Nil)
         False ->
-          case has_unit && !has_size {
-            // A `unit` without an explicit size cannot determine the segment
-            // width, so the real compiler rejects it in both expressions and
-            // patterns ("This needs an explicit size").
-            True -> Error(error.InvalidBitStringSegment("unit"))
-            False -> Ok(Nil)
+          case options == [] {
+            True -> Ok(Nil)
+            False -> Error(error.InvalidBitStringSegment("utf8"))
+          }
+      }
+    _ ->
+      case !is_last && has_bits_or_bytes && !has_size {
+        True -> Error(error.InvalidBitStringSegment("bits"))
+        False ->
+          case has_utf && is_variable {
+            True -> Error(error.InvalidBitStringSegment("utf8"))
+            False ->
+              case has_unit && !has_size {
+                // A `unit` without an explicit size cannot determine the
+                // segment width, so the real compiler rejects it in both
+                // expressions and patterns ("This needs an explicit size").
+                True -> Error(error.InvalidBitStringSegment("unit"))
+                False -> Ok(Nil)
+              }
           }
       }
   }
