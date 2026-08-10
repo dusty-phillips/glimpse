@@ -2591,6 +2591,37 @@ fn apply_variant_refinement(
 /// determined once `expr` has fixed the generic). Anonymous function
 /// arguments are typechecked with the expected parameter type, so their
 /// parameters are bound to concrete types before the body is checked.
+pub fn is_callable_type(type_: types.Type) -> Bool {
+  case type_ {
+    types.CallableType(..) | types.GenericCallableType(..) -> True
+    _ -> False
+  }
+}
+
+/// The parameters, labels, and return of an arbitrary expression call target.
+/// A target that is a bare unbound variable (an unannotated higher-order
+/// parameter) is constrained to a fresh callable taking the given number of
+/// arguments.
+fn higher_order_call(
+  environment: Environment,
+  store: TypeStore,
+  target: glance.Expression,
+  arguments: List(glance.Field(glance.Expression)),
+) -> error.TypeCheckResult(
+  #(TypeStore, List(Type), dict.Dict(String, Int), Type),
+) {
+  expression(environment, store, target)
+  |> result.try(fn(state) {
+    let #(store, glimpse_target) = state
+    calls.callable_parts(
+      environment,
+      store,
+      glimpse_target,
+      list.length(arguments),
+    )
+  })
+}
+
 pub fn call(
   environment: Environment,
   store: TypeStore,
@@ -2637,65 +2668,46 @@ fn do_call(
     glance.Variable(_, callee)
       if environment.current_function == option.Some(callee)
     -> {
+      // The name only denotes a recursive call when it resolves to the current
+      // function's own signature. A local binding (a parameter or `let`)
+      // shadows the name, in which case the call is to that local value, not a
+      // self-call, and must be checked as an ordinary higher-order call.
       case calls.placeholder_callee(environment, callee) {
-        True ->
-          expression(environment, store, target)
-          |> result.try(fn(state) {
-            let #(store, glimpse_target) = state
-            calls.callable_parts(
-              environment,
-              store,
-              glimpse_target,
-              list.length(arguments),
-            )
-          })
+        True -> higher_order_call(environment, store, target, arguments)
         False ->
           case dict.get(environment.scope.definitions, callee) {
             Ok(callee_type) -> {
-              // Substitute the enclosing function's declared type variables
-              // (the rigid vars) for the callee's same-named generics, so the
-              // self-call is checked against the enclosing rigid vars rather
-              // than fresh instantiations. Any generics the enclosing function
-              // does not declare (unannotated inferred params) are
-              // instantiated to fresh vars afterwards.
-              let substituted =
-                types.substitute_type_variables(
-                  callee_type,
-                  environment.generic_vars,
-                )
-              let #(store, instantiated) = types.instantiate(store, substituted)
-              case instantiated {
-                types.GenericCallableType(parameters, labels, return, _)
-                | types.CallableType(parameters, labels, return) ->
-                  Ok(#(store, parameters, labels, return))
-                _ -> Ok(#(store, [], dict.new(), types.NilType))
+              case is_callable_type(callee_type) {
+                True -> {
+                  // Substitute the enclosing function's declared type variables
+                  // (the rigid vars) for the callee's same-named generics, so the
+                  // self-call is checked against the enclosing rigid vars rather
+                  // than fresh instantiations. Any generics the enclosing function
+                  // does not declare (unannotated inferred params) are
+                  // instantiated to fresh vars afterwards.
+                  let substituted =
+                    types.substitute_type_variables(
+                      callee_type,
+                      environment.generic_vars,
+                    )
+                  let #(store, instantiated) =
+                    types.instantiate(store, substituted)
+                  case instantiated {
+                    types.GenericCallableType(parameters, labels, return, _)
+                    | types.CallableType(parameters, labels, return) ->
+                      Ok(#(store, parameters, labels, return))
+                    _ -> Ok(#(store, [], dict.new(), types.NilType))
+                  }
+                }
+                False ->
+                  higher_order_call(environment, store, target, arguments)
               }
             }
-            Error(_) ->
-              expression(environment, store, target)
-              |> result.try(fn(state) {
-                let #(store, glimpse_target) = state
-                calls.callable_parts(
-                  environment,
-                  store,
-                  glimpse_target,
-                  list.length(arguments),
-                )
-              })
+            Error(_) -> higher_order_call(environment, store, target, arguments)
           }
       }
     }
-    _ ->
-      expression(environment, store, target)
-      |> result.try(fn(state) {
-        let #(store, glimpse_target) = state
-        calls.callable_parts(
-          environment,
-          store,
-          glimpse_target,
-          list.length(arguments),
-        )
-      })
+    _ -> higher_order_call(environment, store, target, arguments)
   })
 
   use #(store, _argument_types) <- result.try(check_arguments(

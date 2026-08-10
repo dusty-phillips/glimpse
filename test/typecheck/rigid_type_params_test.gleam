@@ -557,3 +557,19 @@ pub fn variant_refinement_preserves_rigidity_test() {
     }",
     )
 }
+
+pub fn lambda_param_shadowing_recursive_function_name_test() {
+  // A lambda parameter that shadows the enclosing function's name is a local
+  // value, not a self-reference: `run()` inside `fn(run) { run() }` calls the
+  // parameter. It must be checked as an ordinary higher-order call, not the
+  // function's own monomorphic-recursion signature.
+  helpers.ok_module_typecheck(
+    "pub fn run(builder: Int) -> Int {
+      apply(fn(run) { run() }, fn() { builder })
+    }
+
+    fn apply(x: fn(fn() -> Int) -> Int, value: fn() -> Int) -> Int {
+      x(value)
+    }",
+  )
+}
