@@ -103,7 +103,7 @@ pub fn use_after_let_test() {
 /// has no callback to bind the continuation against.
 pub fn use_noncallable_value_rejected_test() {
   assert helpers.error_module_typecheck(
-    "pub fn main() {
+      "pub fn main() {
       use x <- 42
       x
     }",
@@ -115,7 +115,7 @@ pub fn use_noncallable_value_rejected_test() {
 /// the single implicit callback the `use` statement requires.
 pub fn use_bare_function_with_extra_params_rejected_test() {
   assert helpers.error_module_typecheck(
-    "fn foo(x: Int, y: Int) -> Int {
+      "fn foo(x: Int, y: Int) -> Int {
       x + y
     }
   pub fn main() {
@@ -130,7 +130,7 @@ pub fn use_bare_function_with_extra_params_rejected_test() {
 /// bind the continuation against.
 pub fn use_noncallable_callback_rejected_test() {
   assert helpers.error_module_typecheck(
-    "fn foo(x: Int, cb: Int) -> Int {
+      "fn foo(x: Int, cb: Int) -> Int {
       x
     }
   pub fn main() {

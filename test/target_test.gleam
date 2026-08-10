@@ -3,34 +3,34 @@ import gleam/list
 import gleam/option
 import glimpse/target
 
-fn external_function(target_name: String) -> glance.Definition(glance.Function) {
+fn external_function(
+  target_name: String,
+) -> glance.Definition(glance.Function) {
   let function =
-    glance.Function(
-      glance.Span(0, 0),
-      "f",
-      glance.Public,
-      [],
-      option.None,
-      [],
-    )
+    glance.Function(glance.Span(0, 0), "f", glance.Public, [], option.None, [])
   glance.Definition(
     attributes: [
-      glance.Attribute(
-        "external",
-        [glance.Variable(glance.Span(0, 0), target_name)],
-      ),
+      glance.Attribute("external", [
+        glance.Variable(glance.Span(0, 0), target_name),
+      ]),
     ],
     definition: function,
   )
 }
 
 pub fn has_external_for_matching_target_test() {
-  assert target.has_external_for_target(target.Erlang, external_function("erlang"))
+  assert target.has_external_for_target(
+      target.Erlang,
+      external_function("erlang"),
+    )
     == True
 }
 
 pub fn has_external_for_different_target_test() {
-  assert target.has_external_for_target(target.Erlang, external_function("javascript"))
+  assert target.has_external_for_target(
+      target.Erlang,
+      external_function("javascript"),
+    )
     == False
 }
 

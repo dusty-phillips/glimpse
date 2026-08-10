@@ -321,7 +321,7 @@ pub fn invalid_external_on_other_target_is_rejected_test() {
   // A malformed `@external` on a `@target(javascript)` function must be
   // rejected even while checking the erlang target.
   assert helpers.error_module_typecheck(
-    "@target(javascript)
+      "@target(javascript)
     @external(javascript, \"m\", \"f\", \"c\")
     pub fn f() -> Int",
     )
@@ -332,7 +332,7 @@ pub fn invalid_constant_on_other_target_is_rejected_test() {
   // A constant whose value is not valid constant grammar is a parse error even
   // when the constant is filtered out for the current target.
   assert helpers.error_module_typecheck(
-    "@target(javascript)
+      "@target(javascript)
     pub const x = fn() { 1 }",
     )
     == error.FnInConstant
@@ -340,7 +340,7 @@ pub fn invalid_constant_on_other_target_is_rejected_test() {
 
 pub fn invalid_constant_on_other_target_typechecks_value_test() {
   assert helpers.error_module_typecheck(
-    "@target(javascript)
+      "@target(javascript)
     pub const x = 1 + 1",
     )
     == error.InvalidConstantExpression

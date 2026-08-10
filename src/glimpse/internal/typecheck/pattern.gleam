@@ -770,11 +770,12 @@ fn check_bit_array_size_variables(
           // bound to a non-Int is a type mismatch in the real compiler.
           case types.unify(store, environment, var_type, types.IntType) {
             Ok(store) -> Ok(store)
-            Error(_) -> Error(error.InvalidType(
-              types.to_string(environment, var_type),
-              "Int",
-              "size variables must be Int",
-            ))
+            Error(_) ->
+              Error(error.InvalidType(
+                types.to_string(environment, var_type),
+                "Int",
+                "size variables must be Int",
+              ))
           }
         Error(_) -> Error(error.InvalidName(name))
       }

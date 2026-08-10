@@ -4228,8 +4228,7 @@ fn guardexpr_mutants(lines: List(String)) -> List(Mutant) {
         list.map(wraps, fn(wrap) {
           let #(desc, mutated) = wrap
           let rebuilt =
-            string.slice(line, at_index: 0, length: first_start)
-            <> mutated
+            string.slice(line, at_index: 0, length: first_start) <> mutated
           #(desc, source_of(lines, idx, rebuilt))
         })
       }
@@ -4272,8 +4271,7 @@ fn concatpat_mutants(lines: List(String)) -> List(Mutant) {
     case find_clause_pattern(line) {
       option.None -> []
       option.Some(#(start, end)) -> {
-        let pattern =
-          string.slice(line, at_index: start, length: end - start)
+        let pattern = string.slice(line, at_index: start, length: end - start)
         case find_concat_operands(pattern) {
           option.None -> []
           option.Some(#(a_start, a_end, b_start, b_end)) -> {
@@ -4284,11 +4282,7 @@ fn concatpat_mutants(lines: List(String)) -> List(Mutant) {
             let swapped =
               string.slice(pattern, at_index: 0, length: a_start)
               <> b
-              <> string.slice(
-                pattern,
-                at_index: a_end,
-                length: b_start - a_end,
-              )
+              <> string.slice(pattern, at_index: a_end, length: b_start - a_end)
               <> a
               <> string.slice(
                 pattern,

@@ -203,34 +203,26 @@ pub fn module(
   // on functions, constants, custom types (including their variants and
   // fields), type aliases and imports.
   use _ <- result.try(
-    list.fold(
-      all_module_attributes(raw_module),
-      Ok(Nil),
-      fn(result, attribute) {
-        case result, is_known_attribute(attribute.name) {
-          Error(e), _ -> Error(e)
-          Ok(_), True -> Ok(Nil)
-          Ok(_), False -> Error(error.UnknownAttribute(attribute.name))
-        }
-      },
-    ),
+    list.fold(all_module_attributes(raw_module), Ok(Nil), fn(result, attribute) {
+      case result, is_known_attribute(attribute.name) {
+        Error(e), _ -> Error(e)
+        Ok(_), True -> Ok(Nil)
+        Ok(_), False -> Error(error.UnknownAttribute(attribute.name))
+      }
+    }),
   )
 
   // The Gleam compiler also checks each known attribute's argument shape:
   // `@deprecated` takes exactly one string message, `@target` exactly one
   // variable target, and `@internal` no arguments at all.
   use _ <- result.try(
-    list.fold(
-      all_module_attributes(raw_module),
-      Ok(Nil),
-      fn(result, attribute) {
-        case result, attribute_shape_is_valid(attribute) {
-          Error(e), _ -> Error(e)
-          Ok(_), True -> Ok(Nil)
-          Ok(_), False -> Error(error.InvalidAttributeShape(attribute.name))
-        }
-      },
-    ),
+    list.fold(all_module_attributes(raw_module), Ok(Nil), fn(result, attribute) {
+      case result, attribute_shape_is_valid(attribute) {
+        Error(e), _ -> Error(e)
+        Ok(_), True -> Ok(Nil)
+        Ok(_), False -> Error(error.InvalidAttributeShape(attribute.name))
+      }
+    }),
   )
 
   // An attribute may not be declared twice within one declaration scope. The
