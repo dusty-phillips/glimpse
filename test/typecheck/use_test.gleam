@@ -140,3 +140,47 @@ pub fn use_noncallable_callback_rejected_test() {
     )
     == error.NotCallable("Int")
 }
+
+/// A `use` pattern checked against a function whose return annotation has a
+/// `_` hole must see the body-derived concrete type: the hole resolves to the
+/// tuple the body produces, so a pattern of the wrong arity is a mismatch.
+pub fn use_pattern_against_hole_return_mismatch_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Eval(a, e) { Eval }
+  pub fn try_(eval: Eval(a, e), then f: fn(a) -> Eval(b, e)) -> Eval(b, e) {
+    Eval
+  }
+  pub fn return_(x: a) -> Eval(a, Int) {
+    Eval
+  }
+  pub fn parameters_and_returns() -> Eval(_, Int) {
+    return_(#(1, \"two\"))
+  }
+  pub fn main() {
+    use #(parameters, returns, extra) <- try_(parameters_and_returns())
+    Eval
+  }",
+    )
+    == error.PatternMismatch("tuple pattern", "var_0", "tuple")
+}
+
+/// A `use` pattern whose arity matches the body-derived type under a `_` hole
+/// return annotation is fine.
+pub fn use_pattern_against_hole_return_matching_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Eval(a, e) { Eval }
+  pub fn try_(eval: Eval(a, e), then f: fn(a) -> Eval(b, e)) -> Eval(b, e) {
+    Eval
+  }
+  pub fn return_(x: a) -> Eval(a, Int) {
+    Eval
+  }
+  pub fn parameters_and_returns() -> Eval(_, Int) {
+    return_(#(1, \"two\"))
+  }
+  pub fn main() {
+    use #(parameters, returns) <- try_(parameters_and_returns())
+    Eval
+  }",
+  )
+}

@@ -1559,6 +1559,21 @@ pub fn type_(environment: Environment, glance_type: glance.Type) -> TypeResult {
   Ok(type_)
 }
 
+/// Whether a glance type annotation contains a `_` hole anywhere. An explicit
+/// return annotation with holes needs its resolved form written back into the
+/// stored signature; without holes the annotation already matches the body.
+pub fn type_contains_hole(glance_type: glance.Type) -> Bool {
+  case glance_type {
+    glance.NamedType(_, _, _, parameters) ->
+      list.any(parameters, type_contains_hole)
+    glance.TupleType(_, elements) -> list.any(elements, type_contains_hole)
+    glance.FunctionType(_, parameters, return) ->
+      list.any(parameters, type_contains_hole) || type_contains_hole(return)
+    glance.HoleType(..) -> True
+    _ -> False
+  }
+}
+
 /// Like `type_`, but with a store available so that `_` holes become fresh
 /// unbound inference variables (which unify with anything) rather than an
 /// error. Used when converting annotations in function bodies.

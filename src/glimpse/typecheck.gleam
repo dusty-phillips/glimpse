@@ -1283,7 +1283,43 @@ pub fn function(
                 types.to_string(param_state.environment, resolved_expected),
               ))
             }
-            Ok(_) -> Ok(types.EnvState(environment, function))
+            Ok(store) -> {
+              // An explicit return annotation with `_` holes means the holes
+              // are fresh inference variables that unify with the body's
+              // concrete return type. Write the resolved type back into the
+              // stored signature so callers (e.g. a `use` statement pattern
+              // checked against this function's return) see the concrete type
+              // rather than an unbound variable. Without holes the annotation
+              // already matches the body, so the signature is left untouched
+              // (preserving the original source spans).
+              case types.type_contains_hole(expected_type) {
+                False -> Ok(types.EnvState(environment, function))
+                True -> {
+                  let #(store, resolved_return) =
+                    types.resolve(store, expected)
+                  let updated_function = glance.Function(
+                    ..function,
+                    return: case
+                      types.can_render(environment, resolved_return)
+                    {
+                      True ->
+                        option.Some(types.to_glance(
+                          environment,
+                          resolved_return,
+                        ))
+                      False -> function.return
+                    },
+                  )
+                  use updated_environment <- result.try(
+                    functions.update_function_signature(
+                      environment,
+                      updated_function,
+                    ),
+                  )
+                  Ok(types.EnvState(updated_environment, updated_function))
+                }
+              }
+            }
           }
         }
       }
