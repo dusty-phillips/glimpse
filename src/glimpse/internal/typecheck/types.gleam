@@ -478,11 +478,11 @@ pub fn fresh_vars(store: TypeStore, count: Int) -> #(TypeStore, List(Type)) {
   }
 }
 
-/// If `type_` is a type variable bound to a tuple that is too short for the
-/// given `index`, grow the tuple to `index + 1` elements (filling with fresh
-/// variables) and relink the variable, then return the element at `index`. This
-/// lets several indices be accessed on the same inferred tuple. Returns
-/// `Error(Nil)` if `type_` is not a type variable bound to a tuple.
+/// If `type_` is a type variable bound to a tuple, return the element at
+/// `index`. Returns `Error(Nil)` if `type_` is not a type variable bound to a
+/// tuple, or if the tuple is too short for the index. The real compiler
+/// rejects out-of-bounds tuple indices ("Out of bounds tuple index") rather
+/// than growing the tuple, so an index beyond the known arity is an error.
 pub fn extend_tuple(
   store: TypeStore,
   type_: Type,
@@ -492,27 +492,11 @@ pub fn extend_tuple(
     Var(id) -> {
       let #(store, resolved) = resolve_keep_rigid(store, Var(id))
       case resolved {
-        TupleType(elements) -> {
+        TupleType(elements) ->
           case list.drop(elements, up_to: index) |> list.first {
             Ok(element) -> Ok(#(store, element))
-            Error(_) -> {
-              let missing = index + 1 - list.length(elements)
-              let #(store, new_elements) = fresh_vars(store, missing)
-              let extended_elements = list.append(elements, new_elements)
-              let extended = TupleType(extended_elements)
-              let assert Ok(element) =
-                list.drop(extended_elements, up_to: index)
-                |> list.first
-              Ok(#(
-                TypeStore(
-                  ..store,
-                  vars: dict.insert(store.vars, id, Link(extended)),
-                ),
-                element,
-              ))
-            }
+            Error(_) -> Error(Nil)
           }
-        }
         _ -> Error(Nil)
       }
     }

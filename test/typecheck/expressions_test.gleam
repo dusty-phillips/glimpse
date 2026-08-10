@@ -83,6 +83,29 @@ pub fn tuple_index_on_unknown_type_test() {
   assert "a tuple with an element at index 2" == message
 }
 
+pub fn tuple_index_beyond_inferred_tuple_arity_is_rejected_test() {
+  // Indexing a polymorphic function's result beyond the tuple's known arity
+  // is an out-of-bounds error: the real compiler rejects `id(#(1, 2)).2`
+  // rather than growing the (immutable) tuple.
+  let got =
+    helpers.error_module_typecheck(
+      "pub fn id(x: a) -> a { x }
+  pub fn foo() -> Int { id(#(1, 2)).2 }",
+    )
+  assert got
+    == error.UnexpectedType("var_0", "a tuple with an element at index 2")
+}
+
+pub fn tuple_index_within_inferred_tuple_arity_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn pair(x: a, y: b) -> #(a, b) { #(x, y) }
+  pub fn foo() -> Int {
+    let t = pair(1, 2)
+    t.0 + t.1
+  }",
+  )
+}
+
 pub fn list_infer_return_test() {
   let function_out = helpers.ok_function_typecheck("fn foo() { [1, 2, 3] }")
 
