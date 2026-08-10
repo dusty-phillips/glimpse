@@ -1,5 +1,4 @@
 import glance
-import gleam/list
 import gleam/option
 import glimpse/target
 
