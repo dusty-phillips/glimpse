@@ -91,6 +91,46 @@ pub fn capture_generic_test() {
     == Ok(types.CallableType([types.IntType], dict.new(), types.IntType))
 }
 
+pub fn let_bound_capture_used_at_one_type_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Box(a) { Box(a) }
+  pub fn wrap(x: a) -> Box(a) { Box(x) }
+  pub fn apply2(f: fn(b) -> Box(b), x: b) -> Box(b) { f(x) }
+  pub fn f() -> #(Box(Int), Box(Int)) {
+    let g = wrap(_)
+    #(apply2(g, 1), apply2(g, 2))
+  }",
+  )
+}
+
+pub fn let_bound_capture_used_at_two_types_is_rejected_test() {
+  // A capture is evaluated once, so when bound with `let` it is monomorphic:
+  // its type variables unify on first use. Real Gleam rejects using the same
+  // let-bound capture at two different types, even though each direct capture
+  // expression (`wrap(_)(1)`, `wrap(_)(True)`) is polymorphic.
+  assert helpers.error_module_typecheck(
+    "pub type Box(a) { Box(a) }
+  pub fn wrap(x: a) -> Box(a) { Box(x) }
+  pub fn f() -> #(Box(Int), Box(Bool)) {
+    let g = wrap(_)
+    #(g(1), g(True))
+  }",
+    )
+    == error.InvalidArguments("(var_0)", "(Bool)")
+}
+
+pub fn direct_capture_used_at_two_types_is_fine_test() {
+  // Each direct capture expression is a fresh evaluation, so both stay
+  // polymorphic.
+  helpers.ok_module_typecheck(
+    "pub type Box(a) { Box(a) }
+  pub fn wrap(x: a) -> Box(a) { Box(x) }
+  pub fn f() -> #(Box(Int), Box(Bool)) {
+    #(wrap(_)(1), wrap(_)(True))
+  }",
+  )
+}
+
 pub fn capture_labeled_hole_test() {
   let #(_module, env) =
     helpers.ok_module_typecheck(

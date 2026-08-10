@@ -6,7 +6,6 @@ import gleam/result
 import gleam/set
 import gleam/string
 import glimpse/error
-import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/types.{
   type Environment, type Type, type TypeStore,
 }
@@ -130,33 +129,19 @@ pub fn fn_capture(
       // them; plain resolve would collapse them to their named generics, which
       // are freshened at the use site and lose the linkage.
       let #(_, resolved_return) = types.resolve_keep_rigid(store, return)
-      let generalised =
-        types.generalise(
-          store,
-          types.CallableType(
-            list.reverse(remaining_reversed),
-            reindexed_labels,
-            resolved_return,
-          ),
-        )
 
-      let capture_type = case generalised {
-        types.CallableType(parameters, labels, return) ->
-          case
-            functions.has_generic_types(parameters)
-            || functions.is_generic_type(return)
-          {
-            True ->
-              types.GenericCallableType(
-                parameters,
-                labels,
-                return,
-                functions.dummy_function(),
-              )
-            False -> generalised
-          }
-        other -> other
-      }
+      // The capture's remaining parameters and return keep their fresh
+      // flexible variables rather than being generalised: a capture is
+      // evaluated once, so it is monomorphic when shared (e.g. bound with
+      // `let` and used at two types) while each capture expression is a fresh
+      // evaluation. Generalising here would keep the capture polymorphic
+      // forever, which real Gleam rejects for shared captures.
+      let capture_type =
+        types.CallableType(
+          list.reverse(remaining_reversed),
+          reindexed_labels,
+          resolved_return,
+        )
 
       Ok(#(store, capture_type))
     }
