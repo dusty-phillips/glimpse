@@ -202,3 +202,25 @@ pub fn multiple_implicit_returns_test() {
   assert dict.get(env.scope.definitions, "get_string")
     == Ok(types.CallableType([], dict.new(), types.StringType))
 }
+
+pub fn inferred_param_type_enforced_at_call_site_test() {
+  // An unannotated parameter whose type is learned from the body (here `count`
+  // is the return, so it is `Int`) must be enforced when the function is
+  // called: passing a `BitArray` is rejected like the real compiler rejects it.
+  assert helpers.error_module_typecheck(
+    "fn decode(count, rest) -> Int { count }
+  pub fn main() -> Int {
+    decode(<<1, 2>>, 5)
+  }",
+    )
+    == error.InvalidArguments("(Int, var_0)", "(BitArray)")
+}
+
+pub fn inferred_param_type_enforced_at_call_site_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "fn decode(count, rest) -> Int { count }
+  pub fn main() -> Int {
+    decode(1, 5)
+  }",
+  )
+}
