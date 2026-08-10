@@ -345,3 +345,16 @@ pub fn invalid_constant_on_other_target_typechecks_value_test() {
     )
     == error.InvalidConstantExpression
 }
+
+pub fn duplicate_parameter_names_in_definition_test() {
+  assert helpers.error_module_typecheck(
+    "pub fn start(conn, params, params) -> Int { conn }",
+    )
+    == error.DuplicateArgumentName("params")
+}
+
+pub fn distinct_parameter_names_in_definition_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn start(conn, params) -> Int { conn }",
+  )
+}

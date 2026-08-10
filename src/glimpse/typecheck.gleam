@@ -180,6 +180,26 @@ pub fn module(
     }),
   )
 
+  // A function may not declare the same parameter name twice; the real
+  // compiler rejects `fn start(conn, params, params)` at parse time with
+  // "Argument name already used".
+  use _ <- result.try(
+    list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
+      let parameter_names =
+        definition.definition.parameters
+        |> list.fold([], fn(names, param) {
+          case param.name {
+            glance.Named(name) -> [name, ..names]
+            glance.Discarded(_) -> names
+          }
+        })
+      case intern.find_duplicate(parameter_names) {
+        option.Some(name) -> Error(error.DuplicateArgumentName(name))
+        option.None -> Ok(Nil)
+      }
+    }),
+  )
+
   // A custom type annotated `@external` may not declare constructors.
   use _ <- result.try(
     list.try_fold(glimpse_module.module.custom_types, Nil, fn(_, definition) {
@@ -1292,8 +1312,79 @@ pub fn function(
               // rather than an unbound variable. Without holes the annotation
               // already matches the body, so the signature is left untouched
               // (preserving the original source spans).
+              //
+              // Inferred parameter types are always written back: an
+              // unannotated parameter's type is learned from the body (e.g. a
+              // parameter returned directly becomes the return type), and
+              // callers must check their arguments against that inferred type.
+              let #(store, resolved_inferred) =
+                list.fold(param_state.inferred, #(store, []), fn(state, item) {
+                  let #(index, var_type) = item
+                  let #(store, acc) = state
+                  let #(store, resolved) = types.resolve(store, var_type)
+                  #(store, [#(index, resolved), ..acc])
+                })
+
+              let build_updated_param = fn(
+                param: glance.FunctionParameter,
+                index: Int,
+              ) -> glance.FunctionParameter {
+                // Only unannotated parameters get their inferred type written
+                // back; annotated parameters already carry a (possibly generic)
+                // annotation whose source spans must be preserved.
+                case param.type_ {
+                  option.Some(_) -> param
+                  option.None -> {
+                    let found =
+                      list.filter(resolved_inferred, fn(item) {
+                        case item {
+                          #(i, _) -> i == index
+                        }
+                      })
+                    case found {
+                      [#(_, inferred_type), ..] ->
+                        glance.FunctionParameter(
+                          ..param,
+                          // Only write the annotation back when the type can be
+                          // expressed in the module's own imports; otherwise
+                          // leave the param unannotated and let the next pass
+                          // re-infer it.
+                          type_: case
+                            types.can_render(environment, inferred_type)
+                          {
+                            True ->
+                              option.Some(types.to_glance(
+                                environment,
+                                inferred_type,
+                              ))
+                            False -> option.None
+                          },
+                        )
+                      [] -> param
+                    }
+                  }
+                }
+              }
+
+              let updated_parameters =
+                list.index_map(function.parameters, fn(param, index) {
+                  build_updated_param(param, index)
+                })
+              let function = glance.Function(
+                ..function,
+                parameters: updated_parameters,
+              )
+
               case types.type_contains_hole(expected_type) {
-                False -> Ok(types.EnvState(environment, function))
+                False -> {
+                  use updated_environment <- result.try(
+                    functions.update_function_signature(
+                      environment,
+                      function,
+                    ),
+                  )
+                  Ok(types.EnvState(updated_environment, function))
+                }
                 True -> {
                   let #(_store, resolved_return) =
                     types.resolve(store, expected)
