@@ -2030,6 +2030,23 @@ fn is_renderable_module(environment: Environment, module: String) -> Bool {
   || dict.has_key(environment.imports.import_names, module)
 }
 
+/// Whether the custom type named `name` in the local scope is the same type as
+/// `module.name` (as opposed to a different type shadowing it). Used by
+/// `to_glance` to decide whether an unqualified type reference is safe to emit.
+fn local_type_is_same(
+  environment: Environment,
+  name: String,
+  module: String,
+) -> Bool {
+  case dict.get(environment.custom_types, name) {
+    Error(_) -> True
+    Ok(TypeAlias(_, _)) -> False
+    Ok(CustomType(custom_module, custom_name, _, _)) ->
+      custom_module == module && custom_name == name
+    Ok(_) -> False
+  }
+}
+
 pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
   case type_ {
     NilType -> glance.NamedType(unknown_span, "Nil", option.None, [])
@@ -2047,7 +2064,28 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
       let glance_parameters = list.map(parameters, to_glance(environment, _))
       case module == environment.current_module || is_prelude_module(module) {
         True ->
-          glance.NamedType(unknown_span, name, option.None, glance_parameters)
+          // An unqualified name round-trips correctly only when the local
+          // scope does not shadow it with a different type (e.g. a
+          // `snag.{type Result}` import while the prelude `gleam.Result` is
+          // in use). Qualify the reference when the bare name would resolve
+          // to something else.
+          case local_type_is_same(environment, name, module) {
+            True ->
+              glance.NamedType(unknown_span, name, option.None, glance_parameters)
+            False -> {
+              case dict.get(environment.imports.import_names, module) {
+                Ok(relative) ->
+                  glance.NamedType(
+                    unknown_span,
+                    name,
+                    option.Some(relative),
+                    glance_parameters,
+                  )
+                Error(_) ->
+                  glance.NamedType(unknown_span, name, option.None, glance_parameters)
+              }
+            }
+          }
         False -> {
           case dict.get(environment.imports.import_names, module) {
             Ok(relative) ->
