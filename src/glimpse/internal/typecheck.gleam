@@ -1114,20 +1114,14 @@ fn fn_literal(
       #(store, []),
       fn(state, pair) {
         let #(store, acc) = state
-        let #(param_type, is_annotated) = pair
-        let #(store, resolved) = case is_annotated {
-          True -> types.resolve(store, param_type)
-          False -> #(store, param_type)
-        }
-        let resolved = case is_annotated {
-          True ->
-            resolved
-            // The lambda's own type is polymorphic, so its named generics are
-            // not rigid even though they were rigid inside the body.
-            |> types.strip_rigidity
-            |> types.substitute_type_variables(environment.generic_vars)
-          False -> resolved
-        }
+        let #(param_type, _is_annotated) = pair
+        let #(store, resolved) = types.resolve(store, param_type)
+        let resolved =
+          resolved
+          // The lambda's own type is polymorphic, so its named generics are
+          // not rigid even though they were rigid inside the body.
+          |> types.strip_rigidity
+          |> types.substitute_type_variables(environment.generic_vars)
         #(store, [resolved, ..acc])
       },
     )

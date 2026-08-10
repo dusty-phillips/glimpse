@@ -940,7 +940,7 @@ pub fn capture_with_rigid_param_test() {
     )
     == error.InvalidArguments(
       "(main_module.Effect(var_5), fn (var_5) -> Nil)",
-      "(main_module.Effect(var_1), fn (var_3) -> Nil)",
+      "(main_module.Effect(var_1), fn (var_0) -> Nil)",
     )
 }
 

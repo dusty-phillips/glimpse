@@ -202,3 +202,25 @@ pub fn capture_lambda_in_pipe_test() {
       types.BitArrayType,
     ))
 }
+
+pub fn lambda_unannotated_param_sharing_annotation_generic_test() {
+  helpers.ok_module_typecheck(
+    "pub type Flag { Flag(value: Int, description: String) }
+  pub fn relay_flags() -> List(String) {
+    let relay_flag = fn(get_fun: fn(Flag) -> Result(a, String), string_fun) {
+      case get_fun(Flag(1, \"\")) {
+        Ok(v) -> string_fun(v)
+        Error(_) -> \"\"
+      }
+    }
+    let get_int = fn(flag: Flag) -> Result(Int, String) { Ok(flag.value) }
+    let get_string = fn(flag: Flag) -> Result(String, String) { Ok(\"\") }
+    [
+      relay_flag(get_int, int_to_string),
+      relay_flag(get_string, string_to_string),
+    ]
+  }
+  fn int_to_string(n: Int) -> String { \"\" }
+  fn string_to_string(s: String) -> String { s }",
+  )
+}
