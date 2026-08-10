@@ -225,3 +225,31 @@ pub fn size_variable_must_exist_test() {
     )
     == error.InvalidName("n")
 }
+
+pub fn size_variable_referencing_earlier_segment_is_fine_test() {
+  // A size expression may reference a variable bound by an earlier segment in
+  // the same bit string (`<<length:32, value:bytes-size(length)>>`), as in the
+  // squirrel postgres protocol decoder.
+  helpers.ok_module_typecheck(
+    "pub fn f(packet: BitArray) -> Int {
+      case packet {
+        <<length:32, value:bytes-size(length), rest:bytes>> -> length
+        _ -> 0
+      }
+    }",
+  )
+}
+
+pub fn size_variable_referencing_earlier_segment_typechecking_test() {
+  // The referenced variable must be bound in the current bit string or in
+  // scope; a size referencing a later, not-yet-bound segment is an error.
+  assert helpers.error_module_typecheck(
+      "pub fn f(packet: BitArray) -> Int {
+      case packet {
+        <<value:bytes-size(length), length:32, rest:bytes>> -> length
+        _ -> 0
+      }
+    }",
+    )
+    == error.InvalidName("length")
+}

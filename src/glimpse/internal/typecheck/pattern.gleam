@@ -385,8 +385,10 @@ fn check_segments(
     // a utf segment cannot bind a plain variable (use `_` or a literal).
     use _ <- result.try(check_pattern_segment_options(options, is_last, pattern))
     // Literal sizes and units must be positive; variable sizes must be bound.
+    // The threaded `env` is used because a size variable may reference a name
+    // bound by an earlier segment (`<<length:32, value:bytes-size(length)>>`).
     use store <- result.try(check_pattern_size_options(
-      environment,
+      env,
       store,
       options,
     ))
