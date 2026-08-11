@@ -189,85 +189,116 @@ fn module_path_of(
 /// target support (a bare function reference can simply never be called on a
 /// given target); recursion into nested lambdas, case clauses, and blocks
 /// counts, since those calls run as part of this function's execution.
+/// Names bound in the local scope (lambda parameters, let/use bindings, case
+/// patterns) shadow same-named module functions, so a call to them is a call
+/// to a local value, not the module function.
 fn body_callees(function: glance.Function) -> List(CallTarget) {
-  statement_callees(function.body)
+  statement_callees(function.body, set.new())
 }
 
-fn statement_callees(statements: List(glance.Statement)) -> List(CallTarget) {
-  list.flatten(list.map(statements, statement_callee))
+fn statement_callees(
+  statements: List(glance.Statement),
+  scope: set.Set(String),
+) -> List(CallTarget) {
+  let #(_, callees) =
+    list.fold(statements, #(scope, []), fn(state, statement) {
+      let #(scope, acc) = state
+      let #(scope, statement_callees) = statement_callee(scope, statement)
+      #(scope, list.append(acc, statement_callees))
+    })
+  callees
 }
 
-fn statement_callee(statement: glance.Statement) -> List(CallTarget) {
+fn statement_callee(
+  scope: set.Set(String),
+  statement: glance.Statement,
+) -> #(set.Set(String), List(CallTarget)) {
   case statement {
-    glance.Use(_, _, function) -> expression_callees(function)
-    glance.Assignment(_, _, _, _, value) -> expression_callees(value)
-    glance.Assert(_, expression, message) ->
-      list.append(expression_callees(expression), case message {
+    glance.Use(_, patterns, function) -> #(
+      bind_use_patterns(scope, patterns),
+      expression_callees(scope, function),
+    )
+    glance.Assignment(_, _, pattern, _, value) -> #(
+      set.union(scope, set.from_list(pattern_names(pattern))),
+      expression_callees(scope, value),
+    )
+    glance.Assert(_, expression, message) -> #(
+      scope,
+      list.append(expression_callees(scope, expression), case message {
         option.None -> []
         option.Some(message_expression) ->
-          expression_callees(message_expression)
-      })
-    glance.Expression(expression) -> expression_callees(expression)
+          expression_callees(scope, message_expression)
+      }),
+    )
+    glance.Expression(expression) -> #(
+      scope,
+      expression_callees(scope, expression),
+    )
   }
 }
 
-fn expression_callees(expression: glance.Expression) -> List(CallTarget) {
+fn expression_callees(
+  scope: set.Set(String),
+  expression: glance.Expression,
+) -> List(CallTarget) {
   case expression {
     glance.Int(..)
     | glance.Float(..)
     | glance.String(..)
     | glance.Variable(..) -> []
     glance.NegateInt(_, value) | glance.NegateBool(_, value) ->
-      expression_callees(value)
-    glance.Block(_, statements) -> statement_callees(statements)
+      expression_callees(scope, value)
+    glance.Block(_, statements) -> statement_callees(statements, scope)
     glance.Panic(_, message) | glance.Todo(_, message) ->
       case message {
         option.None -> []
         option.Some(message_expression) ->
-          expression_callees(message_expression)
+          expression_callees(scope, message_expression)
       }
     glance.Tuple(_, elements) ->
-      list.flatten(list.map(elements, expression_callees))
+      list.flatten(list.map(elements, expression_callees(scope, _)))
     glance.List(_, elements, rest) ->
       list.append(
-        list.flatten(list.map(elements, expression_callees)),
+        list.flatten(list.map(elements, expression_callees(scope, _))),
         case rest {
           option.None -> []
-          option.Some(rest_expression) -> expression_callees(rest_expression)
+          option.Some(rest_expression) ->
+            expression_callees(scope, rest_expression)
         },
       )
-    glance.Fn(_, _, _, body) -> statement_callees(body)
+    glance.Fn(_, arguments, _, body) ->
+      statement_callees(body, bind_fn_parameters(scope, arguments))
     glance.RecordUpdate(_, _, _, record, fields) ->
       list.append(
-        expression_callees(record),
+        expression_callees(scope, record),
         list.flatten(
           list.map(fields, fn(field) {
-            expression_callees(record_update_field_expression(field))
+            expression_callees(scope, record_update_field_expression(field))
           }),
         ),
       )
-    glance.FieldAccess(_, container, _) -> expression_callees(container)
+    glance.FieldAccess(_, container, _) -> expression_callees(scope, container)
     glance.Call(_, target, arguments) ->
       list.append(
-        call_target_callees(target),
+        call_target_callees(scope, target),
         list.append(
-          expression_callees(target),
+          expression_callees(scope, target),
           list.flatten(
             list.map(arguments, fn(field) {
-              expression_callees(field_expression(field))
+              expression_callees(scope, field_expression(field))
             }),
           ),
         ),
       )
-    glance.TupleIndex(_, tuple, _) -> expression_callees(tuple)
+    glance.TupleIndex(_, tuple, _) -> expression_callees(scope, tuple)
     glance.FnCapture(_, _, function, arguments_before, arguments_after) ->
       list.append(
-        call_target_callees(function),
+        call_target_callees(scope, function),
         list.append(
-          expression_callees(function),
+          expression_callees(scope, function),
           list.flatten(
             list.map(list.append(arguments_before, arguments_after), fn(field) {
-              expression_callees(field_expression(field))
+              expression_callees(scope, field_expression(field))
             }),
           ),
         ),
@@ -276,29 +307,30 @@ fn expression_callees(expression: glance.Expression) -> List(CallTarget) {
       list.flatten(
         list.map(segments, fn(segment) {
           let #(value, _options) = segment
-          expression_callees(value)
+          expression_callees(scope, value)
         }),
       )
     glance.Case(_, subjects, clauses) ->
       list.append(
-        list.flatten(list.map(subjects, expression_callees)),
+        list.flatten(list.map(subjects, expression_callees(scope, _))),
         list.flatten(
           list.map(clauses, fn(clause) {
+            let clause_scope = clause_patterns_scope(scope, clause.patterns)
             list.append(
               case clause.guard {
                 option.None -> []
-                option.Some(guard) -> expression_callees(guard)
+                option.Some(guard) -> expression_callees(scope, guard)
               },
-              expression_callees(clause.body),
+              expression_callees(clause_scope, clause.body),
             )
           }),
         ),
       )
     glance.BinaryOperator(_, operator, left, right) -> {
-      let left_callees = expression_callees(left)
+      let left_callees = expression_callees(scope, left)
       let right_callees = case operator {
-        glance.Pipe -> invoked_expression_callees(right)
-        _ -> expression_callees(right)
+        glance.Pipe -> invoked_expression_callees(scope, right)
+        _ -> expression_callees(scope, right)
       }
       list.append(left_callees, right_callees)
     }
@@ -307,12 +339,12 @@ fn expression_callees(expression: glance.Expression) -> List(CallTarget) {
         case echoed {
           option.None -> []
           option.Some(echoed_expression) ->
-            expression_callees(echoed_expression)
+            expression_callees(scope, echoed_expression)
         },
         case message {
           option.None -> []
           option.Some(message_expression) ->
-            expression_callees(message_expression)
+            expression_callees(scope, message_expression)
         },
       )
   }
@@ -322,39 +354,141 @@ fn expression_callees(expression: glance.Expression) -> List(CallTarget) {
 /// value: `x |> f` invokes `f`, `x |> f(a)` invokes `f`, and `x |> f(_, a)`
 /// invokes `f`.
 fn invoked_expression_callees(
+  scope: set.Set(String),
   expression: glance.Expression,
 ) -> List(CallTarget) {
   case expression {
     glance.Call(_, target, arguments) ->
       list.append(
-        call_target_callees(target),
+        call_target_callees(scope, target),
         list.flatten(
           list.map(arguments, fn(field) {
-            expression_callees(field_expression(field))
+            expression_callees(scope, field_expression(field))
           }),
         ),
       )
     glance.FnCapture(_, _, function, arguments_before, arguments_after) ->
       list.append(
-        call_target_callees(function),
+        call_target_callees(scope, function),
         list.flatten(
           list.map(list.append(arguments_before, arguments_after), fn(field) {
-            expression_callees(field_expression(field))
+            expression_callees(scope, field_expression(field))
           }),
         ),
       )
-    _ -> expression_callees(expression)
+    _ -> expression_callees(scope, expression)
   }
 }
 
 /// The named function a call target invokes, when it is a direct reference.
-fn call_target_callees(target: glance.Expression) -> List(CallTarget) {
+/// A name bound in the local scope is a local value, not the module function.
+fn call_target_callees(
+  scope: set.Set(String),
+  target: glance.Expression,
+) -> List(CallTarget) {
   case target {
-    glance.Variable(_, name) -> [types.Named(name)]
-    glance.FieldAccess(_, glance.Variable(_, container), label) -> [
-      types.Namespaced(container, label),
-    ]
+    glance.Variable(_, name) ->
+      case set.contains(scope, name) {
+        True -> []
+        False -> [types.Named(name)]
+      }
+    glance.FieldAccess(_, glance.Variable(_, container), label) ->
+      case set.contains(scope, container) {
+        True -> []
+        False -> [types.Namespaced(container, label)]
+      }
     _ -> []
+  }
+}
+
+/// Extend a scope with the names a list of case clause patterns binds.
+fn clause_patterns_scope(
+  scope: set.Set(String),
+  patterns: List(List(glance.Pattern)),
+) -> set.Set(String) {
+  list.fold(patterns, scope, fn(acc, pattern_list) {
+    set.union(
+      acc,
+      set.from_list(list.flatten(list.map(pattern_list, pattern_names))),
+    )
+  })
+}
+
+/// Extend a scope with a lambda's named parameters. Discarded parameters do not
+/// bind a usable name and so do not shadow anything.
+fn bind_fn_parameters(
+  scope: set.Set(String),
+  arguments: List(glance.FnParameter),
+) -> set.Set(String) {
+  list.fold(arguments, scope, fn(acc, parameter) {
+    case parameter.name {
+      glance.Named(name) -> set.insert(acc, name)
+      glance.Discarded(_) -> acc
+    }
+  })
+}
+
+/// Extend a scope with the patterns a `use` statement binds.
+fn bind_use_patterns(
+  scope: set.Set(String),
+  patterns: List(glance.UsePattern),
+) -> set.Set(String) {
+  list.fold(patterns, scope, fn(acc, pattern) {
+    set.union(acc, set.from_list(pattern_names(pattern.pattern)))
+  })
+}
+
+/// Every variable name a pattern binds, recursively.
+fn pattern_names(pattern: glance.Pattern) -> List(String) {
+  case pattern {
+    glance.PatternVariable(_, name) -> [name]
+    glance.PatternAssignment(_, inner, name) -> [name, ..pattern_names(inner)]
+    glance.PatternDiscard(_, _)
+    | glance.PatternInt(_, _)
+    | glance.PatternFloat(_, _)
+    | glance.PatternString(_, _) -> []
+    glance.PatternTuple(_, elements) ->
+      list.flatten(list.map(elements, pattern_names))
+    glance.PatternList(_, elements, tail) ->
+      list.append(list.flatten(list.map(elements, pattern_names)), case tail {
+        option.None -> []
+        option.Some(tail_pattern) -> pattern_names(tail_pattern)
+      })
+    glance.PatternBitString(_, segments) ->
+      list.flatten(
+        list.map(segments, fn(segment) {
+          let #(pattern, _options) = segment
+          pattern_names(pattern)
+        }),
+      )
+    glance.PatternConcatenate(_, _prefix, prefix_name, rest_name) ->
+      list.append(
+        case prefix_name {
+          option.Some(name) -> assignment_name(name)
+          option.None -> []
+        },
+        assignment_name(rest_name),
+      )
+    glance.PatternVariant(_, _module, _constructor, arguments, _spread) ->
+      list.flatten(
+        list.map(arguments, fn(field) { pattern_names(field_item(field)) }),
+      )
+  }
+}
+
+fn assignment_name(name: glance.AssignmentName) -> List(String) {
+  case name {
+    glance.Named(named) -> [named]
+    glance.Discarded(_) -> []
+  }
+}
+
+fn field_item(field: glance.Field(glance.Pattern)) -> glance.Pattern {
+  case field {
+    glance.LabelledField(_, _, item) -> item
+    glance.UnlabelledField(item) -> item
+    glance.ShorthandField(label, _) ->
+      glance.PatternVariable(glance.Span(-1, -1), label)
   }
 }
 

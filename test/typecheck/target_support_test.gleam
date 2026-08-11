@@ -157,3 +157,44 @@ pub fn not_calling_erlang_only_external_is_fine_test() {
       target.Javascript,
     )
 }
+
+/// A call to a same-module function that is itself unsupported on the active
+/// target is rejected: the implementation support propagates through the call
+/// within the module, not just across module boundaries.
+pub fn calling_same_module_unsupported_function_is_rejected_test() {
+  let assert Error(err) =
+    root_typecheck(
+      "@external(erlang, \"erlonly\", \"new\")
+      fn new() -> Int
+
+      pub fn wrapped() -> Int {
+        new()
+      }
+
+      pub fn main() {
+        wrapped()
+      }",
+      target.Javascript,
+    )
+  assert err == error.UnsupportedTarget("wrapped")
+}
+
+/// A lambda parameter that shadows a same-named module function is a local
+/// value, so calling it does not make the enclosing function unsupported.
+pub fn lambda_param_shadowing_unsupported_function_is_fine_test() {
+  let assert Ok(_) =
+    root_typecheck(
+      "@external(erlang, \"erlonly\", \"new\")
+      fn new() -> Int
+
+      pub fn run() -> Int {
+        let g = fn(new) { new() }
+        g(fn() { 0 })
+      }
+
+      pub fn main() {
+        run()
+      }",
+      target.Javascript,
+    )
+}

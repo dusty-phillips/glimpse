@@ -254,14 +254,16 @@ pub fn public_other_target_external_is_fine_test() {
     == error.UnsupportedTarget("js_only")
 }
 
-pub fn other_target_external_call_within_module_is_fine_test() {
-  // A module may call its own other-target external; the real compiler does
-  // not reject dependency modules that do this.
-  helpers.ok_module_typecheck(
-    "@external(javascript, \"one\", \"two\")
+pub fn other_target_external_call_within_module_is_rejected_test() {
+  // A module's own code may not call its other-target external; the real
+  // compiler reports `Unsupported target` at the call. (Dependency modules are
+  // exempt, tested elsewhere.)
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"one\", \"two\")
     fn js_only() -> Int
     pub fn main() { js_only() }",
-  )
+    )
+    == error.UnsupportedTarget("js_only")
 }
 
 pub fn matching_target_external_is_fine_test() {
@@ -358,13 +360,16 @@ pub fn covered_target_external_body_is_skipped_test() {
     == error.InvalidReturnType("x", "String", "Int")
 }
 
-pub fn private_other_target_external_call_is_fine_test() {
-  helpers.ok_module_typecheck(
-    "@external(javascript, \"one\", \"two\")
+pub fn private_other_target_external_call_is_rejected_test() {
+  // A private other-target external is rejected at its call site, even within
+  // the same module, matching the real compiler's use-site check.
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"one\", \"two\")
     fn js_only() -> Int
     fn uh_oh() -> Int { js_only() }
     pub fn main() { uh_oh() }",
-  )
+    )
+    == error.UnsupportedTarget("uh_oh")
 }
 
 pub fn named_target_filters_custom_targets_test() {

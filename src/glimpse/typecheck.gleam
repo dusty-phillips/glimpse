@@ -389,6 +389,21 @@ pub fn module(
   let constants = constants_env_state.state
   let environment = constants_env_state.environment
 
+  // Compute which targets this module's functions can run on *before* the
+  // bodies are checked, so a body that calls a same-module function unsupported
+  // on the active target is rejected at the call site, matching the real
+  // compiler. The result is recomputed after the body passes for the returned
+  // environment, since body checking clears the target support of any name a
+  // local binding shadows.
+  let environment =
+    types.Environment(
+      ..environment,
+      target_support: targets.compute_module_target_support(
+        environment,
+        glimpse_module.module.functions,
+      ),
+    )
+
   // Typecheck all function bodies twice. The first pass infers the callee
   // signatures (callers may see placeholder signatures for functions they call).
   // The second pass re-typechecks every body against the now-final signatures,
