@@ -11,6 +11,7 @@ import glimpse/internal/import_dependencies
 import glimpse/internal/typecheck as intern
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/imports
+import glimpse/internal/typecheck/targets
 import glimpse/internal/typecheck/types.{
   type Environment, type EnvironmentResult,
 }
@@ -106,7 +107,12 @@ pub fn module(
   target: target.Target,
   check_target_support: Bool,
 ) -> error.TypeCheckResult(#(glimpse.Module, Environment)) {
-  let environment = types.new_env(glimpse_module.name)
+  let environment =
+    types.Environment(
+      ..types.new_env(glimpse_module.name),
+      target: target,
+      check_target_support: check_target_support,
+    )
 
   // The raw, unfiltered module. Attribute validation and the constant grammar
   // are parse-time checks in the real compiler, so they must run on every
@@ -395,6 +401,21 @@ pub fn module(
     types.set_defer_unknown(environment, False),
     glimpse_module.module.functions,
   ))
+
+  // Compute which targets each of this module's functions can run on, so
+  // callers in other modules can reject calls to functions that cannot run on
+  // the active build target (e.g. an erlang-only external called from
+  // javascript-target code). Dependencies are processed before their importers,
+  // so imported modules' supports are already computed and reachable through
+  // the module environments.
+  let environment =
+    types.Environment(
+      ..environment,
+      target_support: targets.compute_module_target_support(
+        environment,
+        functions,
+      ),
+    )
 
   let new_glance_module =
     glance.Module(

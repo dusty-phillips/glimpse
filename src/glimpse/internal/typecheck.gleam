@@ -15,6 +15,7 @@ import glimpse/internal/typecheck/exhaustive
 import glimpse/internal/typecheck/functions
 import glimpse/internal/typecheck/pattern
 import glimpse/internal/typecheck/pipe
+import glimpse/internal/typecheck/targets
 import glimpse/internal/typecheck/types.{
   type Environment, type Type, type TypeStore, Environment,
 }
@@ -245,6 +246,7 @@ fn use_call(
   arguments: List(glance.Field(glance.Expression)),
   continuation: List(glance.Statement),
 ) -> error.TypeCheckResult(#(TypeStore, Environment, Type)) {
+  use _ <- result.try(targets.check_callee(environment, target))
   use #(store, glimpse_target) <- result.try(expression(
     environment,
     store,
@@ -772,6 +774,7 @@ fn typecheck_with_expected(
     }
 
     glance.FnCapture(_, label, function, arguments_before, arguments_after) -> {
+      use _ <- result.try(targets.check_callee(environment, function))
       use #(store, target_type) <- result.try(expression(
         environment,
         store,
@@ -2658,6 +2661,7 @@ fn do_call(
   target: glance.Expression,
   arguments: List(glance.Field(glance.Expression)),
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
+  use _ <- result.try(targets.check_callee(environment, target))
   // A recursive self-call is checked against the function's own rigid type
   // variables (monomorphic recursion), not a fresh instantiation: the real
   // compiler rejects a self-call that passes a different rigid type variable
@@ -3023,6 +3027,7 @@ fn pipe(
       Ok(#(store, left_type))
     }
     glance.Call(_, target, arguments) -> {
+      use _ <- result.try(targets.check_callee(environment, target))
       use #(store, glimpse_target) <- result.try(expression(
         environment,
         store,
@@ -3070,6 +3075,7 @@ fn pipe(
       Ok(#(store, pipe_result))
     }
     _ -> {
+      use _ <- result.try(targets.check_callee(environment, right))
       use #(store, glimpse_target) <- result.try(expression(
         environment,
         store,

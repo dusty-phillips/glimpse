@@ -123,7 +123,14 @@ fn fold_values_into_env(
           case dict.get(module_env.scope.definitions, name) {
             Error(_) -> Error(error.InvalidName(name))
             Ok(type_) ->
-              Ok(types.add_or_update_def_in_env(environment, scope_name, type_))
+              Ok(
+                environment
+                |> types.add_or_update_def_in_env(scope_name, type_)
+                |> types.set_target_support(
+                  scope_name,
+                  types.definition_target_support(module_env, name),
+                ),
+              )
           }
         }
       }

@@ -7,6 +7,7 @@ import gleam/result
 import gleam/set
 import gleam/string
 import glimpse/error
+import glimpse/target
 
 /// Placeholder span for synthetic AST nodes created during type inference
 const unknown_span = glance.Span(-1, -1)
@@ -1106,6 +1107,44 @@ fn do_generalise(
 pub type TypeResult =
   error.TypeCheckResult(Type)
 
+/// Which build targets a function can run on. A function supports a target
+/// when it has an `@external` implementation for it, or when its Gleam body
+/// (and every function it calls, transitively) runs on that target.
+pub type TargetSupport {
+  TargetSupport(erlang: Bool, javascript: Bool)
+}
+
+/// A function with no external and no body-call constraints: it runs on every
+/// target. This is the default for constants, constructors, parameters, and
+/// anything else that is not a target-restricted function definition.
+pub fn all_targets_supported() -> TargetSupport {
+  TargetSupport(True, True)
+}
+
+/// A function that runs on no target: a body-less external with no
+/// implementation declared for either backend.
+pub fn no_targets_supported() -> TargetSupport {
+  TargetSupport(False, False)
+}
+
+/// Whether a function with this support can run on `target`. Custom `Named`
+/// targets are always considered supported: glimpse tracks the erlang and
+/// javascript backends the real compiler builds for.
+pub fn target_supports(target: target.Target, support: TargetSupport) -> Bool {
+  case target {
+    target.Erlang -> support.erlang
+    target.Javascript -> support.javascript
+    target.Named(_) -> True
+  }
+}
+
+/// A named function a body invokes, used when computing target support: a bare
+/// name or a namespaced `module.function` reference.
+pub type CallTarget {
+  Named(name: String)
+  Namespaced(container: String, name: String)
+}
+
 /// The names a module exposes: its value definitions and which are public.
 pub type Scope {
   Scope(
@@ -1159,6 +1198,17 @@ pub type Environment {
     // so a self-call passing a different rigid type variable is rejected like
     // the real compiler rejects it.
     current_function: option.Option(String),
+    // Which targets each of this module's function definitions can run on,
+    // keyed by definition name. Entries for imported (unqualified) functions
+    // are merged in from their defining module's environment, and entries for
+    // the module's own functions are filled in once the module's bodies are
+    // checked. A name that is absent runs on every target.
+    target_support: dict.Dict(String, TargetSupport),
+    // The build target this module is being checked for, and whether target
+    // support is enforced (the real compiler enforces it only for the package
+    // being compiled, not for its dependencies).
+    target: target.Target,
+    check_target_support: Bool,
   )
 }
 
@@ -1196,6 +1246,9 @@ pub fn new_env(current_module: String) -> Environment {
     generic_edges: dict.new(),
     generic_vars: dict.new(),
     current_function: option.None,
+    target_support: dict.new(),
+    target: target.Erlang,
+    check_target_support: False,
   )
 }
 
@@ -1223,6 +1276,9 @@ pub fn prelude_module_env(module_name: String) -> Environment {
     generic_edges: dict.new(),
     generic_vars: dict.new(),
     current_function: option.None,
+    target_support: dict.new(),
+    target: target.Erlang,
+    check_target_support: False,
   )
 }
 
@@ -1412,6 +1468,12 @@ pub fn add_or_update_def_in_env(
       ..environment.scope,
       definitions: dict.insert(environment.scope.definitions, name, type_),
     ),
+    // Rebinding a name (a parameter, pattern variable, or local value
+    // shadowing a function) ends its identity as a target-restricted function
+    // definition. The imported-function entries are restored by the import
+    // merge and the module's own functions by the end-of-module support
+    // computation.
+    target_support: dict.delete(environment.target_support, name),
   )
 }
 
@@ -1514,6 +1576,29 @@ pub fn add_import_mapping_to_env(
       ),
     ),
   )
+}
+
+/// Record which targets a definition in this environment can run on. Missing
+/// entries mean "every target".
+pub fn set_target_support(
+  environment: Environment,
+  name: String,
+  support: TargetSupport,
+) -> Environment {
+  Environment(
+    ..environment,
+    target_support: dict.insert(environment.target_support, name, support),
+  )
+}
+
+/// The targets a definition can run on, defaulting to every target when it is
+/// not a target-restricted function.
+pub fn definition_target_support(
+  environment: Environment,
+  name: String,
+) -> TargetSupport {
+  dict.get(environment.target_support, name)
+  |> result.unwrap(all_targets_supported())
 }
 
 /// The name a module is accessible under in this environment: the alias it
@@ -2086,7 +2171,12 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
           // to something else.
           case local_type_is_same(environment, name, module) {
             True ->
-              glance.NamedType(unknown_span, name, option.None, glance_parameters)
+              glance.NamedType(
+                unknown_span,
+                name,
+                option.None,
+                glance_parameters,
+              )
             False -> {
               case dict.get(environment.imports.import_names, module) {
                 Ok(relative) ->
@@ -2097,7 +2187,12 @@ pub fn to_glance(environment: Environment, type_: Type) -> glance.Type {
                     glance_parameters,
                   )
                 Error(_) ->
-                  glance.NamedType(unknown_span, name, option.None, glance_parameters)
+                  glance.NamedType(
+                    unknown_span,
+                    name,
+                    option.None,
+                    glance_parameters,
+                  )
               }
             }
           }
