@@ -352,18 +352,16 @@ fn target_from_project(root: String) -> target.Target {
   }
 }
 
-/// Sort the import graph starting from every module that nothing imports, so
-/// standalone entry points (e.g. `dev_check`) and their dependencies are all
-/// typechecked, not just the modules reachable from the main package module.
+/// Sort the import graph starting from every module, so standalone entry
+/// points (e.g. `dev_check`) and their dependencies are all typechecked, not
+/// just the modules reachable from the main package module. Sorting from every
+/// module also catches import cycles anywhere in the graph: a module in a cycle
+/// is never a root (it is imported by another cycle member), so a root-only
+/// traversal would silently skip a pure or disconnected cycle.
 fn sort_from_all_roots(
   import_graph: dict.Dict(String, List(String)),
 ) -> Result(List(String), String) {
-  let imported =
-    dict.fold(import_graph, set.new(), fn(acc, _, deps) {
-      set.union(acc, set.from_list(deps))
-    })
-  let roots =
-    list.filter(dict.keys(import_graph), fn(m) { !set.contains(imported, m) })
+  let roots = dict.keys(import_graph)
 
   list.try_fold(roots, [], fn(acc, root) {
     use sorted <- result.try(
