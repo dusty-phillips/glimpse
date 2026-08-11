@@ -152,6 +152,10 @@ pub type TypeCheckError {
   /// exist, e.g. `@external(rust, ...)`. The Gleam compiler rejects this at
   /// parse time.
   UnknownExternalTarget(name: String)
+  /// Raised when a `@target` attribute names a build target that does not
+  /// exist, e.g. `@target(python)`. The Gleam compiler rejects this at parse
+  /// time; only `erlang` and `javascript` are recognised.
+  UnknownTarget(name: String)
   /// Raised when an `@external` attribute has the wrong shape, e.g. a
   /// non-Variable target, or a target/module/function count other than three.
   InvalidExternalAttribute

@@ -313,6 +313,28 @@ pub fn module(
     }),
   )
 
+  // The `@target` attribute is validated the same way: only the erlang and
+  // javascript targets are recognised (`@target(python)` is a parse error in
+  // the real compiler). The shape check above guarantees a single variable
+  // argument, so a mismatched name is the only case to reject here.
+  use _ <- result.try(
+    list.fold(all_module_attributes(raw_module), Ok(Nil), fn(result, attribute) {
+      case result, attribute.name == "target" {
+        Error(e), _ -> Error(e)
+        Ok(_), False -> Ok(Nil)
+        Ok(_), True ->
+          case attribute.arguments {
+            [glance.Variable(_, name)] ->
+              case name == "erlang" || name == "javascript" {
+                True -> Ok(Nil)
+                False -> Error(error.UnknownTarget(name))
+              }
+            _ -> Ok(Nil)
+          }
+      }
+    }),
+  )
+
   let imports_result =
     glimpse_module.module.imports
     |> list.map(fn(definition) { definition.definition })

@@ -195,6 +195,21 @@ pub fn target_attribute_with_non_variable_test() {
     == error.InvalidAttributeShape("target")
 }
 
+pub fn unknown_target_attribute_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@target(python)
+    pub fn f() -> Int { 1 }",
+    )
+    == error.UnknownTarget("python")
+}
+
+pub fn known_target_attribute_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@target(javascript)
+pub fn f() -> Int { 1 }",
+  )
+}
+
 pub fn internal_attribute_with_argument_test() {
   assert helpers.error_module_typecheck(
       "@internal(\"x\")
