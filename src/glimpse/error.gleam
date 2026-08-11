@@ -63,6 +63,10 @@ pub type TypeCheckError {
   /// Raised when a function with an `@external` implementation is missing a
   /// return type annotation.
   MissingReturnAnnotation(function_name: String)
+  /// Raised when a function with an `@external` implementation uses a type
+  /// hole (`_` or an underscore-prefixed name) in a parameter or return type
+  /// annotation, whose exact type must be known.
+  UnexpectedTypeHole(name: String)
   /// Raised when `use` syntax is used with an unsupported number of subjects
   InvalidUse(subject_count: Int)
   /// Raised when a `case` (or `let`/`use`) pattern does not cover every

@@ -230,13 +230,14 @@ pub fn external_function_missing_return_annotation_is_rejected_test() {
     == error.MissingReturnAnnotation("f")
 }
 
-pub fn external_function_with_discarded_unannotated_param_is_fine_test() {
-  helpers.ok_module_typecheck(
-    "@external(javascript, \"x\", \"f\")
-pub fn f(_) -> Int {
-  1
-}",
-  )
+pub fn external_function_with_discarded_unannotated_param_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    pub fn f(_) -> Int {
+      1
+    }",
+    )
+    == error.MissingParameterAnnotation("")
 }
 
 pub fn external_function_with_unannotated_labelled_param_is_rejected_test() {
@@ -247,6 +248,42 @@ pub fn external_function_with_unannotated_labelled_param_is_rejected_test() {
     }",
     )
     == error.MissingParameterAnnotation("y")
+}
+
+pub fn external_function_with_type_hole_in_param_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    pub fn f(callback: fn(__zzz) -> Int) -> Int {
+      callback(1)
+    }",
+    )
+    == error.UnexpectedTypeHole("_zzz")
+}
+
+pub fn external_function_with_type_hole_in_return_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    fn f(x: Int) -> fn(__zzz) -> Int",
+    )
+    == error.UnexpectedTypeHole("_zzz")
+}
+
+pub fn external_function_with_bare_hole_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    pub fn f(x: List(_)) -> Int {
+      1
+    }",
+    )
+    == error.UnexpectedTypeHole("")
+}
+
+pub fn non_external_function_with_type_hole_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn g(x: List(_)) -> Int {
+  1
+}",
+  )
 }
 
 pub fn internal_attribute_with_argument_test() {

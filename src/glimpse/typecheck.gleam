@@ -353,17 +353,23 @@ pub fn module(
           case definition.definition.return {
             option.None ->
               Error(error.MissingReturnAnnotation(definition.definition.name))
-            option.Some(_) ->
-              list.fold(
-                definition.definition.parameters,
-                Ok(Nil),
-                fn(param_result, parameter) {
-                  case param_result, parameter.type_ {
-                    Error(e), _ -> Error(e)
-                    Ok(_), option.Some(_) -> Ok(Nil)
-                    Ok(_), option.None ->
-                      case parameter.name {
-                        glance.Named(_) ->
+            option.Some(return_type) ->
+              case type_hole(return_type) {
+                option.Some(name) -> Error(error.UnexpectedTypeHole(name))
+                option.None ->
+                  list.fold(
+                    definition.definition.parameters,
+                    Ok(Nil),
+                    fn(param_result, parameter) {
+                      case param_result, parameter.type_ {
+                        Error(e), _ -> Error(e)
+                        Ok(_), option.Some(annotation) ->
+                          case type_hole(annotation) {
+                            option.Some(name) ->
+                              Error(error.UnexpectedTypeHole(name))
+                            option.None -> Ok(Nil)
+                          }
+                        Ok(_), option.None ->
                           Error(
                             error.MissingParameterAnnotation(
                               case parameter.label {
@@ -371,16 +377,15 @@ pub fn module(
                                 option.None ->
                                   case parameter.name {
                                     glance.Named(name) -> name
-                                    glance.Discarded(_) -> ""
+                                    glance.Discarded(name) -> name
                                   }
                               },
                             ),
                           )
-                        glance.Discarded(_) -> Ok(Nil)
                       }
-                  }
-                },
-              )
+                    },
+                  )
+              }
           }
       }
     }),
@@ -1000,6 +1005,32 @@ fn type_variables_used(type_: glance.Type) -> List(String) {
       |> list.append(type_variables_used(return))
     glance.VariableType(_, name) -> [name]
     glance.HoleType(_, _) -> []
+  }
+}
+
+/// The first type hole (`_` or an underscore-prefixed name) in a type, if any.
+fn type_hole(type_: glance.Type) -> option.Option(String) {
+  case type_ {
+    glance.NamedType(_, _, _, parameters) -> first_type_hole(parameters)
+    glance.TupleType(_, elements) -> first_type_hole(elements)
+    glance.FunctionType(_, parameters, return) ->
+      case first_type_hole(parameters) {
+        option.Some(_) as hole -> hole
+        option.None -> type_hole(return)
+      }
+    glance.VariableType(_, _) -> option.None
+    glance.HoleType(_, name) -> option.Some(name)
+  }
+}
+
+fn first_type_hole(types: List(glance.Type)) -> option.Option(String) {
+  case types {
+    [] -> option.None
+    [first, ..rest] ->
+      case type_hole(first) {
+        option.Some(_) as hole -> hole
+        option.None -> first_type_hole(rest)
+      }
   }
 }
 
