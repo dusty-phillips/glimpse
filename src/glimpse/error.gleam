@@ -166,6 +166,10 @@ pub type TypeCheckError {
   /// Raised when an `@external` attribute has the wrong shape, e.g. a
   /// non-Variable target, or a target/module/function count other than three.
   InvalidExternalAttribute
+  /// Raised when an `@external` attribute is attached somewhere the compiler
+  /// does not allow it: variants, type aliases, or imports. Only functions,
+  /// constants, and custom type declarations may carry `@external`.
+  ExternalAttributePlacement(scope: String)
   /// Raised when an attribute such as `@deprecated` or `@target` has arguments
   /// of the wrong shape, e.g. `@deprecated` without a string message, or
   /// `@target` without a single variable target.

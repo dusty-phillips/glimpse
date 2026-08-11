@@ -282,33 +282,74 @@ pub fn module(
   // The Gleam compiler rejects `@external` attributes naming a build target it
   // does not know (`@external(rust, ...)`) at parse time; the only valid
   // targets are erlang and javascript. It also requires exactly three
-  // arguments (target, module, function) with a `Variable` target.
+  // arguments (target, module, function) with a `Variable` target. These rules
+  // apply wherever `@external` is allowed: functions, constants, and custom
+  // type declarations. On variants, type aliases, and imports `@external` is
+  // rejected outright ("This attribute cannot be used on a variant").
+  let external_scopes = {
+    let from_function =
+      list.map(raw_module.functions, fn(d) { #("function", d.attributes) })
+    let from_constant =
+      list.map(raw_module.constants, fn(d) { #("constant", d.attributes) })
+    let from_type =
+      raw_module.custom_types
+      |> list.map(fn(d) {
+        let variant_attributes =
+          d.definition.variants
+          |> list.map(fn(variant) { #("variant", variant.attributes) })
+        [#("type", d.attributes), ..variant_attributes]
+      })
+      |> list.flatten
+    let from_alias =
+      list.map(raw_module.type_aliases, fn(d) { #("type alias", d.attributes) })
+    let from_import =
+      list.map(raw_module.imports, fn(d) { #("import", d.attributes) })
+    list.flatten([
+      from_function,
+      from_constant,
+      from_type,
+      from_alias,
+      from_import,
+    ])
+  }
   use _ <- result.try(
-    raw_module.functions
-    |> list.map(fn(definition) { definition.attributes })
-    |> list.append(
-      raw_module.constants
-      |> list.map(fn(definition) { definition.attributes }),
-    )
-    |> list.flatten
-    |> list.fold(Ok(Nil), fn(result, attribute) {
-      case result, attribute.name == "external" {
-        Error(e), _ -> Error(e)
-        Ok(_), False -> Ok(Nil)
-        Ok(_), True ->
-          case attribute.arguments {
-            [glance.Variable(_, name), glance.String(_, _), glance.String(_, _)] ->
-              case name == "erlang" || name == "javascript" {
-                True -> Ok(Nil)
-                False -> Error(error.UnknownExternalTarget(name))
-              }
-            [glance.Variable(_, name), ..] ->
-              case name == "erlang" || name == "javascript" {
-                True -> Error(error.InvalidExternalAttribute)
-                False -> Error(error.UnknownExternalTarget(name))
-              }
-            _ -> Error(error.InvalidExternalAttribute)
-          }
+    list.fold(external_scopes, Ok(Nil), fn(result, pair) {
+      let #(scope, attributes) = pair
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          list.fold(attributes, Ok(Nil), fn(result, attribute) {
+            case result {
+              Error(e) -> Error(e)
+              Ok(_) ->
+                case attribute.name == "external" {
+                  False -> Ok(Nil)
+                  True ->
+                    case scope {
+                      "variant" | "type alias" | "import" ->
+                        Error(error.ExternalAttributePlacement(scope))
+                      _ ->
+                        case attribute.arguments {
+                          [
+                            glance.Variable(_, name),
+                            glance.String(_, _),
+                            glance.String(_, _),
+                          ] ->
+                            case name == "erlang" || name == "javascript" {
+                              True -> Ok(Nil)
+                              False -> Error(error.UnknownExternalTarget(name))
+                            }
+                          [glance.Variable(_, name), ..] ->
+                            case name == "erlang" || name == "javascript" {
+                              True -> Error(error.InvalidExternalAttribute)
+                              False -> Error(error.UnknownExternalTarget(name))
+                            }
+                          _ -> Error(error.InvalidExternalAttribute)
+                        }
+                    }
+                }
+            }
+          })
       }
     }),
   )

@@ -156,6 +156,56 @@ pub fn external_attribute_non_variable_target_test() {
     == error.InvalidExternalAttribute
 }
 
+pub fn external_attribute_on_custom_type_wrong_arity_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"a\")
+    pub type T",
+    )
+    == error.InvalidExternalAttribute
+}
+
+pub fn external_attribute_on_custom_type_unknown_target_test() {
+  assert helpers.error_module_typecheck(
+      "@external(python, \"a\", \"b\")
+    pub type T",
+    )
+    == error.UnknownExternalTarget("python")
+}
+
+pub fn external_attribute_on_custom_type_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"x\", \"y\")
+pub type T",
+  )
+}
+
+pub fn external_attribute_on_variant_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type T {
+      @external(javascript, \"x\", \"y\")
+      Variant
+    }",
+    )
+    == error.ExternalAttributePlacement("variant")
+}
+
+pub fn external_attribute_on_type_alias_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"y\")
+    type A = Int",
+    )
+    == error.ExternalAttributePlacement("type alias")
+}
+
+pub fn external_attribute_on_import_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"y\")
+    import gleam/string
+    pub fn f() -> String { \"\" }",
+    )
+    == error.ExternalAttributePlacement("import")
+}
+
 pub fn deprecated_attribute_without_message_test() {
   assert helpers.error_module_typecheck(
       "@deprecated
