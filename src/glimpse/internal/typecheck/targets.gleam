@@ -514,7 +514,11 @@ fn record_update_field_expression(
 /// Report a use of a function that cannot run on the active build target, e.g.
 /// calling `gleam/erlang`'s `reference.new` from javascript-target code. Only
 /// enforced when the module being checked is the package's own code, matching
-/// the real compiler's target-support handling for dependencies.
+/// the real compiler's target-support handling for dependencies. The real
+/// compiler checks every *reference* (not just calls) to a value without an
+/// implementation for the active target, and exempts the body of a function
+/// that itself declares an external for that target (its body is dead code
+/// there, since the external is used instead).
 pub fn check_callee(
   environment: Environment,
   target_expression: glance.Expression,
@@ -522,12 +526,21 @@ pub fn check_callee(
   case environment.check_target_support {
     False -> Ok(Nil)
     True ->
-      case callee_definition_support(environment, target_expression) {
-        option.None -> Ok(Nil)
-        option.Some(#(name, support)) ->
-          case types.target_supports(environment.target, support) {
-            True -> Ok(Nil)
-            False -> Error(error.UnsupportedTarget(name))
+      case
+        types.target_supports(
+          environment.target,
+          environment.current_function_external,
+        )
+      {
+        True -> Ok(Nil)
+        False ->
+          case callee_definition_support(environment, target_expression) {
+            option.None -> Ok(Nil)
+            option.Some(#(name, support)) ->
+              case types.target_supports(environment.target, support) {
+                True -> Ok(Nil)
+                False -> Error(error.UnsupportedTarget(name))
+              }
           }
       }
   }

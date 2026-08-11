@@ -576,7 +576,13 @@ fn typecheck_with_expected(
     glance.Variable(_, "Nil") -> Ok(#(store, types.NilType))
     glance.Variable(_, "True") | glance.Variable(_, "False") ->
       Ok(#(store, types.BoolType))
-    glance.Variable(_, name) ->
+    glance.Variable(_, name) -> {
+      // The real compiler rejects any reference (not just a call) to a value
+      // that has no implementation for the active target.
+      use _ <- result.try(targets.check_callee(
+        environment,
+        glance.Variable(glance.Span(0, 0), name),
+      ))
       types.lookup_variable_type(environment, name)
       |> result.map(fn(type_) {
         // Instantiate so generic values (constructors, polymorphic bindings)
@@ -584,6 +590,7 @@ fn typecheck_with_expected(
         let #(store, type_) = types.instantiate(store, type_)
         #(store, type_)
       })
+    }
 
     glance.NegateInt(_, int_expr) -> {
       use #(store, got) <- result.try(expression(environment, store, int_expr))
@@ -691,14 +698,25 @@ fn typecheck_with_expected(
       // `gleam/list` import for `list.first`, while `dict.fold` on a `Dict`
       // value (no `fold` field) still resolves to the `gleam/dict` module.
       case expression(environment, store, container) {
-        Ok(#(store, types.NamespaceType(nested_defs, _))) ->
+        Ok(#(store, types.NamespaceType(nested_defs, _))) -> {
+          use _ <- result.try(targets.check_callee(
+            environment,
+            glance.FieldAccess(glance.Span(0, 0), container, label),
+          ))
           module_value(store, nested_defs, label)
+        }
         Ok(#(store, container_type)) ->
           case field_access_type(environment, store, container_type, label) {
             Ok(state) -> Ok(state)
             Error(record_error) ->
               case module_field_type(environment, store, container, label) {
-                Ok(state) -> Ok(state)
+                Ok(state) -> {
+                  use _ <- result.try(targets.check_callee(
+                    environment,
+                    glance.FieldAccess(glance.Span(0, 0), container, label),
+                  ))
+                  Ok(state)
+                }
                 Error(_) ->
                   // Only defer to the second body pass once both record and
                   // module access have failed; an unbound container type
@@ -716,8 +734,13 @@ fn typecheck_with_expected(
           }
         Error(expression_error) ->
           case container {
-            glance.Variable(_, _) ->
+            glance.Variable(_, _) -> {
+              use _ <- result.try(targets.check_callee(
+                environment,
+                glance.FieldAccess(glance.Span(0, 0), container, label),
+              ))
               module_field_type(environment, store, container, label)
+            }
             _ -> Error(expression_error)
           }
       }

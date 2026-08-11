@@ -548,7 +548,14 @@ fn typecheck_function_bodies(
         case definition.definition.body == [] {
           True ->
             Ok(types.EnvState(env_state.environment, definition.definition))
-          False -> function(env_state.environment, definition.definition)
+          False ->
+            function(
+              types.Environment(
+                ..env_state.environment,
+                current_function_external: targets.external_support(definition),
+              ),
+              definition.definition,
+            )
         },
       )
       let updated_definition =

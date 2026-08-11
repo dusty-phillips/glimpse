@@ -1198,6 +1198,11 @@ pub type Environment {
     // so a self-call passing a different rigid type variable is rejected like
     // the real compiler rejects it.
     current_function: option.Option(String),
+    // The targets the current function's body is checked against. A function
+    // with an external implementation for the active target uses that external,
+    // so its Gleam body is dead code on that target and references to
+    // target-restricted values inside it are not enforced.
+    current_function_external: TargetSupport,
     // Which targets each of this module's function definitions can run on,
     // keyed by definition name. Entries for imported (unqualified) functions
     // are merged in from their defining module's environment, and entries for
@@ -1246,6 +1251,7 @@ pub fn new_env(current_module: String) -> Environment {
     generic_edges: dict.new(),
     generic_vars: dict.new(),
     current_function: option.None,
+    current_function_external: no_targets_supported(),
     target_support: dict.new(),
     target: target.Erlang,
     check_target_support: False,
@@ -1276,6 +1282,7 @@ pub fn prelude_module_env(module_name: String) -> Environment {
     generic_edges: dict.new(),
     generic_vars: dict.new(),
     current_function: option.None,
+    current_function_external: no_targets_supported(),
     target_support: dict.new(),
     target: target.Erlang,
     check_target_support: False,

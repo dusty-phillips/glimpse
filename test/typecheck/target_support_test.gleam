@@ -158,6 +158,68 @@ pub fn not_calling_erlang_only_external_is_fine_test() {
     )
 }
 
+/// Merely referencing a mismatched function (without calling it) is rejected:
+/// the real compiler narrows implementations at every reference, not just calls.
+pub fn referencing_erlang_only_external_is_rejected_test() {
+  let assert Error(err) =
+    root_typecheck(
+      "import other/package
+      pub fn main() {
+        let f = package.id
+        let _ = f
+      }",
+      target.Javascript,
+    )
+  assert err == error.UnsupportedTarget("id")
+}
+
+/// The same reference from erlang-target code is fine.
+pub fn referencing_erlang_only_external_from_erlang_is_fine_test() {
+  let assert Ok(_) =
+    root_typecheck(
+      "import other/package
+      pub fn main() {
+        let f = package.id
+        f
+      }",
+      target.Erlang,
+    )
+}
+
+/// Referencing a same-module erlang-only function is rejected too.
+pub fn referencing_same_module_erlang_only_function_is_rejected_test() {
+  let assert Error(err) =
+    root_typecheck(
+      "@external(erlang, \"erlonly\", \"new\")
+      fn new() -> Int
+
+      pub fn main() {
+        let f = new
+        let _ = f
+      }",
+      target.Javascript,
+    )
+  assert err == error.UnsupportedTarget("new")
+}
+
+/// A function that declares an external for the active target uses that
+/// external, so references inside its (dead-on-that-target) Gleam body to
+/// target-restricted values are not enforced.
+pub fn current_function_external_exempts_body_references_test() {
+  let assert Ok(_) =
+    root_typecheck(
+      "import other/package
+      @external(javascript, \"x\", \"y\")
+      pub fn bridge() -> Int {
+        package.id(1)
+      }
+      pub fn main() {
+        bridge()
+      }",
+      target.Javascript,
+    )
+}
+
 /// A call to a same-module function that is itself unsupported on the active
 /// target is rejected: the implementation support propagates through the call
 /// within the module, not just across module boundaries.
