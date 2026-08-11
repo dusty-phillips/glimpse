@@ -22,6 +22,20 @@ pub fn panic_return_test() {
     == option.Some(glance.VariableType(unknown_span, "todo"))
 }
 
+/// Piping a value into `todo`/`panic` desugars to a wildcard call accepting any
+/// piped value and arguments, so it must not be treated as an uncallable value.
+pub fn pipe_into_todo_test() {
+  helpers.ok_function_typecheck("fn foo(x: Int) -> Int { x |> todo }")
+}
+
+pub fn pipe_into_todo_with_message_test() {
+  helpers.ok_function_typecheck("fn foo(x: Int) -> Int { x |> todo(\"msg\") }")
+}
+
+pub fn pipe_into_panic_test() {
+  helpers.ok_function_typecheck("fn foo(x: Int) -> Int { x |> panic }")
+}
+
 pub fn tuple_return_test() {
   let function_out =
     helpers.ok_function_typecheck("fn foo() -> #(Int, String) { #(1, \"a\") }")

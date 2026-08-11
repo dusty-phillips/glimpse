@@ -3125,16 +3125,62 @@ fn pipe_value_into_callable(
   glimpse_target: Type,
   arguments: List(glance.Field(glance.Expression)),
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
-  // The piped value occupies a parameter slot, so there is one more argument
-  // than the explicit ones. `callable_parts` also shapes an unbound target
-  // (an unannotated parameter, e.g. `request |> service`) into a fresh callable.
-  use #(store, parameters, labels, return) <- result.try(calls.callable_parts(
-    environment,
-    store,
-    glimpse_target,
-    list.length(arguments) + 1,
-  ))
+  // `value |> todo` desugars to `todo(value, ...)`: the wildcard value accepts
+  // any piped value and arguments (they are its messages) and returns the
+  // wildcard type, so nothing needs to be callable.
+  let #(store, resolved_target) = types.resolve(store, glimpse_target)
+  case resolved_target {
+    types.TodoType -> {
+      use #(store, _) <- result.try(
+        list.try_fold(arguments, #(store, Nil), fn(state, argument) {
+          let #(store, _) = state
+          use #(store, _) <- result.try(case argument {
+            glance.UnlabelledField(expr) -> expression(environment, store, expr)
+            glance.LabelledField(_, _, expr) ->
+              expression(environment, store, expr)
+            glance.ShorthandField(_, _) -> Ok(#(store, types.TodoType))
+          })
+          Ok(#(store, Nil))
+        }),
+      )
+      Ok(#(store, types.TodoType))
+    }
+    _ ->
+      calls.callable_parts(
+        environment,
+        store,
+        resolved_target,
+        list.length(arguments) + 1,
+      )
+      |> result.try(fn(state) {
+        let #(store, parameters, labels, return) = state
+        pipe_value_into_callable_parts(
+          environment,
+          store,
+          left_type,
+          arguments,
+          parameters,
+          labels,
+          return,
+        )
+      })
+  }
+}
 
+/// The pipe mechanics once the target's callable shape is known: the piped
+/// value occupies the first parameter position not claimed by a labelled
+/// argument, the explicit positional arguments fill the free slots after it,
+/// and the call is completed (or the piped value applies to the returned
+/// function when every slot is claimed).
+fn pipe_value_into_callable_parts(
+  environment: Environment,
+  store: TypeStore,
+  left_type: Type,
+  arguments: List(glance.Field(glance.Expression)),
+  parameters: List(Type),
+  labels: dict.Dict(String, Int),
+  return: Type,
+) -> error.TypeCheckResult(#(TypeStore, Type)) {
   // The piped value occupies the first parameter position not claimed by a
   // labelled argument, matching how `value |> f(label: x)` desugars to
   // `f(value, label: x)`; the explicit positional arguments fill the free
