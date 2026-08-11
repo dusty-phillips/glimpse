@@ -167,9 +167,14 @@ pub type TypeCheckError {
   /// non-Variable target, or a target/module/function count other than three.
   InvalidExternalAttribute
   /// Raised when an `@external` attribute is attached somewhere the compiler
-  /// does not allow it: variants, type aliases, or imports. Only functions,
-  /// constants, and custom type declarations may carry `@external`.
+  /// does not allow it: constants, variants, type aliases, or imports. Only
+  /// functions and custom type declarations may carry `@external`.
   ExternalAttributePlacement(scope: String)
+  /// Raised when `@target` or `@internal` is attached somewhere the compiler
+  /// does not allow it. `@target` cannot be used on variants; `@internal` must
+  /// be on a public declaration (or an import), so private functions,
+  /// constants, types, and type aliases are rejected.
+  InvalidAttributePlacement(attribute: String, scope: String)
   /// Raised when an attribute such as `@deprecated` or `@target` has arguments
   /// of the wrong shape, e.g. `@deprecated` without a string message, or
   /// `@target` without a single variable target.

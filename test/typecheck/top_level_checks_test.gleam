@@ -260,6 +260,57 @@ pub fn f() -> Int { 1 }",
   )
 }
 
+pub fn external_attribute_on_constant_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(erlang, \"a\", \"b\")
+    const c: Int = 1",
+    )
+    == error.ExternalAttributePlacement("constant")
+}
+
+pub fn internal_attribute_on_constant_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@internal
+    const c: Int = 1",
+    )
+    == error.InvalidAttributePlacement("internal", "constant")
+}
+
+pub fn internal_attribute_on_public_constant_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@internal
+pub const c: Int = 1",
+  )
+}
+
+pub fn internal_attribute_on_variant_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type T {
+      @internal
+      T
+    }",
+    )
+    == error.InvalidAttributePlacement("internal", "variant")
+}
+
+pub fn target_attribute_on_variant_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type T {
+      @target(erlang)
+      T
+    }",
+    )
+    == error.InvalidAttributePlacement("target", "variant")
+}
+
+pub fn internal_attribute_on_type_alias_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@internal
+    type A = Int",
+    )
+    == error.InvalidAttributePlacement("internal", "type alias")
+}
+
 pub fn external_function_missing_param_annotation_is_rejected_test() {
   assert helpers.error_module_typecheck(
       "@external(javascript, \"x\", \"f\")

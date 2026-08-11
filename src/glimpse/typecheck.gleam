@@ -283,27 +283,36 @@ pub fn module(
   // does not know (`@external(rust, ...)`) at parse time; the only valid
   // targets are erlang and javascript. It also requires exactly three
   // arguments (target, module, function) with a `Variable` target. These rules
-  // apply wherever `@external` is allowed: functions, constants, and custom
-  // type declarations. On variants, type aliases, and imports `@external` is
-  // rejected outright ("This attribute cannot be used on a variant").
+  // apply wherever `@external` is allowed: functions and custom type
+  // declarations. On constants, variants, type aliases, and imports `@external`
+  // is rejected outright ("This attribute cannot be used on a variant").
   let external_scopes = {
     let from_function =
-      list.map(raw_module.functions, fn(d) { #("function", d.attributes) })
+      list.map(raw_module.functions, fn(d) {
+        #("function", d.definition.publicity == glance.Public, d.attributes)
+      })
     let from_constant =
-      list.map(raw_module.constants, fn(d) { #("constant", d.attributes) })
+      list.map(raw_module.constants, fn(d) {
+        #("constant", d.definition.publicity == glance.Public, d.attributes)
+      })
     let from_type =
       raw_module.custom_types
       |> list.map(fn(d) {
         let variant_attributes =
           d.definition.variants
-          |> list.map(fn(variant) { #("variant", variant.attributes) })
-        [#("type", d.attributes), ..variant_attributes]
+          |> list.map(fn(variant) { #("variant", False, variant.attributes) })
+        [
+          #("type", d.definition.publicity == glance.Public, d.attributes),
+          ..variant_attributes
+        ]
       })
       |> list.flatten
     let from_alias =
-      list.map(raw_module.type_aliases, fn(d) { #("type alias", d.attributes) })
+      list.map(raw_module.type_aliases, fn(d) {
+        #("type alias", d.definition.publicity == glance.Public, d.attributes)
+      })
     let from_import =
-      list.map(raw_module.imports, fn(d) { #("import", d.attributes) })
+      list.map(raw_module.imports, fn(d) { #("import", True, d.attributes) })
     list.flatten([
       from_function,
       from_constant,
@@ -313,8 +322,8 @@ pub fn module(
     ])
   }
   use _ <- result.try(
-    list.fold(external_scopes, Ok(Nil), fn(result, pair) {
-      let #(scope, attributes) = pair
+    list.fold(external_scopes, Ok(Nil), fn(result, triple) {
+      let #(scope, _public, attributes) = triple
       case result {
         Error(e) -> Error(e)
         Ok(_) ->
@@ -326,7 +335,7 @@ pub fn module(
                   False -> Ok(Nil)
                   True ->
                     case scope {
-                      "variant" | "type alias" | "import" ->
+                      "variant" | "type alias" | "import" | "constant" ->
                         Error(error.ExternalAttributePlacement(scope))
                       _ ->
                         case attribute.arguments {
@@ -351,6 +360,31 @@ pub fn module(
             }
           })
       }
+    }),
+  )
+
+  // `@target` may not appear on a variant, and `@internal` may only appear on
+  // a public declaration (or an import). The real compiler rejects these
+  // placements at parse time.
+  use _ <- result.try(
+    list.fold(external_scopes, Ok(Nil), fn(result, triple) {
+      let #(scope, public, attributes) = triple
+      list.fold(attributes, result, fn(result, attribute) {
+        case result, attribute.name {
+          Error(e), _ -> Error(e)
+          Ok(_), "target" ->
+            case scope == "variant" {
+              True -> Error(error.InvalidAttributePlacement("target", scope))
+              False -> Ok(Nil)
+            }
+          Ok(_), "internal" ->
+            case public {
+              True -> Ok(Nil)
+              False -> Error(error.InvalidAttributePlacement("internal", scope))
+            }
+          Ok(_), _ -> Ok(Nil)
+        }
+      })
     }),
   )
 
