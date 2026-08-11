@@ -36,6 +36,27 @@ pub fn pipe_into_panic_test() {
   helpers.ok_function_typecheck("fn foo(x: Int) -> Int { x |> panic }")
 }
 
+/// `todo`/`panic` expect no labels, so a labelled argument is rejected both
+/// directly and via a pipe.
+pub fn labelled_argument_to_todo_is_rejected_test() {
+  let err = helpers.error_function_typecheck("fn foo() -> Int { todo(foo: 1) }")
+  assert err == error.UnexpectedLabelledArgument("foo")
+}
+
+pub fn labelled_argument_to_todo_via_pipe_is_rejected_test() {
+  let err =
+    helpers.error_function_typecheck(
+      "fn foo(x: Int) -> Int { x |> todo(foo: 1) }",
+    )
+  assert err == error.UnexpectedLabelledArgument("foo")
+}
+
+pub fn labelled_argument_to_panic_is_rejected_test() {
+  let err =
+    helpers.error_function_typecheck("fn foo() -> Int { panic(foo: 1) }")
+  assert err == error.UnexpectedLabelledArgument("foo")
+}
+
 pub fn tuple_return_test() {
   let function_out =
     helpers.ok_function_typecheck("fn foo() -> #(Int, String) { #(1, \"a\") }")

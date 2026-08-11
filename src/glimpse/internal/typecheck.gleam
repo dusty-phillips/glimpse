@@ -2665,9 +2665,10 @@ pub fn call(
           let #(store, _) = state
           use #(store, _) <- result.try(case argument {
             glance.UnlabelledField(expr) -> expression(environment, store, expr)
-            glance.LabelledField(_, _, expr) ->
-              expression(environment, store, expr)
-            glance.ShorthandField(_, _) -> Ok(#(store, types.TodoType))
+            glance.LabelledField(label, _, _) ->
+              Error(error.UnexpectedLabelledArgument(label))
+            glance.ShorthandField(label, _) ->
+              Error(error.UnexpectedLabelledArgument(label))
           })
           Ok(#(store, Nil))
         }),
@@ -3136,9 +3137,10 @@ fn pipe_value_into_callable(
           let #(store, _) = state
           use #(store, _) <- result.try(case argument {
             glance.UnlabelledField(expr) -> expression(environment, store, expr)
-            glance.LabelledField(_, _, expr) ->
-              expression(environment, store, expr)
-            glance.ShorthandField(_, _) -> Ok(#(store, types.TodoType))
+            glance.LabelledField(label, _, _) ->
+              Error(error.UnexpectedLabelledArgument(label))
+            glance.ShorthandField(label, _) ->
+              Error(error.UnexpectedLabelledArgument(label))
           })
           Ok(#(store, Nil))
         }),

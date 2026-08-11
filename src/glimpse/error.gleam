@@ -36,6 +36,9 @@ pub type TypeCheckError {
   NotCallable(got: String)
   InvalidArguments(expected: String, actual_arguments: String)
   InvalidArgumentLabel(expected: String, got: String)
+  /// Raised when `todo` or `panic` is given a labelled or shorthand argument:
+  /// their wildcard signature expects no labels at all.
+  UnexpectedLabelledArgument(label: String)
   DuplicateCustomType(name: String)
   InvalidFieldAccess(container: String, label: String)
   /// Raised when a type is used where a tuple/record/etc is required
