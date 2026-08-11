@@ -99,6 +99,12 @@ pub fn package(
 /// Infer and typecheck a single module in the given package. Any modules that
 /// this module imports *must* have already been inferred.
 ///
+/// `check_target_support` controls whether target support is enforced for this
+/// module's definitions (pass `False` for dependencies, mirroring the real
+/// compiler's `TargetSupport::NotEnforced`; pass `True` for the package being
+/// checked, which additionally enables the use-site checks that reject calls
+/// to functions with no implementation for the active target).
+///
 /// Returns a variation of the package where the module's contents have been
 /// updated based on any inferences that were made.
 pub fn module(
