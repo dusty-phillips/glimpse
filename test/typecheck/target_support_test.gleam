@@ -27,6 +27,18 @@ fn other_package() -> String {
   pub fn referenced() -> fn() -> Int {
     let f = new
     f
+  }
+
+  pub fn get() -> fn() -> Int {
+    new
+  }
+
+  pub fn id_(f: fn() -> Int) -> fn() -> Int {
+    f
+  }
+
+  pub fn call_it(f: fn() -> Int) -> Int {
+    f()
   }"
 }
 
@@ -137,6 +149,47 @@ pub fn calling_dependency_function_that_references_erlang_only_is_rejected_test(
       target.Javascript,
     )
   assert err == error.UnsupportedTarget("referenced")
+}
+
+/// A dependency function that returns a restricted value is narrowed, so
+/// calling it (even to then call the returned value) is rejected.
+pub fn calling_dependency_function_returning_restricted_value_is_rejected_test() {
+  let assert Error(err) =
+    root_typecheck(
+      "import other/package
+      pub fn main() {
+        let _ = package.get()()
+      }",
+      target.Javascript,
+    )
+  assert err == error.UnsupportedTarget("get")
+}
+
+/// A restricted value passed through a pure dependency function keeps its
+/// restriction: the reference to the restricted function narrows the producer,
+/// so the whole chain is rejected.
+pub fn restricted_value_flowing_through_dependency_is_rejected_test() {
+  let assert Error(err) =
+    root_typecheck(
+      "import other/package
+      pub fn main() {
+        let _ = package.id_(package.get())()
+      }",
+      target.Javascript,
+    )
+  assert err == error.UnsupportedTarget("get")
+}
+
+/// Calling a pure dependency function with a pure argument is fine.
+pub fn pure_value_through_dependency_is_fine_test() {
+  let assert Ok(_) =
+    root_typecheck(
+      "import other/package
+      pub fn main() {
+        let _ = package.call_it(fn() { 0 })
+      }",
+      target.Javascript,
+    )
 }
 
 /// A function capture referencing a mismatched external is rejected at the
