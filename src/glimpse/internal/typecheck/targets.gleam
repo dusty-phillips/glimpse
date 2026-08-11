@@ -185,13 +185,14 @@ fn module_path_of(
   }
 }
 
-/// The named functions a function body invokes. Only invocations constrain
-/// target support (a bare function reference can simply never be called on a
-/// given target); recursion into nested lambdas, case clauses, and blocks
-/// counts, since those calls run as part of this function's execution.
-/// Names bound in the local scope (lambda parameters, let/use bindings, case
-/// patterns) shadow same-named module functions, so a call to them is a call
-/// to a local value, not the module function.
+/// The named functions a function body invokes or references. Referencing a
+/// function narrows target support just as calling it does (the value's
+/// implementation must exist on the target), so both are counted; recursion
+/// into nested lambdas, case clauses, and blocks counts too, since those run
+/// as part of this function's execution. Names bound in the local scope
+/// (lambda parameters, let/use bindings, case patterns) shadow same-named
+/// module functions, so a use of them is a local value, not the module
+/// function.
 fn body_callees(function: glance.Function) -> List(CallTarget) {
   statement_callees(function.body, set.new())
 }
@@ -242,10 +243,17 @@ fn expression_callees(
   expression: glance.Expression,
 ) -> List(CallTarget) {
   case expression {
-    glance.Int(..)
-    | glance.Float(..)
-    | glance.String(..)
-    | glance.Variable(..) -> []
+    glance.Int(..) | glance.Float(..) | glance.String(..) -> []
+    // Referencing a function narrows the containing function to the targets
+    // the referenced function supports, matching the real compiler's
+    // implementations propagation: creating the value requires the
+    // implementation to exist on the active target. A name bound in the local
+    // scope is a local value, not the module function.
+    glance.Variable(_, name) ->
+      case set.contains(scope, name) {
+        True -> []
+        False -> [types.Named(name)]
+      }
     glance.NegateInt(_, value) | glance.NegateBool(_, value) ->
       expression_callees(scope, value)
     glance.Block(_, statements) -> statement_callees(statements, scope)
@@ -277,7 +285,15 @@ fn expression_callees(
           }),
         ),
       )
-    glance.FieldAccess(_, container, _) -> expression_callees(scope, container)
+    glance.FieldAccess(_, container, label) ->
+      case container {
+        glance.Variable(_, container_name) ->
+          case set.contains(scope, container_name) {
+            True -> []
+            False -> [types.Namespaced(container_name, label)]
+          }
+        _ -> expression_callees(scope, container)
+      }
     glance.Call(_, target, arguments) ->
       list.append(
         call_target_callees(scope, target),

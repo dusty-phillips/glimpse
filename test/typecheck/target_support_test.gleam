@@ -22,6 +22,11 @@ fn other_package() -> String {
 
   pub fn with_callback(callback: fn(Int) -> Int) -> Int {
     callback(new())
+  }
+
+  pub fn referenced() -> fn() -> Int {
+    let f = new
+    f
   }"
 }
 
@@ -116,6 +121,22 @@ pub fn use_of_erlang_only_function_is_rejected_test() {
       target.Javascript,
     )
   assert err == error.UnsupportedTarget("with_callback")
+}
+
+/// A dependency function that merely references a mismatched function (without
+/// calling it) is itself narrowed: the reference propagates its target
+/// restriction, so calling the dependency function from javascript-target code
+/// is rejected.
+pub fn calling_dependency_function_that_references_erlang_only_is_rejected_test() {
+  let assert Error(err) =
+    root_typecheck(
+      "import other/package
+      pub fn main() {
+        package.referenced()
+      }",
+      target.Javascript,
+    )
+  assert err == error.UnsupportedTarget("referenced")
 }
 
 /// A function capture referencing a mismatched external is rejected at the
