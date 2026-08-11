@@ -210,6 +210,45 @@ pub fn f() -> Int { 1 }",
   )
 }
 
+pub fn external_function_missing_param_annotation_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    pub fn f(x) -> Int {
+      x
+    }",
+    )
+    == error.MissingParameterAnnotation("x")
+}
+
+pub fn external_function_missing_return_annotation_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    pub fn f(x: Int) {
+      x
+    }",
+    )
+    == error.MissingReturnAnnotation("f")
+}
+
+pub fn external_function_with_discarded_unannotated_param_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"x\", \"f\")
+pub fn f(_) -> Int {
+  1
+}",
+  )
+}
+
+pub fn external_function_with_unannotated_labelled_param_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"x\", \"f\")
+    pub fn f(tag x: Int, y) -> Int {
+      x
+    }",
+    )
+    == error.MissingParameterAnnotation("y")
+}
+
 pub fn internal_attribute_with_argument_test() {
   assert helpers.error_module_typecheck(
       "@internal(\"x\")

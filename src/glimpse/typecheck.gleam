@@ -335,6 +335,57 @@ pub fn module(
     }),
   )
 
+  // A function with an `@external` implementation must have type annotations
+  // for its return type and every non-discarded parameter: without them the
+  // real compiler cannot know what values it accepts and returns. The real
+  // compiler reports the missing return annotation first, then parameters.
+  use _ <- result.try(
+    list.fold(raw_module.functions, Ok(Nil), fn(result, definition) {
+      case
+        result,
+        list.any(definition.attributes, fn(attribute) {
+          attribute.name == "external"
+        })
+      {
+        Error(e), _ -> Error(e)
+        Ok(_), False -> Ok(Nil)
+        Ok(_), True ->
+          case definition.definition.return {
+            option.None ->
+              Error(error.MissingReturnAnnotation(definition.definition.name))
+            option.Some(_) ->
+              list.fold(
+                definition.definition.parameters,
+                Ok(Nil),
+                fn(param_result, parameter) {
+                  case param_result, parameter.type_ {
+                    Error(e), _ -> Error(e)
+                    Ok(_), option.Some(_) -> Ok(Nil)
+                    Ok(_), option.None ->
+                      case parameter.name {
+                        glance.Named(_) ->
+                          Error(
+                            error.MissingParameterAnnotation(
+                              case parameter.label {
+                                option.Some(label) -> label
+                                option.None ->
+                                  case parameter.name {
+                                    glance.Named(name) -> name
+                                    glance.Discarded(_) -> ""
+                                  }
+                              },
+                            ),
+                          )
+                        glance.Discarded(_) -> Ok(Nil)
+                      }
+                  }
+                },
+              )
+          }
+      }
+    }),
+  )
+
   let imports_result =
     glimpse_module.module.imports
     |> list.map(fn(definition) { definition.definition })
