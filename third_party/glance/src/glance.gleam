@@ -1787,9 +1787,19 @@ fn case_(
   start: Int,
 ) -> Result(#(Option(Expression), Tokens), Error) {
   use #(subjects, tokens) <- result.try(case_subjects([], tokens))
-  use _, tokens <- expect(t.LeftBrace, tokens)
-  use #(clauses, tokens, end) <- result.try(case_clauses([], tokens))
-  Ok(#(Some(Case(Span(start, end), subjects, clauses)), tokens))
+  // The real compiler parses `case subject` without a `{ ... }` body as a
+  // case with no clauses, reporting "Missing case body" only during analysis
+  // (which never runs for target-filtered definitions). Parse the same shape
+  // so filtered definitions with corrupted bodies are accepted like real
+  // Gleam; a body-less case in analysed code then fails the typecheck.
+  case tokens {
+    [#(t.LeftBrace, _), ..] -> {
+      use _, tokens <- expect(t.LeftBrace, tokens)
+      use #(clauses, tokens, end) <- result.try(case_clauses([], tokens))
+      Ok(#(Some(Case(Span(start, end), subjects, clauses)), tokens))
+    }
+    _ -> Ok(#(Some(Case(Span(start, start), subjects, [])), tokens))
+  }
 }
 
 fn case_subjects(

@@ -7,3 +7,7 @@ glance 7.0.0 vendored from hex, with one local patch:
   glance silently dropped the opaque flag for aliases). See the opacity bug.
 
 Re-apply the patch to `src/glance.gleam` if the dependency is refreshed.
+
+- `case_` parses a body-less `case subject` (no `{ ... }`) as a case with no
+  clauses: real Gleam parses this shape and only reports "Missing case body"
+  during analysis, which never runs for target-filtered definitions.
