@@ -485,6 +485,9 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "bitsizepat ",
     "concatpat ",
     "pipefn ",
+    "extann ",
+    "exthole ",
+    "attrplace ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -4390,6 +4393,244 @@ fn find_piped_fn(line: String) -> option.Option(#(Int, Int)) {
   }
 }
 
+/// Kind `extann`: drop a parameter or return annotation from a function
+/// signature line. Real Gleam requires every parameter and the return of an
+/// external function to be annotated, so these mutants are rejected for
+/// externals and accepted for regular functions (whose parameters and return
+/// may be inferred).
+fn extann_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_param_annotation(line) {
+      option.None -> []
+      option.Some(#(colon, _type_start, type_end)) -> {
+        let mutated =
+          string.slice(line, at_index: 0, length: colon)
+          <> string.slice(
+            line,
+            at_index: type_end,
+            length: string.length(line) - type_end,
+          )
+        [#("extann param-drop", source_of(lines, idx, mutated))]
+      }
+    }
+    |> list.append(case find_return_annotation(line) {
+      option.None -> []
+      option.Some(#(arrow, _type_start, type_end)) -> {
+        let mutated =
+          string.slice(line, at_index: 0, length: arrow)
+          <> string.slice(
+            line,
+            at_index: type_end,
+            length: string.length(line) - type_end,
+          )
+        [#("extann return-drop", source_of(lines, idx, mutated))]
+      }
+    })
+  })
+  |> list.flatten
+}
+
+/// Kind `exthole`: replace a parameter or return type annotation with a type
+/// hole (`_`). Real Gleam rejects holes anywhere in an external function's
+/// signature, while regular functions may use them (the type is inferred).
+fn exthole_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_param_annotation(line) {
+      option.None -> []
+      option.Some(#(_colon, type_start, type_end)) -> [
+        #(
+          "exthole param",
+          source_of(
+            lines,
+            idx,
+            replace_token_at(lines, idx, type_start, type_end - type_start, "_"),
+          ),
+        ),
+      ]
+    }
+    |> list.append(case find_return_annotation(line) {
+      option.None -> []
+      option.Some(#(_arrow, type_start, type_end)) -> [
+        #(
+          "exthole return",
+          source_of(
+            lines,
+            idx,
+            replace_token_at(lines, idx, type_start, type_end - type_start, "_"),
+          ),
+        ),
+      ]
+    })
+  })
+  |> list.flatten
+}
+
+/// Kind `attrplace`: prepend an attribute that real Gleam forbids on the
+/// following declaration: `@internal` on a private declaration, `@target` on a
+/// variant constructor, or `@external` on a constant.
+fn attrplace_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let trimmed = string.trim(fetch(lines, idx))
+    let internal_mutants = case
+      string.starts_with(trimmed, "fn ")
+      || string.starts_with(trimmed, "const ")
+      || string.starts_with(trimmed, "type ")
+    {
+      True -> insert_line(lines, idx, "@internal", "attrplace internal-private")
+      False -> []
+    }
+    let variant_mutants = case trimmed |> string.first {
+      Ok(first) ->
+        case string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", first) {
+          True ->
+            insert_line(
+              lines,
+              idx,
+              "@target(javascript)",
+              "attrplace target-variant",
+            )
+          False -> []
+        }
+      Error(_) -> []
+    }
+    let const_mutants = case
+      string.starts_with(trimmed, "pub const ")
+      || string.starts_with(trimmed, "const ")
+    {
+      True ->
+        insert_line(
+          lines,
+          idx,
+          "@external(erlang, \"a\", \"b\")",
+          "attrplace external-const",
+        )
+      False -> []
+    }
+    internal_mutants
+    |> list.append(variant_mutants)
+    |> list.append(const_mutants)
+  })
+  |> list.flatten
+}
+
+/// The first `name: Type` parameter-style annotation on `line`: a `:` preceded
+/// by an identifier whose following simple token is a letter-led identifier not
+/// immediately followed by `(` (a plain annotation, not `List(...)`). Returns
+/// the offsets of the `:` and of the type token.
+fn find_param_annotation(line: String) -> option.Option(#(Int, Int, Int)) {
+  find_param_annotation_from(line, 0)
+}
+
+fn find_param_annotation_from(
+  line: String,
+  pos: Int,
+) -> option.Option(#(Int, Int, Int)) {
+  case pos >= string.length(line) {
+    True -> option.None
+    False ->
+      case byte_at(line, pos) == ":" && !inside_string(line, pos) {
+        False -> find_param_annotation_from(line, pos + 1)
+        True ->
+          case is_identifier_char(byte_at(line, pos - 1)) {
+            False -> find_param_annotation_from(line, pos + 1)
+            True ->
+              case first_simple_start(line, pos + 1) {
+                option.None -> find_param_annotation_from(line, pos + 1)
+                option.Some(type_start) -> {
+                  let type_end = simple_token_end(line, type_start)
+                  case
+                    type_end > type_start
+                    && byte_at(line, type_end) != "("
+                    && is_letter_start(line, type_start)
+                  {
+                    True -> option.Some(#(pos, type_start, type_end))
+                    False -> find_param_annotation_from(line, pos + 1)
+                  }
+                }
+              }
+          }
+      }
+  }
+}
+
+/// The first `-> Type {` return annotation on `line`: an arrow whose previous
+/// character is `)` (a function return, not a case clause arrow) and whose
+/// following simple token is a letter-led identifier, optionally followed by
+/// whitespace then `{` or the end of the line. Returns the offsets of the arrow
+/// and of the type token.
+fn find_return_annotation(line: String) -> option.Option(#(Int, Int, Int)) {
+  find_return_annotation_from(line, 0)
+}
+
+fn find_return_annotation_from(
+  line: String,
+  pos: Int,
+) -> option.Option(#(Int, Int, Int)) {
+  case pos + 1 >= string.length(line) {
+    True -> option.None
+    False ->
+      case
+        string.slice(line, at_index: pos, length: 2) == "->"
+        && !inside_string(line, pos)
+        && prev_non_space(line, pos) == ")"
+      {
+        False -> find_return_annotation_from(line, pos + 1)
+        True ->
+          case first_simple_start(line, pos + 2) {
+            option.None -> find_return_annotation_from(line, pos + 1)
+            option.Some(type_start) -> {
+              let type_end = simple_token_end(line, type_start)
+              case type_end > type_start && is_letter_start(line, type_start) {
+                False -> find_return_annotation_from(line, pos + 1)
+                True ->
+                  case skip_spaces(line, type_end) {
+                    option.None -> option.Some(#(pos, type_start, type_end))
+                    option.Some(after) ->
+                      case byte_at(line, after) == "{" {
+                        True -> option.Some(#(pos, type_start, type_end))
+                        False -> find_return_annotation_from(line, pos + 1)
+                      }
+                  }
+              }
+            }
+          }
+      }
+  }
+}
+
+/// Whether the simple token at `start` on `line` begins with a letter.
+fn is_letter_start(line: String, start: Int) -> Bool {
+  string.contains(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    byte_at(line, start),
+  )
+}
+
+/// The last non-space character before `pos` on `line`, or `""` at the start.
+fn prev_non_space(line: String, pos: Int) -> String {
+  case pos <= 0 {
+    True -> ""
+    False ->
+      case byte_at(line, pos - 1) == " " {
+        True -> prev_non_space(line, pos - 1)
+        False -> byte_at(line, pos - 1)
+      }
+  }
+}
+
+/// Insert `extra` as a new line before `index`, producing one mutant.
+fn insert_line(
+  lines: List(String),
+  index: Int,
+  extra: String,
+  desc: String,
+) -> List(Mutant) {
+  let #(before, after) = list.split(lines, at: index)
+  [#(desc, string.join(list.append(before, [extra, ..after]), "\n"))]
+}
+
 /// Everything we can mutate in a file, one kind's mutants appended to the next.
 fn mutate_file(source: String) -> List(Mutant) {
   let lines = split_lines(source)
@@ -4441,6 +4682,9 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(bitsizepat_mutants(lines))
   |> list.append(concatpat_mutants(lines))
   |> list.append(pipefn_mutants(lines))
+  |> list.append(extann_mutants(lines))
+  |> list.append(exthole_mutants(lines))
+  |> list.append(attrplace_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that
