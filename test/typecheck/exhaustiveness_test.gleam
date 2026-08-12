@@ -213,3 +213,33 @@ pub fn main(x: Three) -> Int {
     )
     == error.InexhaustivePattern("Nothing")
 }
+
+pub fn exhaustive_on_inferred_return_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn g() {
+  True
+}
+
+pub fn f() -> Int {
+  case g() {
+    True -> 1
+    False -> 0
+  }
+}",
+  )
+}
+
+pub fn inexhaustive_on_inferred_return_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn g() {
+  True
+}
+
+pub fn f() -> Int {
+  case g() {
+    True -> 1
+  }
+}",
+    )
+    == error.InexhaustivePattern("False")
+}

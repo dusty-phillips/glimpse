@@ -2058,18 +2058,33 @@ fn case_expression(
     }),
   )
 
+  // Exhaustiveness is checked on the *resolved* subject types. A subject whose
+  // type is not yet known (an unbound inference variable, or the return of a
+  // function whose signature is still inferred) cannot be judged: deferring
+  // matches the real compiler, which checks exhaustiveness after all bodies
+  // are analysed. The second body pass, where every signature has been
+  // written back, re-runs this check on the resolved types.
+  let resolved_subjects = resolve_subjects(store, subject_types)
+  let exhaustiveness_deferred =
+    list.any(resolved_subjects, fn(type_) {
+      case type_ {
+        types.Var(_) | types.InferredReturn | types.TodoType -> True
+        _ -> False
+      }
+    })
+
   case clauses {
     [] ->
-      case
-        exhaustive.check(
-          environment,
-          resolve_subjects(store, subject_types),
-          [],
-        )
-      {
-        option.Some(missing) ->
-          Error(error.InexhaustivePattern(string.join(missing, "\n")))
-        option.None -> Error(error.CaseClauseMismatch("no clauses", "any"))
+      case exhaustiveness_deferred {
+        True -> Error(error.CaseClauseMismatch("no clauses", "any"))
+        False ->
+          case
+            exhaustive.check(environment, resolved_subjects, [])
+          {
+            option.Some(missing) ->
+              Error(error.InexhaustivePattern(string.join(missing, "\n")))
+            option.None -> Error(error.CaseClauseMismatch("no clauses", "any"))
+          }
       }
     [_first_clause, ..] -> {
       // Typecheck each clause body sequentially, threading the store so each
@@ -2140,16 +2155,14 @@ fn case_expression(
         Error(check_error) -> Error(check_error)
         Ok(case_state) -> {
           let #(store, _case_type) = case_state
-          case
-            exhaustive.check(
-              environment,
-              resolve_subjects(store, subject_types),
-              alternatives,
-            )
-          {
-            option.Some(missing) ->
-              Error(error.InexhaustivePattern(string.join(missing, "\n")))
-            option.None -> Ok(case_state)
+          case exhaustiveness_deferred {
+            True -> Ok(case_state)
+            False ->
+              case exhaustive.check(environment, resolved_subjects, alternatives) {
+                option.Some(missing) ->
+                  Error(error.InexhaustivePattern(string.join(missing, "\n")))
+                option.None -> Ok(case_state)
+              }
           }
         }
       }
