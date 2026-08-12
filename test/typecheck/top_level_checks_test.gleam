@@ -78,7 +78,7 @@ pub fn private_type_nested_in_public_signature_test() {
     type PrivateType
     pub fn parse() -> Result(PrivateType, Nil)",
     )
-    == error.PrivateTypeLeak("PrivateType")
+    == error.UnsupportedTarget("parse")
 }
 
 pub fn todo_in_a_constant_test() {
@@ -502,6 +502,25 @@ pub fn private_unsupported_target_external_is_fine_test() {
   helpers.ok_module_typecheck(
     "@external(javascript, \"m\", \"f\")
     fn f() -> Int",
+  )
+}
+
+pub fn bodyless_function_without_external_is_rejected_test() {
+  assert helpers.error_module_typecheck("pub fn f() -> Int")
+    == error.UnsupportedTarget("f")
+}
+
+pub fn private_bodyless_function_without_external_is_rejected_test() {
+  assert helpers.error_module_typecheck("fn f() -> Int")
+    == error.UnsupportedTarget("f")
+}
+
+pub fn empty_brace_body_is_an_implementation_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f() -> Nil {}
+pub fn g() -> Int {
+  1
+}",
   )
 }
 

@@ -175,25 +175,42 @@ pub fn module(
     option.None -> Ok(Nil)
   })
 
-  // A public function with no body must have an `@external` implementation for
-  // the active build target; otherwise it is unsupported on that target. The
-  // real compiler reports `Unsupported target` for e.g. a public `@external`
-  // function that only implements javascript while checking the erlang target.
-  // Like the real compiler, this is enforced only for the package being
-  // checked, not for its dependencies: a dependency's erlang-only externals
-  // must not fail a javascript-target project, and vice versa.
+  // A function with no body must be implementable on the active target. The
+  // real compiler reports `Function without an implementation` for a body-less
+  // function with no external at all (any publicity), and `Unsupported target`
+  // for a *public* body-less external function whose `@external`s only cover
+  // other targets. Private functions whose externals target other targets are
+  // accepted by the real compiler. Like the real compiler, this is enforced
+  // only for the package being checked, not for its dependencies: a
+  // dependency's erlang-only externals must not fail a javascript-target
+  // project, and vice versa.
   use _ <- result.try(case check_target_support {
     False -> Ok(Nil)
     True ->
       list.try_fold(glimpse_module.module.functions, Nil, fn(_, definition) {
         let glance_function = definition.definition
-        case
-          glance_function.publicity == glance.Public
-          && glance_function.body == []
-          && !target.function_supported(target, definition)
-        {
-          True -> Error(error.UnsupportedTarget(glance_function.name))
+        let external_count =
+          list.count(definition.attributes, fn(attribute) {
+            attribute.name == "external"
+          })
+        case glance_function.body == [] {
           False -> Ok(Nil)
+          True ->
+            case external_count {
+              0 ->
+                case target.function_supported(target, definition) {
+                  True -> Ok(Nil)
+                  False -> Error(error.UnsupportedTarget(glance_function.name))
+                }
+              _ ->
+                case
+                  glance_function.publicity == glance.Public
+                  && !target.function_supported(target, definition)
+                {
+                  True -> Error(error.UnsupportedTarget(glance_function.name))
+                  False -> Ok(Nil)
+                }
+            }
         }
       })
   })

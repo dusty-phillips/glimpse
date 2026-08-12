@@ -1,5 +1,6 @@
 import glance
 import gleam/list
+import gleam/option
 
 /// The build target that a package is being typechecked for. Definitions
 /// annotated with `@target(erlang)`, `@target(javascript)`, or a custom target
@@ -62,12 +63,14 @@ fn target_name(target: Target) -> String {
 /// Whether a function definition is usable on the given target: pure Gleam
 /// functions and functions with a body run everywhere, while a body-less
 /// external function runs only on the targets its `@external` attributes name.
+/// A body-less function with no external at all has no implementation on any
+/// target (the real compiler reports "Function without an implementation").
 pub fn function_supported(
   target: Target,
   definition: glance.Definition(glance.Function),
 ) -> Bool {
   case external_attributes(definition) {
-    [] -> True
+    [] -> function_has_braces_body(definition)
     _ ->
       case definition.definition.body {
         [] ->
@@ -76,6 +79,34 @@ pub fn function_supported(
           })
         _ -> True
       }
+  }
+}
+
+/// Whether a function was written with a `{ ... }` body, as opposed to being a
+/// body-less declaration. Glance represents both an empty `{}` body and no body
+/// at all as an empty statement list, but the real compiler distinguishes them:
+/// `pub fn f() -> Nil {}` is an implementation while `pub fn f() -> Nil` has no
+/// implementation. The distinction is visible in the spans: a body extends the
+/// function's span past its return annotation (or parameter list when there is
+/// no return annotation).
+fn function_has_braces_body(
+  definition: glance.Definition(glance.Function),
+) -> Bool {
+  let function = definition.definition
+  case function.return {
+    option.Some(return_type) ->
+      function.location.end > type_span_end(return_type)
+    option.None -> False
+  }
+}
+
+fn type_span_end(type_: glance.Type) -> Int {
+  case type_ {
+    glance.NamedType(location, _, _, _) -> location.end
+    glance.TupleType(location, _) -> location.end
+    glance.FunctionType(location, _, _) -> location.end
+    glance.VariableType(location, _) -> location.end
+    glance.HoleType(location, _) -> location.end
   }
 }
 

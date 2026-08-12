@@ -60,7 +60,7 @@ pub fn main() {
 
 /// Everything the runner needs, threaded through worker hand-offs.
 type Options =
-  #(String, String, option.Option(String), Bool, Int)
+  #(String, String, option.Option(String), Bool, Bool, Int)
 
 fn parse_args(args: List(String)) -> Result(Options, String) {
   // parse recursively to allow any option order
@@ -69,12 +69,12 @@ fn parse_args(args: List(String)) -> Result(Options, String) {
   // count helps. Beyond ~1.5x cores the real `gleam check` subprocesses (each
   // already multithreaded) contend and throughput plateaus or degrades, so 16
   // is a safe default; tune with `--jobs`.
-  let parsed = parse_args_(args, 16, option.None, False)
+  let parsed = parse_args_(args, 16, option.None, False, False)
   case parsed {
     Ok(v) -> Ok(v)
     Error(_) ->
       Error(
-        "usage: run -m dev/mutate_check -- --root <root> --src <src> [--jobs <n>] [--kind <kind>] [--count]",
+        "usage: run -m dev/mutate_check -- --root <root> --src <src> [--jobs <n>] [--kind <kind>] [--count] [--both]",
       )
   }
 }
@@ -84,10 +84,11 @@ fn parse_args_(
   jobs: Int,
   kind: option.Option(String),
   count: Bool,
+  both: Bool,
 ) -> Result(Options, String) {
   case args {
     ["--root", root, "--src", src, ..rest] ->
-      parse_rest(rest, root, src, jobs, kind, count)
+      parse_rest(rest, root, src, jobs, kind, count, both)
     _ -> Error("requires --root and --src")
   }
 }
@@ -99,17 +100,19 @@ fn parse_rest(
   jobs: Int,
   kind: option.Option(String),
   count: Bool,
+  both: Bool,
 ) -> Result(Options, String) {
   case args {
-    [] -> Ok(#(root, src, kind, count, jobs))
-    ["--count", ..rest] -> parse_rest(rest, root, src, jobs, kind, True)
+    [] -> Ok(#(root, src, kind, count, both, jobs))
+    ["--count", ..rest] -> parse_rest(rest, root, src, jobs, kind, True, both)
+    ["--both", ..rest] -> parse_rest(rest, root, src, jobs, kind, count, True)
     ["--jobs", n, ..rest] ->
       case int.parse(n) {
-        Ok(j) -> parse_rest(rest, root, src, j, kind, count)
+        Ok(j) -> parse_rest(rest, root, src, j, kind, count, both)
         Error(_) -> Error("invalid --jobs value")
       }
     ["--kind", k, ..rest] ->
-      parse_rest(rest, root, src, jobs, option.Some(k), count)
+      parse_rest(rest, root, src, jobs, option.Some(k), count, both)
     _ -> Error("unknown option")
   }
 }
@@ -119,7 +122,7 @@ type Mutant =
   #(String, String)
 
 fn run(opts: Options) {
-  let #(root, src, kind, count, jobs) = opts
+  let #(root, src, kind, count, both, jobs) = opts
   let path = "/" <> string.join([root, src], "/")
   case simplifile.read(from: path) {
     Error(_) -> io.println_error("cannot read " <> path)
@@ -178,6 +181,7 @@ fn run(opts: Options) {
             original,
             mutants,
             jobs,
+            both,
             token,
             baseline_key,
           )
@@ -202,6 +206,7 @@ fn check_all(
   original: String,
   mutants: List(Mutant),
   jobs: Int,
+  both: Bool,
   token: String,
   baseline_key: option.Option(String),
 ) {
@@ -261,7 +266,7 @@ fn check_all(
         let batch_start = monotime.now_ms()
         let results =
           list.map(batch, fn(mut) {
-            check_one_worker(i, worker_root, src, original, mut, baseline)
+            check_one_worker(i, worker_root, src, original, mut, baseline, both)
           })
         // Aggregate per-worker phase timings and print a summary line so we can
         // see where time goes (real `gleam check` subprocesses vs in-process
@@ -298,6 +303,8 @@ fn check_all(
   let results = combine_results(collected, list.length(mutants))
   let false_negatives =
     list.filter(results, fn(r) { string.starts_with(r, "FALSE-NEG") })
+  let false_positives =
+    list.filter(results, fn(r) { string.starts_with(r, "FALSE-POS") })
 
   let _ = option.map(baseline_key, dev_check.erase_baseline)
 
@@ -326,7 +333,9 @@ fn check_all(
     <> string.inspect(list.length(false_negatives))
     <> "/"
     <> string.inspect(list.length(results))
-    <> " FALSE NEGATIVES in "
+    <> " FALSE NEGATIVES, "
+    <> string.inspect(list.length(false_positives))
+    <> " FALSE POSITIVES in "
     <> src,
   )
 }
@@ -402,6 +411,7 @@ fn check_one_worker(
   original: String,
   mut: Mutant,
   baseline: option.Option(dev_check.Baseline),
+  both: Bool,
 ) -> #(String, Int, Int) {
   let path = "/" <> string.join([worker_root, src], "/")
   write(path, mut.1)
@@ -411,10 +421,28 @@ fn check_one_worker(
     Error(_) -> "real-rejects"
   }
   let real_ms = monotime.now_ms() - real_start
+  let glimpse_start = monotime.now_ms()
   let result = case real_verdict {
-    "real-accepts" -> #("real-accepts :: " <> mut.0, real_ms, 0)
+    "real-accepts" ->
+      case both {
+        False -> #("real-accepts :: " <> mut.0, real_ms, 0)
+        True -> {
+          let verdict = case glimpse_check(worker_root, src, baseline) {
+            True -> "both-ok :: " <> mut.0
+            False -> {
+              let record = "FALSE-POS :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
+              let _ =
+                simplifile.append(
+                  to: "/tmp/mutcheck/falsepos.txt",
+                  contents: record,
+                )
+              "FALSE-POS :: " <> mut.0
+            }
+          }
+          #(verdict, real_ms, monotime.now_ms() - glimpse_start)
+        }
+      }
     _ -> {
-      let glimpse_start = monotime.now_ms()
       let verdict = case glimpse_check(worker_root, src, baseline) {
         True -> {
           let record = "FALSE-NEG :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
@@ -488,6 +516,15 @@ fn counts_by_kind(mutants: List(Mutant)) -> String {
     "extann ",
     "exthole ",
     "attrplace ",
+    "typearity ",
+    "typearg ",
+    "clausedrop ",
+    "recfield ",
+    "fnparam ",
+    "attrname ",
+    "opacity ",
+    "wordswap ",
+    "worddel ",
   ]
   list.map(kinds, fn(kind) {
     let n = list.count(mutants, fn(m) { string.starts_with(m.0, kind) })
@@ -4631,6 +4668,652 @@ fn insert_line(
   [#(desc, string.join(list.append(before, [extra, ..after]), "\n"))]
 }
 
+/// Kind `typearity`: change the type-parameter list of a custom type or alias
+/// definition (`pub type X(a, b) { ... }`), breaking every use site's arity.
+fn typearity_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case is_type_definition_line(line) {
+      False -> []
+      True ->
+        case find_first_paren(line) {
+          option.None -> []
+          option.Some(paren) -> {
+            let close = matching_close_of(line, paren)
+            let params =
+              list.filter(tokens_between(line, paren + 1, close), fn(span) {
+                let #(start, _end) = span
+                is_letter_start(line, start)
+              })
+            case params {
+              [] -> []
+              [only] -> {
+                let #(start, end) = only
+                [
+                  #(
+                    "typearity add-param",
+                    source_of(
+                      lines,
+                      idx,
+                      string.slice(line, at_index: 0, length: close)
+                        <> "c, "
+                        <> string.slice(line, at_index: close, length: 1),
+                    ),
+                  ),
+                  #(
+                    "typearity drop-param",
+                    source_of(
+                      lines,
+                      idx,
+                      string.slice(line, at_index: 0, length: start)
+                        <> string.slice(
+                        line,
+                        at_index: end,
+                        length: string.length(line) - end,
+                      ),
+                    ),
+                  ),
+                ]
+              }
+              _ -> {
+                let #(first_start, first_end) = case params |> list.first {
+                  Ok(p) -> p
+                  Error(_) -> #(0, 0)
+                }
+                let #(last_start, last_end) = case params |> list.last {
+                  Ok(p) -> p
+                  Error(_) -> #(0, 0)
+                }
+                let drop_first =
+                  source_of(
+                    lines,
+                    idx,
+                    string.slice(line, at_index: 0, length: first_start)
+                      <> string.slice(
+                      line,
+                      at_index: first_end,
+                      length: string.length(line) - first_end,
+                    ),
+                  )
+                let drop_last =
+                  source_of(
+                    lines,
+                    idx,
+                    string.slice(line, at_index: 0, length: last_start)
+                      <> string.slice(
+                      line,
+                      at_index: last_end,
+                      length: string.length(line) - last_end,
+                    ),
+                  )
+                [
+                  #("typearity drop-first", drop_first),
+                  #("typearity drop-last", drop_last),
+                ]
+              }
+            }
+          }
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Whether `line` opens a custom type or alias definition with parameters.
+fn is_type_definition_line(line: String) -> Bool {
+  let trimmed = string.trim(line)
+  let is_type_keyword =
+    string.starts_with(trimmed, "pub type ")
+    || string.starts_with(trimmed, "type ")
+  is_type_keyword
+  && string.contains(line, "(")
+  && { string.contains(line, "{") || string.contains(line, "=") }
+}
+
+/// The position of the first `(` on `line`, not inside a string.
+fn find_first_paren(line: String) -> option.Option(Int) {
+  find_first_paren_from(line, 0)
+}
+
+fn find_first_paren_from(line: String, pos: Int) -> option.Option(Int) {
+  case pos >= string.length(line) {
+    True -> option.None
+    False ->
+      case byte_at(line, pos) == "(" && !inside_string(line, pos) {
+        True -> option.Some(pos)
+        False -> find_first_paren_from(line, pos + 1)
+      }
+  }
+}
+
+/// The position of the `)` matching the `(` at `open`.
+fn matching_close_of(line: String, open: Int) -> Int {
+  matching_close_from(line, open + 1, 1)
+}
+
+fn matching_close_from(line: String, pos: Int, depth: Int) -> Int {
+  case pos >= string.length(line) {
+    True -> pos - 1
+    False ->
+      case byte_at(line, pos) {
+        "(" -> matching_close_from(line, pos + 1, depth + 1)
+        ")" ->
+          case depth {
+            1 -> pos
+            _ -> matching_close_from(line, pos + 1, depth - 1)
+          }
+        _ -> matching_close_from(line, pos + 1, depth)
+      }
+  }
+}
+
+/// The simple-token spans between `from` and `to` on `line`.
+fn tokens_between(line: String, from: Int, to: Int) -> List(#(Int, Int)) {
+  tokens_between_from(line, from, to, [])
+}
+
+fn tokens_between_from(
+  line: String,
+  pos: Int,
+  to: Int,
+  acc: List(#(Int, Int)),
+) -> List(#(Int, Int)) {
+  case pos >= to {
+    True -> list.reverse(acc)
+    False ->
+      case first_simple_start(line, pos) {
+        option.None -> list.reverse(acc)
+        option.Some(start) -> {
+          let end = simple_token_end(line, start)
+          case end >= to {
+            True -> list.reverse(acc)
+            False -> tokens_between_from(line, end, to, [#(start, end), ..acc])
+          }
+        }
+      }
+  }
+}
+
+/// Kind `typearg`: mutate the type arguments of a custom type application in an
+/// annotation (swap two, drop the last, or add one), exercising generic
+/// parameter-count and position unification.
+fn typearg_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    list.index_map(name_spans(line), fn(span, _i) {
+      let #(start, _end, _kind) = span
+      let word = word_at(line, start)
+      case
+        starts_upper(word)
+        && byte_at(line, simple_token_end(line, start)) == "("
+      {
+        False -> []
+        True -> {
+          let open = simple_token_end(line, start)
+          let close = matching_close_of(line, open)
+          let args =
+            list.filter(tokens_between(line, open + 1, close), fn(span) {
+              let #(arg_start, _arg_end) = span
+              is_letter_start(line, arg_start)
+            })
+          case args {
+            [] -> []
+            [one] -> {
+              let #(_one_start, _one_end) = one
+              [
+                #(
+                  "typearg add",
+                  source_of(
+                    lines,
+                    idx,
+                    string.slice(line, at_index: 0, length: close)
+                      <> "Int"
+                      <> string.slice(line, at_index: close, length: 1),
+                  ),
+                ),
+              ]
+            }
+            [a, b] -> {
+              let #(a_start, a_end) = a
+              let #(b_start, b_end) = b
+              let swapped =
+                string.slice(line, at_index: 0, length: a_start)
+                <> string.slice(
+                  line,
+                  at_index: b_start,
+                  length: b_end - b_start,
+                )
+                <> string.slice(line, at_index: a_end, length: b_start - a_end)
+                <> string.slice(
+                  line,
+                  at_index: a_start,
+                  length: a_end - a_start,
+                )
+                <> string.slice(
+                  line,
+                  at_index: b_end,
+                  length: string.length(line) - b_end,
+                )
+              let #(last_start, last_end) = b
+              [
+                #("typearg swap", source_of(lines, idx, swapped)),
+                #(
+                  "typearg drop-last",
+                  source_of(
+                    lines,
+                    idx,
+                    string.slice(line, at_index: 0, length: last_start)
+                      <> string.slice(
+                      line,
+                      at_index: last_end,
+                      length: string.length(line) - last_end,
+                    ),
+                  ),
+                ),
+              ]
+            }
+            _ -> {
+              let #(last_start, last_end) = case args |> list.last {
+                Ok(p) -> p
+                Error(_) -> #(0, 0)
+              }
+              [
+                #(
+                  "typearg drop-last",
+                  source_of(
+                    lines,
+                    idx,
+                    string.slice(line, at_index: 0, length: last_start)
+                      <> string.slice(
+                      line,
+                      at_index: last_end,
+                      length: string.length(line) - last_end,
+                    ),
+                  ),
+                ),
+              ]
+            }
+          }
+        }
+      }
+    })
+    |> list.flatten
+  })
+  |> list.flatten
+}
+
+/// The word (simple token) at `start` on `line`.
+fn word_at(line: String, start: Int) -> String {
+  string.slice(
+    line,
+    at_index: start,
+    length: simple_token_end(line, start) - start,
+  )
+}
+
+/// Kind `clausedrop`: delete a single-line case clause, exercising exhaustiveness.
+fn clausedrop_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    let trimmed = string.trim(line)
+    case find_substring(line, "->") {
+      option.None -> []
+      option.Some(arrow) ->
+        case
+          prev_non_space(line, arrow) == ")"
+          || trimmed |> string.first |> result.unwrap("") == ""
+          || clause_header(trimmed)
+        {
+          True -> []
+          False -> [#("clausedrop del", delete_line(lines, idx))]
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Whether `trimmed` starts with a keyword that marks a non-clause `->` line.
+fn clause_header(trimmed: String) -> Bool {
+  list.any(
+    [
+      "fn ",
+      "pub ",
+      "let ",
+      "import ",
+      "use ",
+      "case ",
+      "const ",
+      "@",
+      "echo ",
+      "assert ",
+    ],
+    fn(prefix) { string.starts_with(trimmed, prefix) },
+  )
+}
+
+/// Remove `index` from `lines`, producing one mutant.
+fn delete_line(lines: List(String), index: Int) -> String {
+  let #(before, after) = list.split(lines, at: index)
+  case after {
+    [] -> string.join(before, "\n")
+    [_first, ..rest] -> string.join(list.append(before, rest), "\n")
+  }
+}
+
+/// Kind `recfield`: add or drop a labelled field in a record constructor
+/// definition, breaking every construction, pattern, and update of the type.
+fn recfield_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    let trimmed = string.trim(line)
+    case
+      starts_upper(word_at(trimmed, 0))
+      && string.contains(line, "(")
+      && string.contains(line, ": ")
+      && string.ends_with(trimmed, ")")
+    {
+      False -> []
+      True -> {
+        let open = case find_first_paren(line) {
+          option.Some(p) -> p
+          option.None -> 0
+        }
+        let close = matching_close_of(line, open)
+        let fields =
+          list.filter(tokens_between(line, open + 1, close), fn(span) {
+            let #(f_start, _f_end) = span
+            byte_at(line, f_start) != "(" && byte_at(line, f_start) != ")"
+          })
+        case fields {
+          [] -> []
+          _ -> {
+            let #(_first_start, _) = case fields |> list.first {
+              Ok(p) -> p
+              Error(_) -> #(0, 0)
+            }
+            let #(last_start, last_end) = case fields |> list.last {
+              Ok(p) -> p
+              Error(_) -> #(0, 0)
+            }
+            let drop =
+              source_of(
+                lines,
+                idx,
+                string.slice(line, at_index: 0, length: last_start)
+                  <> string.slice(
+                  line,
+                  at_index: last_end,
+                  length: string.length(line) - last_end,
+                ),
+              )
+            let add =
+              source_of(
+                lines,
+                idx,
+                string.slice(line, at_index: 0, length: close)
+                  <> ", c: Bool"
+                  <> string.slice(line, at_index: close, length: 1),
+              )
+            [
+              #("recfield drop", drop),
+              #("recfield add", add),
+            ]
+          }
+        }
+      }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `fnparam`: add or drop the last parameter of a top-level function
+/// definition, breaking every call site's arity.
+fn fnparam_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case
+      line == string.trim(line)
+      && {
+        string.starts_with(line, "pub fn ") || string.starts_with(line, "fn ")
+      }
+      && string.contains(line, "(")
+    {
+      False -> []
+      True ->
+        case find_first_paren(line) {
+          option.None -> []
+          option.Some(paren) -> {
+            let close = matching_close_of(line, paren)
+            let params =
+              list.filter(tokens_between(line, paren + 1, close), fn(span) {
+                let #(p_start, _p_end) = span
+                is_letter_start(line, p_start)
+              })
+            case params {
+              [] -> [
+                #(
+                  "fnparam add",
+                  source_of(
+                    lines,
+                    idx,
+                    string.slice(line, at_index: 0, length: close)
+                      <> "b: Int"
+                      <> string.slice(line, at_index: close, length: 1),
+                  ),
+                ),
+              ]
+              _ -> {
+                let #(last_start, last_end) = case params |> list.last {
+                  Ok(p) -> p
+                  Error(_) -> #(0, 0)
+                }
+                [
+                  #(
+                    "fnparam drop-last",
+                    source_of(
+                      lines,
+                      idx,
+                      string.slice(line, at_index: 0, length: last_start)
+                        <> string.slice(
+                        line,
+                        at_index: last_end,
+                        length: string.length(line) - last_end,
+                      ),
+                    ),
+                  ),
+                  #(
+                    "fnparam add",
+                    source_of(
+                      lines,
+                      idx,
+                      string.slice(line, at_index: 0, length: close)
+                        <> ", b: Int"
+                        <> string.slice(line, at_index: close, length: 1),
+                    ),
+                  ),
+                ]
+              }
+            }
+          }
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `attrname`: rename an attribute to a different attribute name,
+/// exercising attribute-name validation in each scope.
+fn attrname_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case find_attribute_name(line) {
+      option.None -> []
+      option.Some(#(name, body_start)) ->
+        case name {
+          "external" -> [
+            #(
+              "attrname external->target",
+              source_of(
+                lines,
+                idx,
+                string.slice(line, at_index: 0, length: body_start - 9)
+                  <> "target"
+                  <> string.slice(line, at_index: body_start - 1, length: 1)
+                  <> string.slice(
+                  line,
+                  at_index: body_start,
+                  length: string.length(line) - body_start,
+                ),
+              ),
+            ),
+          ]
+          "target" -> [
+            #(
+              "attrname target->external",
+              source_of(
+                lines,
+                idx,
+                string.slice(line, at_index: 0, length: body_start - 7)
+                  <> "external"
+                  <> string.slice(line, at_index: body_start - 1, length: 1)
+                  <> string.slice(
+                  line,
+                  at_index: body_start,
+                  length: string.length(line) - body_start,
+                ),
+              ),
+            ),
+          ]
+          "internal" -> [
+            #(
+              "attrname internal->deprecated",
+              source_of(
+                lines,
+                idx,
+                string.slice(line, at_index: 0, length: body_start - 9)
+                  <> "deprecated"
+                  <> string.slice(line, at_index: body_start - 1, length: 1)
+                  <> string.slice(
+                  line,
+                  at_index: body_start,
+                  length: string.length(line) - body_start,
+                ),
+              ),
+            ),
+          ]
+          "deprecated" -> [
+            #(
+              "attrname deprecated->internal",
+              source_of(
+                lines,
+                idx,
+                string.slice(line, at_index: 0, length: body_start - 11)
+                  <> "internal"
+                  <> string.slice(line, at_index: body_start - 1, length: 1)
+                  <> string.slice(
+                  line,
+                  at_index: body_start,
+                  length: string.length(line) - body_start,
+                ),
+              ),
+            ),
+          ]
+          _ -> []
+        }
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `opacity`: make a custom type opaque (`pub type X` -> `pub opaque type
+/// X`), so cross-module construction and field access of it are rejected.
+fn opacity_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    case
+      string.starts_with(string.trim(line), "pub type ")
+      && !string.contains(line, "opaque")
+    {
+      True ->
+        case find_substring(line, "pub type ") {
+          option.None -> []
+          option.Some(pub_type) -> {
+            let mutated =
+              string.slice(line, at_index: 0, length: pub_type + 4)
+              <> "opaque "
+              <> string.slice(
+                line,
+                at_index: pub_type + 4,
+                length: string.length(line) - pub_type - 4,
+              )
+            [#("opacity make", source_of(lines, idx, mutated))]
+          }
+        }
+      False -> []
+    }
+  })
+  |> list.flatten
+}
+
+/// Kind `wordswap`: swap each pair of adjacent words on a line, a shape-agnostic
+/// fuzz net that produces mutations no template kind reaches.
+fn wordswap_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    let spans = name_spans(line)
+    list.index_map(spans, fn(span, i) {
+      case list.drop(spans, up_to: i + 1) |> list.first {
+        Error(_) -> []
+        Ok(next) -> {
+          let #(a_start, a_end, _) = span
+          let #(b_start, b_end, _) = next
+          let swapped =
+            string.slice(line, at_index: 0, length: a_start)
+            <> string.slice(line, at_index: b_start, length: b_end - b_start)
+            <> string.slice(line, at_index: a_end, length: b_start - a_end)
+            <> string.slice(line, at_index: a_start, length: a_end - a_start)
+            <> string.slice(
+              line,
+              at_index: b_end,
+              length: string.length(line) - b_end,
+            )
+          case swapped == line {
+            True -> []
+            False -> [#("wordswap swap", source_of(lines, idx, swapped))]
+          }
+        }
+      }
+    })
+    |> list.flatten
+  })
+  |> list.flatten
+}
+
+/// Kind `worddel`: delete each word on a line, a shape-agnostic fuzz net
+/// (mostly parse errors, some valid re-typings).
+fn worddel_mutants(lines: List(String)) -> List(Mutant) {
+  list.index_map(lines, fn(_line, idx) {
+    let line = fetch(lines, idx)
+    list.map(name_spans(line), fn(span) {
+      let #(start, end, _) = span
+      #(
+        "worddel del",
+        source_of(
+          lines,
+          idx,
+          string.slice(line, at_index: 0, length: start)
+            <> string.slice(
+            line,
+            at_index: end,
+            length: string.length(line) - end,
+          ),
+        ),
+      )
+    })
+  })
+  |> list.flatten
+}
+
 /// Everything we can mutate in a file, one kind's mutants appended to the next.
 fn mutate_file(source: String) -> List(Mutant) {
   let lines = split_lines(source)
@@ -4685,6 +5368,15 @@ fn mutate_file(source: String) -> List(Mutant) {
   |> list.append(extann_mutants(lines))
   |> list.append(exthole_mutants(lines))
   |> list.append(attrplace_mutants(lines))
+  |> list.append(typearity_mutants(lines))
+  |> list.append(typearg_mutants(lines))
+  |> list.append(clausedrop_mutants(lines))
+  |> list.append(recfield_mutants(lines))
+  |> list.append(fnparam_mutants(lines))
+  |> list.append(attrname_mutants(lines))
+  |> list.append(opacity_mutants(lines))
+  |> list.append(wordswap_mutants(lines))
+  |> list.append(worddel_mutants(lines))
 }
 
 /// The role of an identifier in a line, inferred from the character that
