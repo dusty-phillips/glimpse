@@ -313,7 +313,7 @@ pub fn internal_attribute_on_type_alias_is_rejected_test() {
 
 pub fn external_function_missing_param_annotation_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     pub fn f(x) -> Int {
       x
     }",
@@ -323,7 +323,7 @@ pub fn external_function_missing_param_annotation_is_rejected_test() {
 
 pub fn external_function_missing_return_annotation_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     pub fn f(x: Int) {
       x
     }",
@@ -333,7 +333,7 @@ pub fn external_function_missing_return_annotation_is_rejected_test() {
 
 pub fn external_function_with_discarded_unannotated_param_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     pub fn f(_) -> Int {
       1
     }",
@@ -343,7 +343,7 @@ pub fn external_function_with_discarded_unannotated_param_is_rejected_test() {
 
 pub fn external_function_with_unannotated_labelled_param_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     pub fn f(tag x: Int, y) -> Int {
       x
     }",
@@ -353,7 +353,7 @@ pub fn external_function_with_unannotated_labelled_param_is_rejected_test() {
 
 pub fn external_function_with_type_hole_in_param_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     pub fn f(callback: fn(__zzz) -> Int) -> Int {
       callback(1)
     }",
@@ -363,7 +363,7 @@ pub fn external_function_with_type_hole_in_param_is_rejected_test() {
 
 pub fn external_function_with_type_hole_in_return_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     fn f(x: Int) -> fn(__zzz) -> Int",
     )
     == error.UnexpectedTypeHole("_zzz")
@@ -371,12 +371,74 @@ pub fn external_function_with_type_hole_in_return_is_rejected_test() {
 
 pub fn external_function_with_bare_hole_is_rejected_test() {
   assert helpers.error_module_typecheck(
-      "@external(javascript, \"x\", \"f\")
+      "@external(erlang, \"x\", \"f\")
     pub fn f(x: List(_)) -> Int {
       1
     }",
     )
     == error.UnexpectedTypeHole("")
+}
+
+pub fn javascript_external_with_invalid_module_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"a b\", \"f\")
+    pub fn f() -> Int {
+      1
+    }",
+    )
+    == error.InvalidExternalModule("a b")
+}
+
+pub fn javascript_external_with_invalid_function_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "@external(javascript, \"m.js\", \"1x\")
+    pub fn f() -> Int {
+      1
+    }",
+    )
+    == error.InvalidExternalFunction("1x")
+}
+
+pub fn javascript_external_with_valid_names_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"../gleam_stdlib.mjs\", \"map\")
+pub fn f() -> Int {
+  1
+}",
+  )
+}
+
+pub fn erlang_external_module_paths_are_not_validated_test() {
+  helpers.ok_module_typecheck(
+    "@external(erlang, \"ma p\", \"f g\")
+pub fn f() -> Int {
+  1
+}",
+  )
+}
+
+pub fn other_target_external_does_not_require_annotations_test() {
+  helpers.ok_module_typecheck(
+    "@external(javascript, \"x\", \"f\")
+pub fn f(x) {
+  x
+}",
+  )
+}
+
+pub fn type_name_with_underscore_is_rejected_test() {
+  assert helpers.error_module_typecheck("pub type Foo_bar {\n  Foo_bar\n}")
+    == error.InvalidTypeName("Foo_bar")
+}
+
+pub fn variant_name_with_underscore_is_rejected_test() {
+  assert helpers.error_module_typecheck("pub type X {\n  Bar_\n}")
+    == error.InvalidVariantName("Bar_")
+}
+
+pub fn alias_name_with_underscore_is_rejected_test() {
+  assert helpers.error_module_typecheck("type A_b = Int")
+    == error.InvalidTypeAliasName("A_b")
 }
 
 pub fn non_external_function_with_type_hole_is_fine_test() {

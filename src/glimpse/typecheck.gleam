@@ -146,6 +146,48 @@ pub fn module(
     }),
   )
 
+  // Custom type, variant, and type alias names may not contain `_`: the real
+  // compiler rejects them at parse time ("Invalid type name" and friends),
+  // while the lexer happily reads them as single identifiers.
+  use _ <- result.try(
+    list.fold(raw_module.custom_types, Ok(Nil), fn(result, definition) {
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          case string.contains(definition.definition.name, "_") {
+            True -> Error(error.InvalidTypeName(definition.definition.name))
+            False ->
+              list.fold(
+                definition.definition.variants,
+                Ok(Nil),
+                fn(variant_result, variant) {
+                  case variant_result {
+                    Error(e) -> Error(e)
+                    Ok(_) ->
+                      case string.contains(variant.name, "_") {
+                        True -> Error(error.InvalidVariantName(variant.name))
+                        False -> Ok(Nil)
+                      }
+                  }
+                },
+              )
+          }
+      }
+    }),
+  )
+  use _ <- result.try(
+    list.fold(raw_module.type_aliases, Ok(Nil), fn(result, alias) {
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          case string.contains(alias.definition.name, "_") {
+            True -> Error(error.InvalidTypeAliasName(alias.definition.name))
+            False -> Ok(Nil)
+          }
+      }
+    }),
+  )
+
   // Function and constant names share one namespace; the official compiler
   // rejects a module that defines the same name twice, in any combination.
   let definitions =
@@ -358,12 +400,38 @@ pub fn module(
                         case attribute.arguments {
                           [
                             glance.Variable(_, name),
-                            glance.String(_, _),
-                            glance.String(_, _),
+                            glance.String(_, module_path),
+                            glance.String(_, function_name),
                           ] ->
                             case name == "erlang" || name == "javascript" {
-                              True -> Ok(Nil)
                               False -> Error(error.UnknownExternalTarget(name))
+                              True ->
+                                // The real compiler validates the module path
+                                // and function name of JavaScript externals at
+                                // parse time, and passes Erlang externals
+                                // through unvalidated. Type-level externals
+                                // (a custom type's JS class binding) are not
+                                // validated at all.
+                                case
+                                  name == "javascript" && scope == "function"
+                                {
+                                  False -> Ok(Nil)
+                                  True ->
+                                    case valid_js_module(module_path) {
+                                      False ->
+                                        Error(error.InvalidExternalModule(
+                                          module_path,
+                                        ))
+                                      True ->
+                                        case valid_js_function(function_name) {
+                                          False ->
+                                            Error(error.InvalidExternalFunction(
+                                              function_name,
+                                            ))
+                                          True -> Ok(Nil)
+                                        }
+                                    }
+                                }
                             }
                           [glance.Variable(_, name), ..] ->
                             case name == "erlang" || name == "javascript" {
@@ -427,9 +495,12 @@ pub fn module(
     }),
   )
 
-  // A function with an `@external` implementation must have type annotations
-  // for its return type and every non-discarded parameter: without them the
-  // real compiler cannot know what values it accepts and returns. The real
+  // A function with an `@external` implementation that applies to the active
+  // target must have type annotations for its return type and every
+  // non-discarded parameter: without them the real compiler cannot know what
+  // values it accepts and returns. A function whose externals cover only other
+  // targets (e.g. `@external(javascript, ...)` built for erlang) is an ordinary
+  // function whose body runs here, so its types are inferred. The real
   // compiler reports the missing return annotation first, then parameters.
   use _ <- result.try(
     list.fold(raw_module.functions, Ok(Nil), fn(result, definition) {
@@ -437,6 +508,7 @@ pub fn module(
         result,
         list.any(definition.attributes, fn(attribute) {
           attribute.name == "external"
+          && types.target_supports(target, targets.external_support(definition))
         })
       {
         Error(e), _ -> Error(e)
@@ -1083,6 +1155,37 @@ fn attribute_shape_is_valid(attribute: glance.Attribute) -> Bool {
     "target", [glance.Variable(_, _)] -> True
     "internal", [] -> True
     _, _ -> False
+  }
+}
+
+/// Whether a JavaScript `@external` module path is valid: a non-empty string
+/// of letters, digits, `_`, `.`, `/`, `:`, and `-`.
+fn valid_js_module(module: String) -> Bool {
+  string.length(module) > 0
+  && list.all(string.to_graphemes(module), fn(ch) {
+    string.contains(
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./:-",
+      ch,
+    )
+  })
+}
+
+/// Whether a JavaScript `@external` function name is valid: starts with a
+/// letter or `_`, followed by letters, digits, or `_`.
+fn valid_js_function(name: String) -> Bool {
+  case string.first(name) {
+    Error(_) -> False
+    Ok(first) ->
+      string.contains(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_",
+        first,
+      )
+      && list.all(string.to_graphemes(name), fn(ch) {
+        string.contains(
+          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_",
+          ch,
+        )
+      })
   }
 }
 

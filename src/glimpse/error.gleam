@@ -166,6 +166,14 @@ pub type TypeCheckError {
   /// Raised when an `@external` attribute has the wrong shape, e.g. a
   /// non-Variable target, or a target/module/function count other than three.
   InvalidExternalAttribute
+  /// Raised when a JavaScript `@external` names a module path that the Gleam
+  /// compiler rejects at parse time, e.g. one containing a space. Only the
+  /// JavaScript target validates module paths.
+  InvalidExternalModule(module: String)
+  /// Raised when a JavaScript `@external` names a function that the Gleam
+  /// compiler rejects at parse time, e.g. one starting with a digit or
+  /// containing a dash. Only the JavaScript target validates function names.
+  InvalidExternalFunction(name: String)
   /// Raised when an `@external` attribute is attached somewhere the compiler
   /// does not allow it: constants, variants, type aliases, or imports. Only
   /// functions and custom type declarations may carry `@external`.
@@ -175,6 +183,16 @@ pub type TypeCheckError {
   /// be on a public declaration (or an import), so private functions,
   /// constants, types, and type aliases are rejected.
   InvalidAttributePlacement(attribute: String, scope: String)
+  /// Raised when a custom type name contains an underscore, e.g. `Foo_bar`,
+  /// which the Gleam compiler rejects at parse time ("Invalid type name").
+  InvalidTypeName(name: String)
+  /// Raised when a variant constructor name contains an underscore, e.g.
+  /// `Bar_`, which the Gleam compiler rejects at parse time ("Invalid type
+  /// variant name").
+  InvalidVariantName(name: String)
+  /// Raised when a type alias name contains an underscore, e.g. `A_b`, which
+  /// the Gleam compiler rejects at parse time ("Invalid type alias name").
+  InvalidTypeAliasName(name: String)
   /// Raised when an attribute such as `@deprecated` or `@target` has arguments
   /// of the wrong shape, e.g. `@deprecated` without a string message, or
   /// `@target` without a single variable target.
