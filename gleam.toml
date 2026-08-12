@@ -13,7 +13,7 @@ links = [
 
 [dependencies]
 gleam_stdlib = ">= 1.0.5 and < 2.0.0"
-glance = ">= 7.0.0 and < 8.0.0"
+glance = { path = "./third_party/glance" }
 glexer = { path = "./third_party/glexer" }
 
 [dev-dependencies]

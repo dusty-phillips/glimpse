@@ -653,3 +653,14 @@ pub fn duplicate_parameter_names_in_definition_test() {
 pub fn distinct_parameter_names_in_definition_is_fine_test() {
   helpers.ok_module_typecheck("pub fn start(conn, params) -> Int { conn }")
 }
+
+pub fn opaque_type_alias_is_a_parse_error_test() {
+  let assert Error(_) = glance.module("pub opaque type A(a) = #(a, Int)")
+  Nil
+}
+
+pub fn opaque_block_and_bodyless_forms_parse_fine_test() {
+  let assert Ok(_) = glance.module("pub opaque type X {\n  X\n}")
+  let assert Ok(_) = glance.module("pub opaque type Y")
+  Nil
+}
