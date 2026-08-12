@@ -263,3 +263,26 @@ pub fn f(x: Int) -> Int {
 }",
   )
 }
+
+pub fn error_nil_pattern_covers_error_variant_test() {
+  helpers.ok_module_typecheck(
+    "pub fn run(x: Result(Int, Nil)) -> Int {
+  case x {
+    Error(Nil) -> 0
+    Ok(v) -> v
+  }
+}",
+  )
+}
+
+pub fn error_nil_pattern_with_inferred_subject_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn run() -> Int {
+  let x = Ok(1)
+  case x {
+    Error(Nil) -> 0
+    Ok(v) -> v
+  }
+}",
+  )
+}

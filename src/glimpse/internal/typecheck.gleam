@@ -538,6 +538,31 @@ fn resolve_subjects(
   })
 }
 
+/// Whether any of the resolved subject types still contains an unresolved
+/// inference variable anywhere (not just at the top level): a case on such a
+/// subject cannot be judged for exhaustiveness yet, since unifying the clause
+/// patterns may pin its type arguments (e.g. `Error(Nil)` pins the error type
+/// of a `Result` to `Nil`).
+fn any_subject_unresolved(subjects: List(types.Type)) -> Bool {
+  list.any(subjects, subject_has_unresolved_var)
+}
+
+fn subject_has_unresolved_var(type_: types.Type) -> Bool {
+  case type_ {
+    types.Var(_) | types.InferredReturn | types.TodoType -> True
+    types.CallableType(parameters, _labels, return) ->
+      list.any(parameters, subject_has_unresolved_var)
+      || subject_has_unresolved_var(return)
+    types.GenericCallableType(parameters, _labels, return, _) ->
+      list.any(parameters, subject_has_unresolved_var)
+      || subject_has_unresolved_var(return)
+    types.TupleType(elements) -> list.any(elements, subject_has_unresolved_var)
+    types.CustomType(_module, _name, parameters, _) ->
+      list.any(parameters, subject_has_unresolved_var)
+    _ -> False
+  }
+}
+
 /// Typecheck an expression and return its type.
 pub fn expression(
   environment: Environment,
@@ -2063,29 +2088,23 @@ fn case_expression(
   // function whose signature is still inferred) cannot be judged: deferring
   // matches the real compiler, which checks exhaustiveness after all bodies
   // are analysed. The second body pass, where every signature has been
-  // written back, re-runs this check on the resolved types.
-  let resolved_subjects = resolve_subjects(store, subject_types)
-  let exhaustiveness_deferred =
-    list.any(resolved_subjects, fn(type_) {
-      case type_ {
-        types.Var(_) | types.InferredReturn | types.TodoType -> True
-        _ -> False
-      }
-    })
-
+  // written back, re-runs this check on the resolved types. The subjects are
+  // resolved *after* the clause patterns have unified with them, so a pattern
+  // like `Error(Nil)` that pins an otherwise-inferred type argument (Nil) is
+  // visible to the check.
   case clauses {
-    [] ->
-      case exhaustiveness_deferred {
+    [] -> {
+      let resolved_subjects = resolve_subjects(store, subject_types)
+      case any_subject_unresolved(resolved_subjects) {
         True -> Error(error.CaseClauseMismatch("no clauses", "any"))
         False ->
-          case
-            exhaustive.check(environment, resolved_subjects, [])
-          {
+          case exhaustive.check(environment, resolved_subjects, []) {
             option.Some(missing) ->
               Error(error.InexhaustivePattern(string.join(missing, "\n")))
             option.None -> Error(error.CaseClauseMismatch("no clauses", "any"))
           }
       }
+    }
     [_first_clause, ..] -> {
       // Typecheck each clause body sequentially, threading the store so each
       // clause gets a distinct namespace of inference variables. Unifying the
@@ -2155,10 +2174,16 @@ fn case_expression(
         Error(check_error) -> Error(check_error)
         Ok(case_state) -> {
           let #(store, _case_type) = case_state
-          case exhaustiveness_deferred {
+          case any_subject_unresolved(resolve_subjects(store, subject_types)) {
             True -> Ok(case_state)
             False ->
-              case exhaustive.check(environment, resolved_subjects, alternatives) {
+              case
+                exhaustive.check(
+                  environment,
+                  resolve_subjects(store, subject_types),
+                  alternatives,
+                )
+              {
                 option.Some(missing) ->
                   Error(error.InexhaustivePattern(string.join(missing, "\n")))
                 option.None -> Ok(case_state)
