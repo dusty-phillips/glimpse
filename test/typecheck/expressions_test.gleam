@@ -1161,3 +1161,22 @@ pub fn todo_as_type_name_message_is_rejected_test() {
     )
     == error.InvalidName("Result")
 }
+
+pub fn variable_with_uppercase_in_name_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f() -> Int {
+  let fooBar = 1
+  fooBar
+}",
+    )
+    == error.InvalidVariableName("fooBar")
+}
+
+pub fn variable_with_underscore_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f() -> Int {
+  let foo_bar = 1
+  foo_bar
+}",
+  )
+}

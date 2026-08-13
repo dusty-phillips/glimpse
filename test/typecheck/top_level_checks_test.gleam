@@ -748,3 +748,33 @@ pub fn main() -> Nil {
 }",
   )
 }
+
+pub fn function_with_uppercase_in_name_is_rejected_test() {
+  assert helpers.error_module_typecheck("pub fn doStuff() -> Int {\n  1\n}")
+    == error.InvalidFunctionName("doStuff")
+}
+
+pub fn constant_with_uppercase_in_name_is_rejected_test() {
+  assert helpers.error_module_typecheck("const fooBar = 1")
+    == error.InvalidConstantName("fooBar")
+}
+
+pub fn argument_with_uppercase_in_name_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(myVar: Int) -> Int {\n  myVar\n}",
+    )
+    == error.InvalidArgumentName("myVar")
+}
+
+pub fn type_variable_with_uppercase_in_name_is_rejected_test() {
+  assert helpers.error_module_typecheck("pub type Foo(fooBar) {\n  Foo\n}")
+    == error.InvalidTypeVariableName("fooBar")
+}
+
+pub fn snake_case_names_are_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn do_stuff(foo_bar: Int) -> Int {
+  foo_bar
+}",
+  )
+}

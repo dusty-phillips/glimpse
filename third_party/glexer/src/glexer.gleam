@@ -444,6 +444,32 @@ fn lex_lowercase_name(
     | "7" <> source
     | "8" <> source
     | "9" <> source
+    | "A" <> source
+    | "B" <> source
+    | "C" <> source
+    | "D" <> source
+    | "E" <> source
+    | "F" <> source
+    | "G" <> source
+    | "H" <> source
+    | "I" <> source
+    | "J" <> source
+    | "K" <> source
+    | "L" <> source
+    | "M" <> source
+    | "N" <> source
+    | "O" <> source
+    | "P" <> source
+    | "Q" <> source
+    | "R" <> source
+    | "S" <> source
+    | "T" <> source
+    | "U" <> source
+    | "V" <> source
+    | "W" <> source
+    | "X" <> source
+    | "Y" <> source
+    | "Z" <> source
     | "_" <> source ->
       advance(lexer, source, 1)
       |> lex_lowercase_name(start, slice_size + 1)

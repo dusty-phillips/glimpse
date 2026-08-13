@@ -72,6 +72,21 @@ pub fn statement(
       })
 
     glance.Assignment(_, kind, pat, annotation, value_expression) -> {
+      // The real compiler rejects lowercase identifiers containing uppercase
+      // letters at the binding site ("Invalid variable name").
+      use _ <- result.try(
+        pattern_variable_names(pat)
+        |> list.fold(Ok(Nil), fn(result, name) -> error.TypeCheckResult(Nil) {
+          case result {
+            Error(e) -> Error(e)
+            Ok(_) ->
+              case name_has_uppercase(name) {
+                True -> Error(error.InvalidVariableName(name))
+                False -> Ok(Nil)
+              }
+          }
+        }),
+      )
       use #(store, value_type) <- result.try(expression(
         environment,
         store,
@@ -178,6 +193,60 @@ fn type_name(pat: glance.Pattern) -> String {
     glance.PatternVariable(_, name) -> name
     glance.PatternDiscard(_, name) -> name
     _ -> ""
+  }
+}
+
+/// Every variable name a pattern binds, for name-case validation.
+fn pattern_variable_names(pattern: glance.Pattern) -> List(String) {
+  case pattern {
+    glance.PatternVariable(_, name) -> [name]
+    glance.PatternAssignment(_, inner, name) -> [
+      name,
+      ..pattern_variable_names(inner)
+    ]
+    glance.PatternDiscard(_, _)
+    | glance.PatternInt(_, _)
+    | glance.PatternFloat(_, _)
+    | glance.PatternString(_, _) -> []
+    glance.PatternTuple(_, elements) ->
+      list.flatten(list.map(elements, pattern_variable_names))
+    glance.PatternList(_, elements, tail) ->
+      list.append(
+        list.flatten(list.map(elements, pattern_variable_names)),
+        case tail {
+          option.None -> []
+          option.Some(tail_pattern) -> pattern_variable_names(tail_pattern)
+        },
+      )
+    glance.PatternBitString(_, segments) ->
+      list.flatten(
+        list.map(segments, fn(segment) {
+          let #(pattern, _options) = segment
+          pattern_variable_names(pattern)
+        }),
+      )
+    glance.PatternConcatenate(_, _prefix, prefix_name, rest_name) ->
+      list.append(
+        case prefix_name {
+          option.Some(glance.Named(name)) -> [name]
+          _ -> []
+        },
+        case rest_name {
+          glance.Named(name) -> [name]
+          glance.Discarded(_) -> []
+        },
+      )
+    glance.PatternVariant(_, _module, _constructor, arguments, _spread) ->
+      list.flatten(
+        list.map(arguments, fn(field) {
+          pattern_variable_names(case field {
+            glance.LabelledField(_, _, item) -> item
+            glance.UnlabelledField(item) -> item
+            glance.ShorthandField(label, _) ->
+              glance.PatternVariable(glance.Span(-1, -1), label)
+          })
+        }),
+      )
   }
 }
 
@@ -540,6 +609,14 @@ fn check_pattern_is_irrefutable(
 /// variables that the clause patterns have since unified (e.g. an unannotated
 /// parameter matched against `[first, ..rest]`) are seen as their concrete
 /// shape by the exhaustiveness check.
+/// Whether a lowercase identifier contains an uppercase letter, which the real
+/// compiler rejects ("Invalid variable name").
+fn name_has_uppercase(name: String) -> Bool {
+  list.any(string.to_graphemes(name), fn(ch) {
+    string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ch)
+  })
+}
+
 fn resolve_subjects(
   store: types.TypeStore,
   subject_types: List(types.Type),

@@ -186,6 +186,18 @@ pub type TypeCheckError {
   /// Raised when a custom type name contains an underscore, e.g. `Foo_bar`,
   /// which the Gleam compiler rejects at parse time ("Invalid type name").
   InvalidTypeName(name: String)
+  /// Raised when a lowercase identifier contains an uppercase letter, e.g. a
+  /// function named `doStuff`, which the Gleam compiler rejects at parse time
+  /// ("Invalid function name"). Import aliases are exempt.
+  InvalidFunctionName(name: String)
+  /// Same as `InvalidFunctionName`, for module constants.
+  InvalidConstantName(name: String)
+  /// Same as `InvalidFunctionName`, for function arguments.
+  InvalidArgumentName(name: String)
+  /// Same as `InvalidFunctionName`, for custom type and type alias parameters.
+  InvalidTypeVariableName(name: String)
+  /// Same as `InvalidFunctionName`, for locally bound variables.
+  InvalidVariableName(name: String)
   /// Raised when a variant constructor name contains an underscore, e.g.
   /// `Bar_`, which the Gleam compiler rejects at parse time ("Invalid type
   /// variant name").

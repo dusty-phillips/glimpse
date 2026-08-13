@@ -195,6 +195,88 @@ pub fn module(
     }),
   )
 
+  // Lowercase identifiers may not contain uppercase letters in the real
+  // compiler ("Invalid function name", "Invalid constant name", "Invalid
+  // argument name", "Invalid type variable name"); only the names *defined*
+  // here are checked, not references.
+  use _ <- result.try(
+    list.fold(raw_module.functions, Ok(Nil), fn(result, definition) {
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          case name_has_uppercase(definition.definition.name) {
+            True -> Error(error.InvalidFunctionName(definition.definition.name))
+            False ->
+              list.fold(
+                definition.definition.parameters,
+                Ok(Nil),
+                fn(param_result, parameter) -> Result(Nil, error.TypeCheckError) {
+                  case param_result, parameter.name {
+                    Error(e), _ -> Error(e)
+                    Ok(_), glance.Named(name) ->
+                      case name_has_uppercase(name) {
+                        True -> Error(error.InvalidArgumentName(name))
+                        False -> Ok(Nil)
+                      }
+                    Ok(_), glance.Discarded(_) -> Ok(Nil)
+                  }
+                },
+              )
+          }
+      }
+    }),
+  )
+  use _ <- result.try(
+    list.fold(raw_module.constants, Ok(Nil), fn(result, definition) {
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          case name_has_uppercase(definition.definition.name) {
+            True -> Error(error.InvalidConstantName(definition.definition.name))
+            False -> Ok(Nil)
+          }
+      }
+    }),
+  )
+  use _ <- result.try(
+    list.fold(raw_module.custom_types, Ok(Nil), fn(result, definition) {
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          list.fold(
+            definition.definition.parameters,
+            Ok(Nil),
+            fn(param_result, parameter) -> Result(Nil, error.TypeCheckError) {
+              case param_result, name_has_uppercase(parameter) {
+                Error(e), _ -> Error(e)
+                Ok(_), True -> Error(error.InvalidTypeVariableName(parameter))
+                Ok(_), False -> Ok(Nil)
+              }
+            },
+          )
+      }
+    }),
+  )
+  use _ <- result.try(
+    list.fold(raw_module.type_aliases, Ok(Nil), fn(result, alias) {
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          list.fold(
+            alias.definition.parameters,
+            Ok(Nil),
+            fn(param_result, parameter) -> Result(Nil, error.TypeCheckError) {
+              case param_result, name_has_uppercase(parameter) {
+                Error(e), _ -> Error(e)
+                Ok(_), True -> Error(error.InvalidTypeVariableName(parameter))
+                Ok(_), False -> Ok(Nil)
+              }
+            },
+          )
+      }
+    }),
+  )
+
   // Importing the same name twice in one selective-import list is rejected by
   // the real compiler ("Duplicate import" for values, "Duplicate type
   // definition" for types), even when one occurrence is a type and the other
@@ -1334,6 +1416,14 @@ fn duplicate_attribute_name(
 
 /// Whether an attribute name is one of the attributes the Gleam compiler
 /// recognises: `@external`, `@internal`, `@deprecated` and `@target`.
+/// Whether a lowercase identifier contains an uppercase letter, which the real
+/// compiler rejects ("Invalid variable name" etc.).
+fn name_has_uppercase(name: String) -> Bool {
+  list.any(string.to_graphemes(name), fn(ch) {
+    string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ch)
+  })
+}
+
 fn is_known_attribute(name: String) -> Bool {
   list.contains(["external", "internal", "deprecated", "target"], name)
 }
