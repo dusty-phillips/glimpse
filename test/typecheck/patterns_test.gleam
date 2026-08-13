@@ -321,3 +321,17 @@ pub fn unknown_label_in_constructor_pattern_test() {
     )
     == error.InvalidArgumentLabel("(a)", "zzz")
 }
+
+pub fn pattern_with_unlabelled_field_after_labelled_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Foo {
+    Foo(a: Int, b: Bool)
+  }
+  pub fn f(x: Foo) -> Int {
+    case x {
+      Foo(a: n, _) -> n
+    }
+  }",
+    )
+    == error.UnlabelledArgumentAfterLabelled
+}

@@ -1985,6 +1985,26 @@ fn list(
         | [#(t.Comma, _), #(t.RightSquare, P(end)), ..tokens] ->
           Ok(ParsedList(list.reverse(acc), None, tokens, end + 1))
 
+        // The list tail may directly follow the final element without a
+        // comma (`[a, b, x ..rest]`), matching the real Gleam parser.
+        [#(t.DotDot, P(start)), #(t.RightSquare, P(end)) as close, ..tokens] -> {
+          case discard {
+            None -> unexpected_error([close, ..tokens])
+            Some(discard) -> {
+              let value = discard(Span(start, start + 1))
+              let parsed_list =
+                ParsedList(list.reverse(acc), Some(value), tokens, end + 1)
+              Ok(parsed_list)
+            }
+          }
+        }
+
+        [#(t.DotDot, _), ..tokens] -> {
+          use #(rest, tokens) <- result.try(parser(tokens))
+          use P(end), tokens <- expect(t.RightSquare, tokens)
+          Ok(ParsedList(list.reverse(acc), Some(rest), tokens, end + 1))
+        }
+
         [
           #(t.Comma, _),
           #(t.DotDot, P(start)),

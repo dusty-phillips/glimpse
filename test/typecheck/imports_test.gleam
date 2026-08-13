@@ -1,11 +1,12 @@
 import glance
-import gleam/option
-
 import gleam/dict
+import gleam/option
 import glimpse
+import glimpse/error
 import glimpse/internal/typecheck/types
 import glimpse/target
 import glimpse/typecheck
+
 import typecheck/helpers
 
 pub fn import_adds_function_to_env_test() {
@@ -166,4 +167,24 @@ pub fn variant_call_function_field_access_test() {
     )
 
   assert dict.size(main_env.imports.import_names) == 1
+}
+
+pub fn duplicate_type_import_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "import gleam/option.{type Option, type Option}
+    pub fn main() -> Nil {
+      Nil
+    }",
+    )
+    == error.DuplicateDefinition("Option")
+}
+
+pub fn duplicate_value_import_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "import gleam/option.{None, None}
+    pub fn main() -> Nil {
+      Nil
+    }",
+    )
+    == error.DuplicateImport("None")
 }

@@ -172,6 +172,10 @@ pub fn typecheck_pattern(
     }
 
     glance.PatternVariant(_, module, constructor, arguments, with_spread) -> {
+      use _ <- result.try(case fields_unlabelled_after_labelled(arguments) {
+        True -> Error(error.UnlabelledArgumentAfterLabelled)
+        False -> Ok(Nil)
+      })
       use callable <- result.try(lookup_constructor(
         environment,
         module,
@@ -387,11 +391,7 @@ fn check_segments(
     // Literal sizes and units must be positive; variable sizes must be bound.
     // The threaded `env` is used because a size variable may reference a name
     // bound by an earlier segment (`<<length:32, value:bytes-size(length)>>`).
-    use store <- result.try(check_pattern_size_options(
-      env,
-      store,
-      options,
-    ))
+    use store <- result.try(check_pattern_size_options(env, store, options))
     // A bit-string segment cannot assign a variable twice (`<<a as b>>`).
     use store <- result.try(check_segment_assignment(store, pattern))
     case pattern {
@@ -638,6 +638,26 @@ pub fn constructor_variant_index(
 
 /// Check that a pattern matching a constructor of a custom type is being used
 /// against a value of that same custom type.
+/// Whether a list of pattern fields places an unlabelled field after a
+/// labelled one, which the real compiler rejects ("Unlabelled argument after
+/// labelled argument").
+fn fields_unlabelled_after_labelled(
+  fields: List(glance.Field(glance.Pattern)),
+) -> Bool {
+  let #(_seen_labelled, found) =
+    list.fold(fields, #(False, False), fn(state, field) {
+      let #(seen_labelled, found) = state
+      case field {
+        glance.LabelledField(_, _, _) | glance.ShorthandField(_, _) -> #(
+          True,
+          found,
+        )
+        glance.UnlabelledField(_) -> #(seen_labelled, found || seen_labelled)
+      }
+    })
+  found
+}
+
 fn check_variant_arguments(
   environment: types.Environment,
   store: types.TypeStore,

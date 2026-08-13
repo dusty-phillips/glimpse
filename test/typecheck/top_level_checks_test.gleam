@@ -664,3 +664,20 @@ pub fn opaque_block_and_bodyless_forms_parse_fine_test() {
   let assert Ok(_) = glance.module("pub opaque type Y")
   Nil
 }
+
+pub fn type_definition_with_unlabelled_field_after_labelled_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Foo {
+    Foo(a: Int, Bool)
+  }",
+    )
+    == error.UnlabelledArgumentAfterLabelled
+}
+
+pub fn type_definition_labelled_after_unlabelled_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Foo {
+  Foo(Int, a: Bool)
+}",
+  )
+}

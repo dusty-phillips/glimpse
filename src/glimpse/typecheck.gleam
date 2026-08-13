@@ -145,7 +145,6 @@ pub fn module(
       }
     }),
   )
-
   // Custom type, variant, and type alias names may not contain `_`: the real
   // compiler rejects them at parse time ("Invalid type name" and friends),
   // while the lexer happily reads them as single identifiers.
@@ -166,7 +165,15 @@ pub fn module(
                     Ok(_) ->
                       case string.contains(variant.name, "_") {
                         True -> Error(error.InvalidVariantName(variant.name))
-                        False -> Ok(Nil)
+                        False ->
+                          case
+                            variant_fields_unlabelled_after_labelled(
+                              variant.fields,
+                            )
+                          {
+                            True -> Error(error.UnlabelledArgumentAfterLabelled)
+                            False -> Ok(Nil)
+                          }
                       }
                   }
                 },
@@ -188,6 +195,36 @@ pub fn module(
     }),
   )
 
+  // Importing the same name twice in one selective-import list is rejected by
+  // the real compiler ("Duplicate import" for values, "Duplicate type
+  // definition" for types), even when one occurrence is a type and the other
+  // a value of the same name.
+  use _ <- result.try(
+    list.fold(raw_module.imports, Ok(Nil), fn(result, import_) {
+      let definition = import_.definition
+      let import_names = fn(imports: List(glance.UnqualifiedImport)) {
+        list.map(imports, fn(member) { member.name })
+      }
+      case result {
+        Error(e) -> Error(e)
+        Ok(_) ->
+          case
+            intern.find_duplicate(import_names(definition.unqualified_types))
+          {
+            option.Some(name) -> Error(error.DuplicateDefinition(name))
+            option.None ->
+              case
+                intern.find_duplicate(import_names(
+                  definition.unqualified_values,
+                ))
+              {
+                option.Some(name) -> Error(error.DuplicateImport(name))
+                option.None -> Ok(Nil)
+              }
+          }
+      }
+    }),
+  )
   // Function and constant names share one namespace; the official compiler
   // rejects a module that defines the same name twice, in any combination.
   let definitions =
@@ -740,6 +777,25 @@ fn field_type_of(field: glance.VariantField) -> glance.Type {
     glance.LabelledVariantField(item, _label) -> item
     glance.UnlabelledVariantField(item) -> item
   }
+}
+
+/// Whether a list of variant definition fields places an unlabelled field
+/// after a labelled one, which the real compiler rejects at parse time.
+fn variant_fields_unlabelled_after_labelled(
+  fields: List(glance.VariantField),
+) -> Bool {
+  let #(_seen_labelled, found) =
+    list.fold(fields, #(False, False), fn(state, field) {
+      let #(seen_labelled, found) = state
+      case field {
+        glance.LabelledVariantField(_, _) -> #(True, found)
+        glance.UnlabelledVariantField(_) -> #(
+          seen_labelled,
+          found || seen_labelled,
+        )
+      }
+    })
+  found
 }
 
 fn check_public_signature_leaks(
