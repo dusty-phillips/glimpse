@@ -681,3 +681,49 @@ pub fn type_definition_labelled_after_unlabelled_is_fine_test() {
 }",
   )
 }
+
+pub fn public_alias_referencing_private_type_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Handle(a)
+
+type D
+
+pub type DirectoryHandle =
+  Handle(D)
+
+pub fn show() -> DirectoryHandle {
+  todo
+}",
+    )
+    == error.PrivateTypeLeak("D")
+}
+
+pub fn public_alias_referencing_private_type_without_public_use_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Handle(a)
+
+type D
+
+pub type DirectoryHandle =
+  Handle(D)
+
+pub fn main() -> Nil {
+  Nil
+}",
+  )
+}
+
+pub fn public_alias_referencing_public_type_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Handle(a)
+
+pub type D
+
+pub type DirectoryHandle =
+  Handle(D)
+
+pub fn show() -> DirectoryHandle {
+  todo
+}",
+  )
+}

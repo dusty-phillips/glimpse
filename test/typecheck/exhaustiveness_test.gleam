@@ -324,3 +324,29 @@ pub opaque type Holder {
 }",
   )
 }
+
+pub fn deleted_clause_on_inferred_call_result_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Event
+
+pub fn wrap(raw: Int, f: fn(Int) -> Result(Event, Nil)) -> Result(Event, Nil) {
+  case f(raw) {
+    Error(Nil) -> Error(Nil)
+  }
+}",
+    )
+    == error.InexhaustivePattern("Ok(_)")
+}
+
+pub fn complete_case_on_inferred_call_result_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Event
+
+pub fn wrap(raw: Int, f: fn(Int) -> Result(Event, Nil)) -> Result(Event, Nil) {
+  case f(raw) {
+    Ok(event) -> Ok(event)
+    Error(Nil) -> Error(Nil)
+  }
+}",
+  )
+}

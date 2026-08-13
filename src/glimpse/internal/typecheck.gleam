@@ -217,19 +217,31 @@ fn check_continuation(
   return: types.Type,
   continuation: List(glance.Statement),
 ) -> error.TypeCheckResult(#(TypeStore, Environment, types.Type)) {
-  use #(store, continuation_type) <- result.try(block(
-    environment,
-    store,
-    continuation,
-  ))
-  use store <- result.try(types.unify(
-    store,
-    environment,
-    callback_return,
-    continuation_type,
-  ))
-  let #(store, resolved) = types.resolve_keep_rigid(store, return)
-  Ok(#(store, environment, resolved))
+  // An empty continuation is "incomplete" in the real compiler: it warns but
+  // accepts the code, typing the use expression as the callback's return type
+  // without requiring the continuation to produce it. Only a non-empty
+  // continuation must agree with the callback return.
+  case continuation {
+    [] -> {
+      let #(store, resolved) = types.resolve_keep_rigid(store, return)
+      Ok(#(store, environment, resolved))
+    }
+    _ -> {
+      use #(store, continuation_type) <- result.try(block(
+        environment,
+        store,
+        continuation,
+      ))
+      use store <- result.try(types.unify(
+        store,
+        environment,
+        callback_return,
+        continuation_type,
+      ))
+      let #(store, resolved) = types.resolve_keep_rigid(store, return)
+      Ok(#(store, environment, resolved))
+    }
+  }
 }
 
 /// Typecheck a `use` statement where the function is a call, e.g.
@@ -538,29 +550,22 @@ fn resolve_subjects(
   })
 }
 
-/// Whether any of the resolved subject types still contains an unresolved
-/// inference variable anywhere (not just at the top level): a case on such a
-/// subject cannot be judged for exhaustiveness yet, since unifying the clause
-/// patterns may pin its type arguments (e.g. `Error(Nil)` pins the error type
-/// of a `Result` to `Nil`).
+/// Whether any of the resolved subject types is still unresolved at the top
+/// level (an unbound inference variable, or the return of a function whose
+/// signature is still inferred): a case on such a subject cannot be judged for
+/// exhaustiveness yet, since unifying the clause patterns may pin its type
+/// arguments (e.g. `Error(Nil)` pins the error type of a `Result` to `Nil`).
+/// Nested type variables do not defer the check: they are either pinned by the
+/// clause patterns (the subjects are re-resolved after unification) or they
+/// are the function's own generic parameters, which the checker handles
+/// structurally.
 fn any_subject_unresolved(subjects: List(types.Type)) -> Bool {
-  list.any(subjects, subject_has_unresolved_var)
-}
-
-fn subject_has_unresolved_var(type_: types.Type) -> Bool {
-  case type_ {
-    types.Var(_) | types.InferredReturn | types.TodoType -> True
-    types.CallableType(parameters, _labels, return) ->
-      list.any(parameters, subject_has_unresolved_var)
-      || subject_has_unresolved_var(return)
-    types.GenericCallableType(parameters, _labels, return, _) ->
-      list.any(parameters, subject_has_unresolved_var)
-      || subject_has_unresolved_var(return)
-    types.TupleType(elements) -> list.any(elements, subject_has_unresolved_var)
-    types.CustomType(_module, _name, parameters, _) ->
-      list.any(parameters, subject_has_unresolved_var)
-    _ -> False
-  }
+  list.any(subjects, fn(type_) {
+    case type_ {
+      types.Var(_) | types.InferredReturn | types.TodoType -> True
+      _ -> False
+    }
+  })
 }
 
 /// Typecheck an expression and return its type.

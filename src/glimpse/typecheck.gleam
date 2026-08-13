@@ -842,7 +842,8 @@ fn find_private_type_in_types(
 }
 
 /// Depth-first search for a private custom type reference within a single type
-/// annotation.
+/// annotation. A public type alias is followed into its definition: exposing
+/// the alias in a public signature exposes whatever it aliases.
 fn find_private_in_type(
   environment: Environment,
   type_: glance.Type,
@@ -851,7 +852,16 @@ fn find_private_in_type(
     glance.NamedType(_, name, module, parameters) ->
       case module == option.None && is_private_local_type(environment, name) {
         True -> Ok(name)
-        False -> find_private_in_types(environment, parameters)
+        False ->
+          case module == option.None && is_local_alias(environment, name) {
+            True ->
+              case dict.get(environment.custom_types, name) {
+                Ok(types.TypeAlias(_params, aliased)) ->
+                  find_private_in_resolved_type(environment, aliased)
+                _ -> find_private_in_types(environment, parameters)
+              }
+            False -> find_private_in_types(environment, parameters)
+          }
       }
     glance.TupleType(_, elements) ->
       find_private_in_types(environment, elements)
@@ -861,6 +871,72 @@ fn find_private_in_type(
         Error(_) -> find_private_in_types(environment, parameters)
       }
     glance.VariableType(_, _) | glance.HoleType(_, _) -> Error(Nil)
+  }
+}
+
+/// Whether `name` resolves to a type alias defined in the current module.
+fn is_local_alias(environment: Environment, name: String) -> Bool {
+  case dict.get(environment.custom_types, name) {
+    Ok(types.TypeAlias(_, _)) -> True
+    _ -> False
+  }
+}
+
+/// Depth-first search for a private custom type reference within a *resolved*
+/// type (the stored form of a type alias's aliased type). The environment's
+/// aliases keep their aliased types resolved, so scanning them must walk the
+/// resolved representation rather than a glance annotation.
+fn find_private_in_resolved_type(
+  environment: Environment,
+  type_: types.Type,
+) -> Result(String, Nil) {
+  case type_ {
+    types.CustomType(module, name, parameters, _) ->
+      case
+        module == environment.current_module
+        && !set.contains(environment.public_custom_types, name)
+      {
+        True -> Ok(name)
+        False ->
+          list.fold(parameters, Error(Nil), fn(prev, parameter) {
+            case prev {
+              Ok(_) -> prev
+              Error(_) -> find_private_in_resolved_type(environment, parameter)
+            }
+          })
+      }
+    types.TupleType(elements) ->
+      list.fold(elements, Error(Nil), fn(prev, element) {
+        case prev {
+          Ok(_) -> prev
+          Error(_) -> find_private_in_resolved_type(environment, element)
+        }
+      })
+    types.CallableType(parameters, _labels, return) ->
+      case find_private_in_resolved_type(environment, return) {
+        Ok(found) -> Ok(found)
+        Error(_) ->
+          list.fold(parameters, Error(Nil), fn(prev, parameter) {
+            case prev {
+              Ok(_) -> prev
+              Error(_) -> find_private_in_resolved_type(environment, parameter)
+            }
+          })
+      }
+    types.GenericCallableType(parameters, _labels, return, _) ->
+      case find_private_in_resolved_type(environment, return) {
+        Ok(found) -> Ok(found)
+        Error(_) ->
+          list.fold(parameters, Error(Nil), fn(prev, parameter) {
+            case prev {
+              Ok(_) -> prev
+              Error(_) -> find_private_in_resolved_type(environment, parameter)
+            }
+          })
+      }
+    types.TypeAlias(_params, aliased) ->
+      find_private_in_resolved_type(environment, aliased)
+    _ -> Error(Nil)
   }
 }
 

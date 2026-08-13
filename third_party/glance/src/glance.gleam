@@ -1009,6 +1009,17 @@ fn pattern_constructor_arguments(
         [#(t.RightParen, P(end)), ..tokens] ->
           Ok(PatternConstructorArguments(arguments, False, end + 1, tokens))
 
+        // A spread may follow an unlabelled argument without a comma: the
+        // real compiler accepts this deprecated record-pattern syntax
+        // (`Constructor(x ..)`) while recommending the comma.
+        [#(t.DotDot, pos), #(t.Comma, _), #(t.RightParen, P(end)), ..tokens]
+        | [#(t.DotDot, pos), #(t.RightParen, P(end)), ..tokens] ->
+          case last_argument_is_unlabelled(arguments) {
+            True ->
+              Ok(PatternConstructorArguments(arguments, True, end + 1, tokens))
+            False -> Error(UnexpectedToken(t.DotDot, pos))
+          }
+
         [#(t.Comma, _), #(t.DotDot, _), #(t.RightParen, P(end)), ..tokens] ->
           Ok(PatternConstructorArguments(arguments, True, end + 1, tokens))
 
@@ -2409,5 +2420,15 @@ fn field(
       use #(t, tokens) <- result.try(parser(tokens))
       Ok(#(UnlabelledField(t), tokens))
     }
+  }
+}
+
+/// Whether the most recently parsed constructor-pattern field (the head of the
+/// reversed argument list) is unlabelled, which lets a following spread omit
+/// its comma.
+fn last_argument_is_unlabelled(arguments: List(Field(Pattern))) -> Bool {
+  case arguments {
+    [UnlabelledField(_), ..] -> True
+    _ -> False
   }
 }
