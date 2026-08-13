@@ -727,3 +727,24 @@ pub fn show() -> DirectoryHandle {
 }",
   )
 }
+
+pub fn alias_with_undeclared_type_variable_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type TemplateName = ng
+
+pub fn main() -> Nil {
+  Nil
+}",
+    )
+    == error.UnknownCustomType("ng")
+}
+
+pub fn alias_with_declared_type_variable_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub type Template(a) = List(a)
+
+pub fn main() -> Nil {
+  Nil
+}",
+  )
+}

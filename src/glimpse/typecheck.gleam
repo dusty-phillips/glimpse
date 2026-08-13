@@ -1094,6 +1094,18 @@ pub fn type_alias(
     option.Some(name) -> Error(error.DuplicateTypeParameter(name))
     option.None -> Ok(Nil)
   })
+  // Every type variable used in the aliased type must be a declared parameter:
+  // `pub type X = a` with `a` undeclared is an unknown type in the real
+  // compiler, not an implicit generic.
+  use _ <- result.try(
+    case
+      type_variables_used(alias.aliased)
+      |> intern.find_first_not_in(alias.parameters)
+    {
+      option.Some(name) -> Error(error.UnknownCustomType(name))
+      option.None -> Ok(Nil)
+    },
+  )
   // Every declared type parameter must be used in the aliased type.
   case
     alias.parameters
