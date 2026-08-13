@@ -286,3 +286,41 @@ pub fn error_nil_pattern_with_inferred_subject_is_fine_test() {
 }",
   )
 }
+
+pub fn empty_lambda_with_expected_type_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn apply(x: Int, f: fn(Int) -> String) -> String {
+  f(x)
+}
+
+pub fn main() -> String {
+  apply(1, fn(y) {
+  })
+}",
+  )
+}
+
+pub fn private_type_in_public_custom_type_field_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "type Secret {
+    Secret(value: Int)
+  }
+
+  pub type Holder {
+    Holder(secret: Secret)
+  }",
+    )
+    == error.PrivateTypeLeak("Secret")
+}
+
+pub fn private_type_in_public_opaque_type_field_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "type Secret {
+  Secret(value: Int)
+}
+
+pub opaque type Holder {
+  Holder(secret: Secret)
+}",
+  )
+}

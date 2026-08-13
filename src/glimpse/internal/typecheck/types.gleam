@@ -1420,6 +1420,7 @@ fn prelude_definitions() -> dict.Dict(String, Type) {
       [],
       option.None,
       [],
+      False,
     )
   let value = GenericTypeVariable("a", False)
   let error = GenericTypeVariable("e", False)

@@ -1113,7 +1113,18 @@ fn fn_literal(
     ),
   )
 
-  use #(store, inferred_return) <- result.try(block(param_env, store, body))
+  use #(store, inferred_return) <- result.try(case body {
+    // An empty body `{}` accepts any return annotation in the real compiler
+    // (e.g. `fn() -> Int {}`), so it is a wildcard when a return is declared
+    // or an expected type constrains it, and Nil otherwise.
+    [] ->
+      case return_annotation, expected {
+        option.Some(_), _ -> Ok(#(store, types.TodoType))
+        option.None, option.Some(_) -> Ok(#(store, types.TodoType))
+        option.None, option.None -> Ok(#(store, types.NilType))
+      }
+    _ -> block(param_env, store, body)
+  })
 
   use #(store, return_type) <- result.try(case return_annotation {
     option.None -> Ok(#(store, inferred_return))

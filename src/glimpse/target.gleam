@@ -93,10 +93,18 @@ fn function_has_braces_body(
   definition: glance.Definition(glance.Function),
 ) -> Bool {
   let function = definition.definition
-  case function.return {
-    option.Some(return_type) ->
-      function.location.end > type_span_end(return_type)
-    option.None -> False
+  case function.has_braces_body {
+    True -> True
+    False ->
+      // A function with a return annotation but no body cannot be
+      // distinguished from one whose body is empty by the body list alone
+      // (both are empty), so fall back to the span: a body extends the
+      // function's location past the end of the return annotation.
+      case function.return {
+        option.Some(return_type) ->
+          function.location.end > type_span_end(return_type)
+        option.None -> False
+      }
   }
 }
 

@@ -35,6 +35,7 @@ pub type Function {
     parameters: List(FunctionParameter),
     return: Option(Type),
     body: List(Statement),
+    has_braces_body: Bool,
   )
 }
 
@@ -425,8 +426,7 @@ fn expect(
 ) -> Result(t, Error) {
   case tokens {
     [] -> Error(UnexpectedEndOfInput)
-    [#(token, position), ..tokens] if token == expected ->
-      next(position, tokens)
+    [#(token, position), ..tokens] if token == expected -> next(position, tokens)
     [#(other, position), ..] -> Error(UnexpectedToken(other, position))
   }
 }
@@ -777,7 +777,9 @@ fn unqualified_imports(
   }
 }
 
-fn check_labelled_order(parameters: List(FunctionParameter)) -> Result(Nil, Error) {
+fn check_labelled_order(
+  parameters: List(FunctionParameter),
+) -> Result(Nil, Error) {
   check_labelled_order_(False, parameters)
 }
 
@@ -823,14 +825,30 @@ fn function_definition(
   use #(return_type, end, tokens) <- result.try(result)
 
   // The function body
-  use #(body, end, tokens) <- result.try(case tokens {
-    [#(t.LeftBrace, _), ..tokens] -> statements([], tokens)
-    _ -> Ok(#([], end, tokens))
-  })
+  let body_result: Result(#(List(Statement), Int, Bool, Tokens), Error) = case
+    tokens
+  {
+    [#(t.LeftBrace, _), ..tokens] ->
+      statements([], tokens)
+      |> result.map(fn(state) {
+        let #(body, end, tokens) = state
+        #(body, end, True, tokens)
+      })
+    _ -> Ok(#([], end, False, tokens))
+  }
+  use #(body, end, body_has_braces, tokens) <- result.try(body_result)
 
   let location = Span(start, end)
   let function =
-    Function(location, name, publicity, parameters, return_type, body)
+    Function(
+      location,
+      name,
+      publicity,
+      parameters,
+      return_type,
+      body,
+      has_braces_body: body_has_braces,
+    )
   let module = push_function(module, attributes, function)
   Ok(#(module, tokens))
 }
@@ -1162,7 +1180,9 @@ fn binary_operator(token: Token) -> Result(BinaryOperator, Nil) {
   }
 }
 
-fn pop_binary_operator(tokens: Tokens) -> Result(#(BinaryOperator, Tokens), Nil) {
+fn pop_binary_operator(
+  tokens: Tokens,
+) -> Result(#(BinaryOperator, Tokens), Nil) {
   case tokens {
     [#(token, _), ..tokens] -> {
       use op <- result.map(binary_operator(token))
@@ -1525,7 +1545,9 @@ fn bit_array_size_loop(
   }
 }
 
-fn bit_array_size_unit(tokens: Tokens) -> Result(#(BitArraySize, Tokens), Error) {
+fn bit_array_size_unit(
+  tokens: Tokens,
+) -> Result(#(BitArraySize, Tokens), Error) {
   case tokens {
     [#(t.Name(name), P(start)), ..tokens] ->
       Ok(#(BitArraySizeVariable(span_from_string(start, name), name), tokens))
@@ -1938,8 +1960,6 @@ fn list(
     [#(t.RightSquare, P(end)), ..tokens] ->
       Ok(ParsedList(list.reverse(acc), None, tokens, end + 1))
 
-    [#(t.Comma, _), #(t.RightSquare, P(end)), ..tokens] if acc != [] ->
-      Ok(ParsedList(list.reverse(acc), None, tokens, end + 1))
     [#(t.DotDot, P(start)), #(t.RightSquare, P(end)) as close, ..tokens] -> {
       case discard {
         None -> unexpected_error([close, ..tokens])

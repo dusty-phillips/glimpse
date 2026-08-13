@@ -161,6 +161,7 @@ pub fn generic_function_parameter_test() {
           glance.NamedType(glance.Span(20, 23), "Nil", option.None, []),
         ),
         [glance.Expression(glance.Variable(glance.Span(26, 29), "Nil"))],
+        True,
       ),
     ))
 }
@@ -208,7 +209,7 @@ pub fn inferred_param_type_enforced_at_call_site_test() {
   // is the return, so it is `Int`) must be enforced when the function is
   // called: passing a `BitArray` is rejected like the real compiler rejects it.
   assert helpers.error_module_typecheck(
-    "fn decode(count, rest) -> Int { count }
+      "fn decode(count, rest) -> Int { count }
   pub fn main() -> Int {
     decode(<<1, 2>>, 5)
   }",

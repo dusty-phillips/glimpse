@@ -600,6 +600,38 @@ pub fn module(
     }),
   )
 
+  // A public custom type may not reference a private custom type in its
+  // variant fields unless it is opaque: an opaque type's fields are not part
+  // of its public interface. The real compiler rejects the leak at the type
+  // definition, just as it does for public function signatures.
+  use environment <- result.try(
+    glimpse_module.module.custom_types
+    |> list.try_fold(environment, fn(environment, definition) {
+      case
+        definition.definition.publicity == glance.Public
+        && !definition.definition.opaque_
+      {
+        False -> Ok(environment)
+        True ->
+          case
+            definition.definition.variants
+            |> list.map(fn(variant) { variant.fields })
+            |> list.flatten
+            |> list.map(field_type_of)
+            |> list.fold(Error(Nil), fn(prev, t) {
+              case prev {
+                Ok(_) -> prev
+                Error(_) -> find_private_in_type(environment, t)
+              }
+            })
+          {
+            Ok(leak) -> Error(error.PrivateTypeLeak(leak))
+            Error(_) -> Ok(environment)
+          }
+      }
+    }),
+  )
+
   use env_for_signatures <- result.try(
     glimpse_module.module.functions
     |> list.map(fn(definition) { definition.definition })
@@ -665,6 +697,17 @@ pub fn module(
     glimpse_module.module.functions,
   ))
 
+  // Inferred parameter types are written back into the signature during the
+  // body passes, so a public function whose *inferred* parameters mention a
+  // private custom type can only be caught now: the signature check above ran
+  // on the original annotations, where unannotated parameters are invisible.
+  use environment <- result.try(
+    functions
+    |> list.try_fold(environment, fn(environment, definition) {
+      check_public_signature_leaks(environment, definition.definition)
+    }),
+  )
+
   // Compute which targets each of this module's functions can run on, so
   // callers in other modules can reject calls to functions that cannot run on
   // the active build target (e.g. an erlang-only external called from
@@ -692,6 +735,13 @@ pub fn module(
 }
 
 /// A public function may not reference a private custom type in its signature.
+fn field_type_of(field: glance.VariantField) -> glance.Type {
+  case field {
+    glance.LabelledVariantField(item, _label) -> item
+    glance.UnlabelledVariantField(item) -> item
+  }
+}
+
 fn check_public_signature_leaks(
   environment: Environment,
   function: glance.Function,
@@ -1479,16 +1529,27 @@ pub fn function(
     ),
   )
 
-  // Typecheck the function body with the threaded store
-  use #(store, body_type) <- result.try(intern.block(
-    types.Environment(
-      ..param_state.environment,
-      generic_vars: param_state.generic_vars,
-      current_function: option.Some(function.name),
-    ),
-    param_state.store,
-    function.body,
-  ))
+  // Typecheck the function body with the threaded store. An empty body `{}`
+  // is special: the real compiler accepts it against *any* return annotation
+  // (e.g. `pub fn f() -> Int {}`), so its type is a wildcard when a return is
+  // declared, and Nil otherwise.
+  use #(store, body_type) <- result.try(case function.body {
+    [] ->
+      case function.return {
+        option.Some(_) -> Ok(#(store, types.TodoType))
+        option.None -> Ok(#(store, types.NilType))
+      }
+    _ ->
+      intern.block(
+        types.Environment(
+          ..param_state.environment,
+          generic_vars: param_state.generic_vars,
+          current_function: option.Some(function.name),
+        ),
+        param_state.store,
+        function.body,
+      )
+  })
   // A return type that embeds a nested call to the function itself is
   // infinitely recursive (e.g. `f(xs) { case xs { [h, ..t] -> [f(t)] } }`);
   // a return that merely *is* a call to the function is fine.

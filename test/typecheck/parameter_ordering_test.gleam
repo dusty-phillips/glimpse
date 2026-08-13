@@ -59,3 +59,16 @@ pub fn all_labelled_parameters_are_fine_test() {
   let assert Ok(_) =
     glance.module("pub fn f(from x: Int, to y: Int) -> Int { 0 }")
 }
+
+pub fn list_with_double_comma_is_rejected_test() {
+  let assert Error(glance.UnexpectedToken(_, _)) =
+    glance.module("pub fn f() -> List(Int) {\n  [1, , ]\n}")
+}
+
+pub fn empty_braces_function_with_return_annotation_is_fine_test() {
+  helpers.ok_module_typecheck("pub fn f() -> Int {\n}")
+}
+
+pub fn empty_braces_function_without_return_annotation_is_fine_test() {
+  helpers.ok_module_typecheck("pub fn f() {\n}")
+}

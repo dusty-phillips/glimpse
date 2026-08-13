@@ -27,6 +27,7 @@ pub fn typecheck_single_module_package_test() {
           glance.NamedType(glance.Span(17, 20), "Nil", option.None, []),
         ),
         [],
+        True,
       ),
     )
 }

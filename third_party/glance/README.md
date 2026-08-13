@@ -18,3 +18,8 @@ Re-apply the patch to `src/glance.gleam` if the dependency is refreshed.
 - An unlabelled function parameter after a labelled one is rejected with
   `UnlabelledAfterLabelled`; real Gleam reports "Unlabelled argument after
   labelled argument" for the same shape.
+- `Function` gains a `has_braces_body: Bool` field so an empty `{}` body is
+  distinguishable from a bodyless declaration (real Gleam accepts `{}` as an
+  implementation for any return annotation).
+- The list parser rejects a doubled comma (`[1, , ]`); real Gleam reports a
+  parse error for the empty element.
