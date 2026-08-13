@@ -356,6 +356,8 @@ pub type Type {
 pub type Error {
   UnexpectedEndOfInput
   UnexpectedToken(token: Token, position: Position)
+  UnexpectedAttributeEnd(position: Position)
+  UnlabelledAfterLabelled
 }
 
 pub fn module(src: String) -> Result(Module, Error) {
@@ -363,7 +365,7 @@ pub fn module(src: String) -> Result(Module, Error) {
   |> glexer.discard_comments
   |> glexer.discard_whitespace
   |> glexer.lex
-  |> slurp(Module([], [], [], [], []), [], _)
+  |> slurp(Module([], [], [], [], []), [], option.None, _)
 }
 
 fn push_constant(
@@ -491,51 +493,52 @@ fn attribute(tokens: Tokens) -> Result(#(Attribute, Tokens), Error) {
 fn slurp(
   module: Module,
   attributes: List(Attribute),
+  attribute_position: Option(Position),
   tokens: Tokens,
 ) -> Result(Module, Error) {
   case tokens {
-    [#(t.At, _), ..tokens] -> {
+    [#(t.At, P(start)), ..tokens] -> {
       use #(attribute, tokens) <- result.try(attribute(tokens))
-      slurp(module, [attribute, ..attributes], tokens)
+      slurp(module, [attribute, ..attributes], option.Some(P(start)), tokens)
     }
 
     [#(t.Import, P(start)), ..tokens] -> {
       let result = import_statement(module, attributes, tokens, start)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Pub, P(start)), #(t.Type, _), ..tokens] -> {
       let result =
         type_definition(module, attributes, Public, False, tokens, start)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Pub, P(start)), #(t.Opaque, _), #(t.Type, _), ..tokens] -> {
       let result =
         type_definition(module, attributes, Public, True, tokens, start)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Type, P(start)), ..tokens] -> {
       let result =
         type_definition(module, attributes, Private, False, tokens, start)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Pub, P(start)), #(t.Const, _), ..tokens] -> {
       let result = const_definition(module, attributes, Public, tokens, start)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Const, P(start)), ..tokens] -> {
       let result = const_definition(module, attributes, Private, tokens, start)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Pub, start), #(t.Fn, _), #(t.Name(name), _), ..tokens] -> {
@@ -543,7 +546,7 @@ fn slurp(
       let result =
         function_definition(module, attributes, Public, name, start, tokens)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
     [#(t.Fn, start), #(t.Name(name), _), ..tokens] -> {
@@ -551,10 +554,16 @@ fn slurp(
       let result =
         function_definition(module, attributes, Private, name, start, tokens)
       use #(module, tokens) <- result.try(result)
-      slurp(module, [], tokens)
+      slurp(module, [], option.None, tokens)
     }
 
-    [] -> Ok(module)
+    [] ->
+      case attributes, attribute_position {
+        [], _ -> Ok(module)
+        [_first, ..], option.Some(position) ->
+          Error(UnexpectedAttributeEnd(position))
+        [_first, ..], option.None -> Ok(module)
+      }
     tokens -> unexpected_error(tokens)
   }
 }
@@ -768,6 +777,28 @@ fn unqualified_imports(
   }
 }
 
+fn check_labelled_order(parameters: List(FunctionParameter)) -> Result(Nil, Error) {
+  check_labelled_order_(False, parameters)
+}
+
+fn check_labelled_order_(
+  seen_labelled: Bool,
+  parameters: List(FunctionParameter),
+) -> Result(Nil, Error) {
+  case parameters {
+    [] -> Ok(Nil)
+    [parameter, ..rest] ->
+      case seen_labelled && option.is_none(parameter.label) {
+        True -> Error(UnlabelledAfterLabelled)
+        False ->
+          check_labelled_order_(
+            seen_labelled || option.is_some(parameter.label),
+            rest,
+          )
+      }
+  }
+}
+
 fn function_definition(
   module: Module,
   attributes: List(Attribute),
@@ -781,6 +812,11 @@ fn function_definition(
 
   let result = comma_delimited([], tokens, function_parameter, t.RightParen)
   use #(parameters, end, tokens) <- result.try(result)
+
+  // Once a labelled parameter appears, every later parameter must also be
+  // labelled (the real compiler rejects an unlabelled one after a labelled
+  // one with "Unlabelled argument after labelled argument").
+  use _ <- result.try(check_labelled_order(parameters))
 
   // Return type
   let result = optional_return_annotation(end, tokens)

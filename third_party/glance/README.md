@@ -11,3 +11,10 @@ Re-apply the patch to `src/glance.gleam` if the dependency is refreshed.
 - `case_` parses a body-less `case subject` (no `{ ... }`) as a case with no
   clauses: real Gleam parses this shape and only reports "Missing case body"
   during analysis, which never runs for target-filtered definitions.
+
+- A trailing attribute with no following definition (e.g. `@external(...)`
+  at end of file) is rejected with `UnexpectedAttributeEnd`; real Gleam
+  reports "I was expecting a function definition after this".
+- An unlabelled function parameter after a labelled one is rejected with
+  `UnlabelledAfterLabelled`; real Gleam reports "Unlabelled argument after
+  labelled argument" for the same shape.

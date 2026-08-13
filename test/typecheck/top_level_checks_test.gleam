@@ -344,7 +344,7 @@ pub fn external_function_with_discarded_unannotated_param_is_rejected_test() {
 pub fn external_function_with_unannotated_labelled_param_is_rejected_test() {
   assert helpers.error_module_typecheck(
       "@external(erlang, \"x\", \"f\")
-    pub fn f(tag x: Int, y) -> Int {
+    pub fn f(y, tag x: Int) -> Int {
       x
     }",
     )
