@@ -289,7 +289,7 @@ fn check_all(
             <> "ms",
           )
         show_test_dir(worker_root)
-        process.send(subject, #(i, list.map(results, fn(r) { r.0 })))
+        process.send(subject, #(i, results))
       })
     })
 
@@ -300,11 +300,24 @@ fn check_all(
       let #(idx, results) = process.receive_forever(subject)
       [#(idx, results), ..acc]
     })
-  let results = combine_results(collected, list.length(mutants))
+  let #(results, records) = combine_results(collected, list.length(mutants))
   let false_negatives =
     list.filter(results, fn(r) { string.starts_with(r, "FALSE-NEG") })
   let false_positives =
     list.filter(results, fn(r) { string.starts_with(r, "FALSE-POS") })
+
+  // Write the FALSE-NEG and FALSE-POS records from this single process, so a
+  // sweep never corrupts the record files through concurrent worker appends.
+  let _ =
+    list.each(records, fn(record) {
+      let _ = case string.starts_with(record, "FALSE-NEG") {
+        True ->
+          simplifile.append(to: "/tmp/mutcheck/falsenegs.txt", contents: record)
+        False ->
+          simplifile.append(to: "/tmp/mutcheck/falsepos.txt", contents: record)
+      }
+      Nil
+    })
 
   let _ = option.map(baseline_key, dev_check.erase_baseline)
 
@@ -372,12 +385,17 @@ fn ceiling_division(a: Int, b: Int) -> Int {
 }
 
 fn combine_results(
-  collected: List(#(Int, List(String))),
+  collected: List(#(Int, List(#(String, Int, Int, String)))),
   total: Int,
-) -> List(String) {
+) -> #(List(String), List(String)) {
   // order is irrelevant for a report; concatenate all worker results.
   let _ = total
-  list.flatten(list.map(collected, fn(p) { p.1 }))
+  let verdicts =
+    list.flatten(list.map(collected, fn(p) { list.map(p.1, fn(r) { r.0 }) }))
+  let records =
+    list.flatten(list.map(collected, fn(p) { list.map(p.1, fn(r) { r.3 }) }))
+    |> list.filter(fn(record) { record != "" })
+  #(verdicts, records)
 }
 
 fn worker_dir(root: String, src: String, token: String, i: Int) -> String {
@@ -402,8 +420,11 @@ fn worker_token() -> String {
 
 /// Run one mutant in a worker: write the mutant into the worker's copy, run
 /// the real and glimpse checks in *that* copy, and restore the worker's source.
-/// Returns `#(verdict, real_ms, glimpse_ms)` so the worker can report how its
-/// time was spent.
+/// Returns `#(verdict, real_ms, glimpse_ms, record)` where `record` is the
+/// FALSE-NEG or FALSE-POS detail (mutant source) to write, or `""` when the
+/// mutant was judged fine. Records are returned rather than appended to a
+/// shared file so the single main process can write them serially: concurrent
+/// worker appends interleave and corrupt the record file.
 fn check_one_worker(
   _worker_i: Int,
   worker_root: String,
@@ -412,7 +433,7 @@ fn check_one_worker(
   mut: Mutant,
   baseline: option.Option(dev_check.Baseline),
   both: Bool,
-) -> #(String, Int, Int) {
+) -> #(String, Int, Int, String) {
   let path = "/" <> string.join([worker_root, src], "/")
   write(path, mut.1)
   let real_start = monotime.now_ms()
@@ -425,37 +446,31 @@ fn check_one_worker(
   let result = case real_verdict {
     "real-accepts" ->
       case both {
-        False -> #("real-accepts :: " <> mut.0, real_ms, 0)
+        False -> #("real-accepts :: " <> mut.0, real_ms, 0, "")
         True -> {
           let verdict = case glimpse_check(worker_root, src, baseline) {
             True -> "both-ok :: " <> mut.0
-            False -> {
-              let record = "FALSE-POS :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
-              let _ =
-                simplifile.append(
-                  to: "/tmp/mutcheck/falsepos.txt",
-                  contents: record,
-                )
-              "FALSE-POS :: " <> mut.0
-            }
+            False -> "FALSE-POS :: " <> mut.0
           }
-          #(verdict, real_ms, monotime.now_ms() - glimpse_start)
+          let record = case verdict {
+            "FALSE-POS :: " <> _ ->
+              "FALSE-POS :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
+            _ -> ""
+          }
+          #(verdict, real_ms, monotime.now_ms() - glimpse_start, record)
         }
       }
     _ -> {
       let verdict = case glimpse_check(worker_root, src, baseline) {
-        True -> {
-          let record = "FALSE-NEG :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
-          let _ =
-            simplifile.append(
-              to: "/tmp/mutcheck/falsenegs.txt",
-              contents: record,
-            )
-          "FALSE-NEG :: " <> mut.0
-        }
+        True -> "FALSE-NEG :: " <> mut.0
         False -> "ok :: " <> mut.0
       }
-      #(verdict, real_ms, monotime.now_ms() - glimpse_start)
+      let record = case verdict {
+        "FALSE-NEG :: " <> _ ->
+          "FALSE-NEG :: " <> mut.0 <> "\n" <> mut.1 <> "\n\n"
+        _ -> ""
+      }
+      #(verdict, real_ms, monotime.now_ms() - glimpse_start, record)
     }
   }
   write(path, original)
