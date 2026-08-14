@@ -18,6 +18,14 @@ fn is_type_variable(name: String) -> Bool {
   |> result.unwrap(False)
 }
 
+/// Whether a name contains an uppercase letter, which the real compiler
+/// rejects in lowercase identifiers and implicit type variables.
+fn name_has_uppercase(name: String) -> Bool {
+  list.any(string.to_graphemes(name), fn(ch) {
+    string.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ch)
+  })
+}
+
 /// The variant a custom type is known to be, if a constructor pattern refined
 /// it. `option.None` means the variant is not known.
 pub fn custom_type_inferred_variant(type_: Type) -> Option(Int) {
@@ -1879,7 +1887,14 @@ fn do_type_(
 
     glance.VariableType(_, name) -> {
       case is_type_variable(name) {
-        True -> Ok(#(store, next_hole, GenericTypeVariable(name, False)))
+        True ->
+          // An implicit type variable may not contain uppercase letters: the
+          // real compiler rejects `child_dataInt` in a signature as an invalid
+          // type variable name.
+          case name_has_uppercase(name) {
+            True -> Error(error.InvalidTypeVariableName(name))
+            False -> Ok(#(store, next_hole, GenericTypeVariable(name, False)))
+          }
         False ->
           lookup_variable_type(environment, name)
           |> result.map(fn(type_) { #(store, next_hole, type_) })

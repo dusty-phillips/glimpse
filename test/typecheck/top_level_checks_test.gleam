@@ -778,3 +778,33 @@ pub fn snake_case_names_are_fine_test() {
 }",
   )
 }
+
+pub fn camel_case_type_variable_in_signature_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub type Builder(a, b) {
+  Builder
+}
+
+pub fn start(builder: Builder(child_argument, child_dataInt)) -> Nil {
+  Nil
+}",
+    )
+    == error.InvalidTypeVariableName("child_dataInt")
+}
+
+pub fn camel_case_type_variable_in_return_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn start() -> child_dataInt {
+  todo
+}",
+    )
+    == error.InvalidTypeVariableName("child_dataInt")
+}
+
+pub fn snake_case_type_variable_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn start() -> child_data {
+  todo
+}",
+  )
+}
