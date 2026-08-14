@@ -1705,6 +1705,10 @@ fn constant_(
     store,
     constant.value,
   ))
+  // The relaxed opacity applies only to the constant's own value. Restore the
+  // ordinary environment before continuing so the relaxed visibility cannot
+  // leak into later constants or the module's function bodies.
+  let environment = types.Environment(..environment, in_constant: False)
 
   let constant_type_result = case constant.annotation {
     option.None -> Ok(#(store, value_type))

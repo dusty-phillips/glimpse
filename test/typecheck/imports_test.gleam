@@ -259,3 +259,60 @@ pub fn main() -> Nil {
     )
   assert err == error.InvalidName("Transient")
 }
+
+pub fn fn_body_referencing_private_cross_module_fn_with_constant_is_rejected_test() {
+  let assert Ok(dep_module) = glance.module("fn f() -> Int {\n  1\n}")
+  let assert Ok(#(_, dep_env)) =
+    typecheck.module(
+      glimpse.Module("other/package", dep_module, []),
+      dict.new(),
+      target.Erlang,
+      False,
+    )
+  let assert Ok(main_module) =
+    glance.module(
+      "import other/package
+
+const x = 1
+
+pub fn main() -> Int {
+  package.f()
+}",
+    )
+  let assert Error(err) =
+    typecheck.module(
+      glimpse.Module("main_module", main_module, ["other/package"]),
+      dict.new() |> dict.insert("other/package", dep_env),
+      target.Erlang,
+      True,
+    )
+  assert err == error.InvalidName("f")
+}
+
+pub fn fn_body_referencing_public_cross_module_fn_with_constant_is_fine_test() {
+  let assert Ok(dep_module) = glance.module("pub fn f() -> Int {\n  1\n}")
+  let assert Ok(#(_, dep_env)) =
+    typecheck.module(
+      glimpse.Module("other/package", dep_module, []),
+      dict.new(),
+      target.Erlang,
+      False,
+    )
+  let assert Ok(main_module) =
+    glance.module(
+      "import other/package
+
+const x = 1
+
+pub fn main() -> Int {
+  package.f()
+}",
+    )
+  let assert Ok(#(_, _)) =
+    typecheck.module(
+      glimpse.Module("main_module", main_module, ["other/package"]),
+      dict.new() |> dict.insert("other/package", dep_env),
+      target.Erlang,
+      True,
+    )
+}
