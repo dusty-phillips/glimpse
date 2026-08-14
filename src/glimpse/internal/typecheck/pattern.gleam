@@ -673,6 +673,17 @@ fn check_variant_arguments(
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   list.try_fold(arguments, #(store, environment, 0), fn(state, field) {
     let #(store, env, positional_count) = state
+    // A bare lowercase name in a constructor pattern is the deprecated
+    // shorthand for `name: name` when the constructor has a labelled field
+    // with that name; and a positional argument otherwise.
+    let field = case field {
+      glance.UnlabelledField(glance.PatternVariable(span, name)) ->
+        case dict.has_key(position_labels, name) {
+          True -> glance.ShorthandField(name, span)
+          False -> field
+        }
+      _ -> field
+    }
     use expected <- result.try(variant_field_expected_type(
       env,
       parameters,

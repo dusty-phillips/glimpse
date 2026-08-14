@@ -389,3 +389,31 @@ pub fn case_pattern_variable_with_snake_case_is_fine_test() {
 }",
   )
 }
+
+pub fn bare_name_pattern_is_shorthand_when_field_exists_test() {
+  helpers.ok_module_typecheck(
+    "pub type Data {
+  Data(data: BitArray, end_stream: Bool, identifier: Int)
+}
+
+pub fn f(x: Data) -> Int {
+  case x {
+    Data(identifier, data: data, end_stream: end_stream) -> identifier
+  }
+}",
+  )
+}
+
+pub fn bare_name_pattern_stays_positional_when_no_such_field_test() {
+  helpers.ok_module_typecheck(
+    "pub type Some {
+  Some(Int)
+}
+
+pub fn f(x: Some) -> Int {
+  case x {
+    Some(v) -> v
+  }
+}",
+  )
+}
