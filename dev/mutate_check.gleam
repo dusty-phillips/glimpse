@@ -5421,12 +5421,18 @@ fn name_spans_from(
 ) -> List(Span) {
   case index < string.length(line) {
     False ->
+      // End of line: flush the word only if the last character was part of one
+      // (otherwise a trailing run of punctuation would emit a garbage span).
       case prev {
         option.None -> list.reverse(acc)
-        option.Some(_) -> {
-          let kind = classify(line, start, index, prev)
-          list.reverse([kind, ..acc])
-        }
+        option.Some(previous) ->
+          case is_identifier_char(previous) {
+            True -> {
+              let kind = classify(line, start, index, prev)
+              list.reverse([kind, ..acc])
+            }
+            False -> list.reverse(acc)
+          }
       }
     True -> {
       let ch = string.slice(line, at_index: index, length: 1)
@@ -5443,10 +5449,17 @@ fn name_spans_from(
           }
         False, option.None ->
           name_spans_from(line, index + 1, 0, option.Some(ch), acc)
-        False, option.Some(_) -> {
-          let kind = classify(line, start, index, prev)
-          name_spans_from(line, index + 1, 0, option.Some(ch), [kind, ..acc])
-        }
+        // A word just ended: emit its span. A non-word char following another
+        // non-word char must not emit anything, or the span carries a stale
+        // start and grows to cover the whole line.
+        False, option.Some(previous) ->
+          case is_identifier_char(previous) {
+            True -> {
+              let kind = classify(line, start, index, prev)
+              name_spans_from(line, index + 1, 0, option.Some(ch), [kind, ..acc])
+            }
+            False -> name_spans_from(line, index + 1, 0, option.Some(ch), acc)
+          }
       }
     }
   }
