@@ -366,3 +366,26 @@ pub fn f(x: T) -> Nil {
 }",
     )
 }
+
+pub fn case_pattern_variable_with_uppercase_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(msg: Int) -> Int {
+  case msg {
+    etTime -> 1
+    _ -> 0
+  }
+}",
+    )
+    == error.InvalidVariableName("etTime")
+}
+
+pub fn case_pattern_variable_with_snake_case_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f(msg: Int) -> Int {
+  case msg {
+    et_time -> 1
+    _ -> 0
+  }
+}",
+  )
+}

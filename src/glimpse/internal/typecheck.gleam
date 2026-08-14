@@ -2436,6 +2436,28 @@ fn validate_alternative_patterns(
     False ->
       Error(error.IncorrectPatternCount(list.length(patterns), subject_count))
     True -> {
+      // Case-pattern variable names follow the same camelCase rule as let
+      // bindings: lowercase names may not contain uppercase letters.
+      use _ <- result.try(
+        patterns
+        |> list.fold(Ok(Nil), fn(result, pattern) {
+          case result {
+            Error(e) -> Error(e)
+            Ok(_) ->
+              pattern_variable_names(pattern)
+              |> list.fold(Ok(Nil), fn(name_result, name) {
+                case name_result {
+                  Error(e) -> Error(e)
+                  Ok(_) ->
+                    case name_has_uppercase(name) {
+                      True -> Error(error.InvalidVariableName(name))
+                      False -> Ok(Nil)
+                    }
+                }
+              })
+          }
+        }),
+      )
       let variables =
         patterns
         |> list.index_map(fn(pattern, subject) {
