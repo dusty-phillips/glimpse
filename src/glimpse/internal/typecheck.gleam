@@ -810,7 +810,31 @@ fn typecheck_with_expected(
             environment,
             glance.FieldAccess(glance.Span(0, 0), container, label),
           ))
-          module_value(store, nested_defs, label)
+          case module_value(store, nested_defs, label) {
+            Ok(state) -> Ok(state)
+            Error(invalid) ->
+              case environment.in_constant {
+                // The namespace's defs were filtered to public definitions at
+                // import time, which hides opaque variant constructors. A
+                // constant's qualified reference to one of those is accepted
+                // by the real compiler, so retry against the full definition
+                // set when resolving inside a constant.
+                True ->
+                  case container_name_of(container) {
+                    option.None -> Error(invalid)
+                    option.Some(name) ->
+                      case targets.module_path_of(environment, name) {
+                        option.None -> Error(invalid)
+                        option.Some(module_path) ->
+                          module_definitions(environment, module_path)
+                          |> result.try(fn(defs) {
+                            module_value(store, defs, label)
+                          })
+                      }
+                  }
+                False -> Error(invalid)
+              }
+          }
         }
         Ok(#(store, container_type)) ->
           case field_access_type(environment, store, container_type, label) {
@@ -1311,7 +1335,27 @@ fn module_field_type(
     glance.Variable(_, name) ->
       case dict.get(environment.imports.module_imports, name) {
         Ok(types.NamespaceType(nested_defs, _)) ->
-          module_value(store, nested_defs, label)
+          case module_value(store, nested_defs, label) {
+            Ok(state) -> Ok(state)
+            Error(invalid) ->
+              case environment.in_constant {
+                // The namespace's defs were filtered to public definitions at
+                // import time, which hides opaque variant constructors. A
+                // constant's qualified reference to one of those is accepted
+                // by the real compiler, so retry against the full definition
+                // set when resolving inside a constant.
+                True ->
+                  case targets.module_path_of(environment, name) {
+                    option.None -> Error(invalid)
+                    option.Some(module_path) ->
+                      module_definitions(environment, module_path)
+                      |> result.try(fn(defs) {
+                        module_value(store, defs, label)
+                      })
+                  }
+                False -> Error(invalid)
+              }
+          }
         _ -> Error(error.InvalidName(name))
       }
     _ -> Error(error.InvalidFieldAccess("", label))
@@ -1341,11 +1385,18 @@ fn module_definitions(
 ) -> error.TypeCheckResult(dict.Dict(String, types.Type)) {
   case dict.get(environment.imports.module_environments, module) {
     Ok(other_env) ->
-      Ok(
-        dict.filter(other_env.scope.definitions, fn(name, _type_) {
-          set.contains(other_env.scope.public_definitions, name)
-        }),
-      )
+      case environment.in_constant {
+        // A constant's qualified reference to an opaque variant constructor
+        // is accepted by the real compiler, so constants resolve against the
+        // full definition set.
+        True -> Ok(other_env.scope.definitions)
+        False ->
+          Ok(
+            dict.filter(other_env.scope.definitions, fn(name, _type_) {
+              set.contains(other_env.scope.public_definitions, name)
+            }),
+          )
+      }
     Error(_) -> Error(error.InvalidFieldAccess("", module))
   }
 }
@@ -3490,4 +3541,13 @@ fn typecheck_capture_arguments(
     let #(store, fields, state) = state
     #(store, list.reverse(fields), state)
   })
+}
+
+/// The variable name a module-qualified access's container denotes, if it is a
+/// plain variable.
+fn container_name_of(container: glance.Expression) -> option.Option(String) {
+  case container {
+    glance.Variable(_, name) -> option.Some(name)
+    _ -> option.None
+  }
 }

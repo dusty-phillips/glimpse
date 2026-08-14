@@ -1222,6 +1222,12 @@ pub type Environment {
     // being compiled, not for its dependencies).
     target: target.Target,
     check_target_support: Bool,
+    // Whether the value currently being resolved is a module constant. The
+    // real compiler's constant resolution does not enforce opacity for
+    // qualified variant-constructor references (`const x = module.Variant`
+    // is accepted even for an opaque type), while the normal expression
+    // resolver rejects them.
+    in_constant: Bool,
   )
 }
 
@@ -1263,6 +1269,7 @@ pub fn new_env(current_module: String) -> Environment {
     target_support: dict.new(),
     target: target.Erlang,
     check_target_support: False,
+    in_constant: False,
   )
 }
 
@@ -1294,6 +1301,7 @@ pub fn prelude_module_env(module_name: String) -> Environment {
     target_support: dict.new(),
     target: target.Erlang,
     check_target_support: False,
+    in_constant: False,
   )
 }
 

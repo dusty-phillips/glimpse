@@ -1695,6 +1695,11 @@ fn constant_(
   constant: glance.Constant,
 ) -> types.EnvStateResult(glance.Constant) {
   let store = types.new_type_store()
+  // The real compiler's constant resolution does not enforce opacity for
+  // qualified variant-constructor references, so constants may reference
+  // them by name even for opaque types (the normal expression resolver
+  // rejects those references).
+  let environment = types.Environment(..environment, in_constant: True)
   use #(store, value_type) <- result.try(intern.expression(
     environment,
     store,

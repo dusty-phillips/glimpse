@@ -170,7 +170,7 @@ fn callee_support(
 
 /// The absolute module path a local namespace name refers to, by reversing the
 /// import-name mapping (which records `absolute -> local alias`).
-fn module_path_of(
+pub fn module_path_of(
   environment: Environment,
   container: String,
 ) -> Option(String) {

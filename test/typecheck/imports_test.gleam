@@ -188,3 +188,74 @@ pub fn duplicate_value_import_is_rejected_test() {
     )
     == error.DuplicateImport("None")
 }
+
+pub fn opaque_variant_referenced_in_constant_is_fine_test() {
+  let assert Ok(dep_module) =
+    glance.module(
+      "pub opaque type Restart {
+  Permanent
+  Transient
+}",
+    )
+  let assert Ok(#(_, dep_env)) =
+    typecheck.module(
+      glimpse.Module("other/package", dep_module, []),
+      dict.new(),
+      target.Erlang,
+      False,
+    )
+  let assert Ok(main_module) =
+    glance.module(
+      "import other/package
+
+const default_strategy = package.Transient
+
+pub fn main() -> Nil {
+  Nil
+}",
+    )
+  let assert Ok(_) =
+    typecheck.module(
+      glimpse.Module("main_module", main_module, ["other/package"]),
+      dict.new() |> dict.insert("other/package", dep_env),
+      target.Erlang,
+      True,
+    )
+}
+
+pub fn opaque_variant_referenced_in_function_body_is_rejected_test() {
+  let assert Ok(dep_module) =
+    glance.module(
+      "pub opaque type Restart {
+  Permanent
+  Transient
+}",
+    )
+  let assert Ok(#(_, dep_env)) =
+    typecheck.module(
+      glimpse.Module("other/package", dep_module, []),
+      dict.new(),
+      target.Erlang,
+      False,
+    )
+  let assert Ok(main_module) =
+    glance.module(
+      "import other/package
+
+pub fn f() -> package.Restart {
+  package.Transient
+}
+
+pub fn main() -> Nil {
+  Nil
+}",
+    )
+  let assert Error(err) =
+    typecheck.module(
+      glimpse.Module("main_module", main_module, ["other/package"]),
+      dict.new() |> dict.insert("other/package", dep_env),
+      target.Erlang,
+      True,
+    )
+  assert err == error.InvalidName("Transient")
+}
