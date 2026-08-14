@@ -477,7 +477,13 @@ fn check_pattern_segment_options(
       case !is_last && has_bits_or_bytes && !has_size {
         True -> Error(error.InvalidBitStringSegment("bits"))
         False ->
-          case has_utf && is_variable {
+          // A UTF segment cannot take an explicit size: a variable-width
+          // segment matched with a fixed size is contradictory, so the real
+          // compiler rejects `utf8`/`utf16`/`utf32` with any size option on
+          // every pattern shape (a named variable, a discard, or a literal).
+          // A `utf` option on a *named variable* pattern is rejected even
+          // without a size, since the variable-width segment cannot be bound.
+          case has_utf && is_variable || has_utf && has_size {
             True -> Error(error.InvalidBitStringSegment("utf8"))
             False ->
               case has_unit && !has_size {
@@ -788,6 +794,8 @@ fn check_pattern_size_options(
         |> result.try(fn(store) {
           check_bit_array_size_variables(environment, store, size)
         })
+      glance.UnitOption(unit) if unit <= 0 ->
+        Error(error.InvalidBitStringSegment("unit"))
       _ -> Ok(store)
     }
   })

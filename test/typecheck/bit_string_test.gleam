@@ -290,3 +290,49 @@ pub fn string_literal_pattern_segment_binary_is_rejected_test() {
     )
     == error.InvalidBitStringSegment("utf8")
 }
+
+pub fn pattern_utf_with_size_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<_padding:utf8-size(2), _:bytes>> -> True
+        _ -> False
+      }
+    }",
+    )
+    == error.InvalidBitStringSegment("utf8")
+}
+
+pub fn pattern_discard_utf_without_size_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f(bits: BitArray) -> Bool {
+      case bits {
+        <<_padding:utf8, _:bytes>> -> True
+        _ -> False
+      }
+    }",
+  )
+}
+
+pub fn pattern_negative_unit_is_rejected_test() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(bits: BitArray) -> Int {
+  case bits {
+    <<_pad:size(8)-unit(-8), _rest:bits>> -> 1
+    _ -> 0
+  }
+}",
+    )
+    == error.InvalidBitStringSegment("unit")
+}
+
+pub fn pattern_positive_unit_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn f(bits: BitArray) -> Int {
+  case bits {
+    <<_pad:size(8)-unit(8), _rest:bits>> -> 1
+    _ -> 0
+  }
+}",
+  )
+}
