@@ -390,7 +390,7 @@ pub fn case_pattern_variable_with_snake_case_is_fine_test() {
   )
 }
 
-pub fn bare_name_pattern_is_shorthand_when_field_exists_test() {
+pub fn bare_name_pattern_binds_next_free_field_test() {
   helpers.ok_module_typecheck(
     "pub type Data {
   Data(data: BitArray, end_stream: Bool, identifier: Int)

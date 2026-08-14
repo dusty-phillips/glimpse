@@ -671,24 +671,34 @@ fn check_variant_arguments(
   parameters: List(types.Type),
   position_labels: dict.Dict(String, Int),
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
+  // Labelled arguments are matched to their named fields. The real compiler
+  // reorders those arguments to their field positions, so an unlabelled
+  // (positional) argument binds the *next free* field: any position occupied
+  // by a supplied labelled argument is skipped. Compute the free positions
+  // once so each positional argument can be assigned its field index.
+  let taken_positions =
+    list.filter_map(arguments, fn(field) {
+      case field {
+        glance.LabelledField(label, _, _) | glance.ShorthandField(label, _) ->
+          case dict.get(position_labels, label) {
+            Ok(position) -> Ok(position)
+            Error(_) -> Error(Nil)
+          }
+        glance.UnlabelledField(_) -> Error(Nil)
+      }
+    })
+  let free_positions =
+    int_range(list.length(parameters))
+    |> list.filter(fn(position) { !list.contains(taken_positions, position) })
   list.try_fold(arguments, #(store, environment, 0), fn(state, field) {
     let #(store, env, positional_count) = state
-    // A bare lowercase name in a constructor pattern is the deprecated
-    // shorthand for `name: name` when the constructor has a labelled field
-    // with that name; and a positional argument otherwise.
-    let field = case field {
-      glance.UnlabelledField(glance.PatternVariable(span, name)) ->
-        case dict.has_key(position_labels, name) {
-          True -> glance.ShorthandField(name, span)
-          False -> field
-        }
-      _ -> field
-    }
+    let positional_index =
+      list_at(free_positions, positional_count) |> option.unwrap(0)
     use expected <- result.try(variant_field_expected_type(
       env,
       parameters,
       position_labels,
-      positional_count,
+      positional_index,
       field,
     ))
     case field {
@@ -860,5 +870,22 @@ fn check_bit_array_size_positive(
         Error(_) -> Ok(store)
       }
     _ -> Ok(store)
+  }
+}
+
+/// `[0, 1, ..., length - 1]`.
+fn int_range(length: Int) -> List(Int) {
+  list.index_map(list.repeat(Nil, length), fn(_item, index) { index })
+}
+
+/// The element at `index`, or `None` when out of bounds.
+fn list_at(list: List(a), index: Int) -> option.Option(a) {
+  case list {
+    [] -> option.None
+    [head, ..rest] ->
+      case index {
+        0 -> option.Some(head)
+        _ -> list_at(rest, index - 1)
+      }
   }
 }
