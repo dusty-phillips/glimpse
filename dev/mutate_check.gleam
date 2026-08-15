@@ -60,7 +60,7 @@ pub fn main() {
 
 /// Everything the runner needs, threaded through worker hand-offs.
 type Options =
-  #(String, String, option.Option(String), Bool, Bool, Int)
+  #(String, String, option.Option(String), Bool, Bool, Int, Bool)
 
 fn parse_args(args: List(String)) -> Result(Options, String) {
   // parse recursively to allow any option order
@@ -69,12 +69,12 @@ fn parse_args(args: List(String)) -> Result(Options, String) {
   // count helps. Beyond ~1.5x cores the real `gleam check` subprocesses (each
   // already multithreaded) contend and throughput plateaus or degrades, so 16
   // is a safe default; tune with `--jobs`.
-  let parsed = parse_args_(args, 16, option.None, False, False)
+  let parsed = parse_args_(args, 16, option.None, False, False, False)
   case parsed {
     Ok(v) -> Ok(v)
     Error(_) ->
       Error(
-        "usage: run -m dev/mutate_check -- --root <root> --src <src> [--jobs <n>] [--kind <kind>] [--count] [--both]",
+        "usage: run -m dev/mutate_check -- --root <root> --src <src> [--jobs <n>] [--kind <kind>] [--count] [--both] [--resume]",
       )
   }
 }
@@ -85,10 +85,11 @@ fn parse_args_(
   kind: option.Option(String),
   count: Bool,
   both: Bool,
+  resume: Bool,
 ) -> Result(Options, String) {
   case args {
     ["--root", root, "--src", src, ..rest] ->
-      parse_rest(rest, root, src, jobs, kind, count, both)
+      parse_rest(rest, root, src, jobs, kind, count, both, resume)
     _ -> Error("requires --root and --src")
   }
 }
@@ -101,18 +102,23 @@ fn parse_rest(
   kind: option.Option(String),
   count: Bool,
   both: Bool,
+  resume: Bool,
 ) -> Result(Options, String) {
   case args {
-    [] -> Ok(#(root, src, kind, count, both, jobs))
-    ["--count", ..rest] -> parse_rest(rest, root, src, jobs, kind, True, both)
-    ["--both", ..rest] -> parse_rest(rest, root, src, jobs, kind, count, True)
+    [] -> Ok(#(root, src, kind, count, both, jobs, resume))
+    ["--count", ..rest] ->
+      parse_rest(rest, root, src, jobs, kind, True, both, resume)
+    ["--both", ..rest] ->
+      parse_rest(rest, root, src, jobs, kind, count, True, resume)
+    ["--resume", ..rest] ->
+      parse_rest(rest, root, src, jobs, kind, count, both, True)
     ["--jobs", n, ..rest] ->
       case int.parse(n) {
-        Ok(j) -> parse_rest(rest, root, src, j, kind, count, both)
+        Ok(j) -> parse_rest(rest, root, src, j, kind, count, both, resume)
         Error(_) -> Error("invalid --jobs value")
       }
     ["--kind", k, ..rest] ->
-      parse_rest(rest, root, src, jobs, option.Some(k), count, both)
+      parse_rest(rest, root, src, jobs, option.Some(k), count, both, resume)
     _ -> Error("unknown option")
   }
 }
@@ -122,7 +128,7 @@ type Mutant =
   #(String, String)
 
 fn run(opts: Options) {
-  let #(root, src, kind, count, both, jobs) = opts
+  let #(root, src, kind, count, both, jobs, resume) = opts
   let path = "/" <> string.join([root, src], "/")
   case simplifile.read(from: path) {
     Error(_) -> io.println_error("cannot read " <> path)
@@ -184,6 +190,7 @@ fn run(opts: Options) {
             both,
             token,
             baseline_key,
+            resume,
           )
         }
       }
@@ -199,6 +206,14 @@ fn run(opts: Options) {
 /// invocations -- even against the same root -- get disjoint worker dirs and
 /// cannot overwrite each other's mutant files. Worker dirs are still cleaned
 /// with `rm -rf` before use in case a previous run left a stale copy.
+///
+/// Every verdict is appended to a durable per-worker result file
+/// (`/tmp/mutcheck/results.<key>.w<i>.txt`, one `gidx\tverdict` line per
+/// mutant) as it is judged, and FALSE-NEG/FALSE-POS details to a matching
+/// records file. The final tally is aggregated from those files, so a crashed
+/// main process loses only the in-memory tally, never judged work. A resumed
+/// run (`--resume`) keeps the files and skips mutants whose gidx is already
+/// recorded, so an interrupted run can continue instead of restarting.
 fn check_all(
   root: String,
   path: String,
@@ -209,6 +224,7 @@ fn check_all(
   both: Bool,
   token: String,
   baseline_key: option.Option(String),
+  resume: Bool,
 ) {
   io.println(
     string.inspect(list.length(mutants))
@@ -219,6 +235,44 @@ fn check_all(
   // Safety clamp: never more workers than mutants, never fewer than one.
   let workers = int.max(1, int.min(jobs, list.length(mutants)))
   let batches = split_into(mutants, workers)
+  // Each batch `i` covers the mutants `[i * size, i * size + len(batch))`.
+  let size = ceiling_division(list.length(mutants), workers)
+  let key = results_key(root, src)
+  // A fresh run discards any previous run's durable state; a resumed run
+  // keeps it so already-judged mutants are skipped.
+  let _ = case resume {
+    False -> {
+      let _ =
+        indices(workers)
+        |> list.each(fn(i) {
+          let _ =
+            shellout.command(
+              run: "rm",
+              with: [
+                "-f",
+                result_file_path(key, i),
+                record_file_path(key, i),
+              ],
+              in: ".",
+              opt: [],
+            )
+          Nil
+        })
+      let _ =
+        shellout.command(
+          run: "rm",
+          with: [
+            "-f",
+            "/tmp/mutcheck/falsenegs.txt",
+            "/tmp/mutcheck/falsepos.txt",
+          ],
+          in: ".",
+          opt: [],
+        )
+      Nil
+    }
+    True -> Nil
+  }
   let subject = process.new_subject()
   let _ =
     list.index_map(batches, fn(batch, i) {
@@ -263,10 +317,29 @@ fn check_all(
         // copying it into this worker's heap.
         let baseline = option.map(baseline_key, dev_check.fetch_baseline)
         hide_test_dir(worker_root)
+        let done = read_done_gidx(result_file_path(key, i))
+        let results_path = result_file_path(key, i)
+        let records_path = record_file_path(key, i)
         let batch_start = monotime.now_ms()
         let results =
-          list.map(batch, fn(mut) {
-            check_one_worker(i, worker_root, src, original, mut, baseline, both)
+          list.index_map(batch, fn(mut, local) {
+            let gidx = i * size + local
+            case list.contains(done, gidx) {
+              True -> #("resumed :: " <> mut.0, 0, 0, "")
+              False ->
+                check_one_worker(
+                  i,
+                  gidx,
+                  results_path,
+                  records_path,
+                  worker_root,
+                  src,
+                  original,
+                  mut,
+                  baseline,
+                  both,
+                )
+            }
           })
         // Aggregate per-worker phase timings and print a summary line so we can
         // see where time goes (real `gleam check` subprocesses vs in-process
@@ -289,25 +362,32 @@ fn check_all(
             <> "ms",
           )
         show_test_dir(worker_root)
-        process.send(subject, #(i, results))
+        process.send(subject, i)
       })
     })
 
-  // Receive one batch of results per worker; order is irrelevant for reporting.
-  let collected =
-    indices(list.length(batches))
-    |> list.fold([], fn(acc, _i) {
-      let #(idx, results) = process.receive_forever(subject)
-      [#(idx, results), ..acc]
-    })
-  let #(results, records) = combine_results(collected, list.length(mutants))
-  let false_negatives =
-    list.filter(results, fn(r) { string.starts_with(r, "FALSE-NEG") })
-  let false_positives =
-    list.filter(results, fn(r) { string.starts_with(r, "FALSE-POS") })
+  // Wait for every worker to finish; the durable result files, not this
+  // in-memory signal, carry the verdicts.
+  let _ =
+    indices(workers)
+    |> list.map(fn(_i) { process.receive_forever(subject) })
 
-  // Write the FALSE-NEG and FALSE-POS records from this single process, so a
-  // sweep never corrupts the record files through concurrent worker appends.
+  let verdicts = read_worker_verdicts(key, workers)
+  let false_negatives =
+    list.filter(verdicts, fn(v) { string.starts_with(v, "FALSE-NEG") })
+  let false_positives =
+    list.filter(verdicts, fn(v) { string.starts_with(v, "FALSE-POS") })
+
+  // Rebuild the FALSE-NEG/FALSE-POS record files from the durable per-worker
+  // record stores, so a resume never duplicates them.
+  let records = read_worker_records(key, workers)
+  let _ =
+    shellout.command(
+      run: "rm",
+      with: ["-f", "/tmp/mutcheck/falsenegs.txt", "/tmp/mutcheck/falsepos.txt"],
+      in: ".",
+      opt: [],
+    )
   let _ =
     list.each(records, fn(record) {
       let _ = case string.starts_with(record, "FALSE-NEG") {
@@ -337,7 +417,7 @@ fn check_all(
       Nil
     })
 
-  let _ = list.each(results, fn(r) { io.println(r) })
+  let _ = list.each(verdicts, fn(r) { io.println(r) })
 
   // leave the source file restored to its original content
   write(path, original)
@@ -345,12 +425,102 @@ fn check_all(
     "\n"
     <> string.inspect(list.length(false_negatives))
     <> "/"
-    <> string.inspect(list.length(results))
+    <> string.inspect(list.length(mutants))
     <> " FALSE NEGATIVES, "
     <> string.inspect(list.length(false_positives))
     <> " FALSE POSITIVES in "
     <> src,
   )
+}
+
+/// A stable key for a (root, src) pair's durable result files, so a resumed
+/// run finds the previous run's files regardless of its worker token.
+fn results_key(root: String, src: String) -> String {
+  sanitize(root) <> "." <> sanitize(src)
+}
+
+fn sanitize(s: String) -> String {
+  s |> string.replace("/", "_") |> string.replace(".", "_")
+}
+
+fn result_file_path(key: String, i: Int) -> String {
+  "/tmp/mutcheck/results." <> key <> ".w" <> int.to_string(i) <> ".txt"
+}
+
+fn record_file_path(key: String, i: Int) -> String {
+  "/tmp/mutcheck/records." <> key <> ".w" <> int.to_string(i) <> ".txt"
+}
+
+/// The gidx of every mutant already judged by earlier runs of this worker,
+/// read from its durable result file (one `gidx\tverdict` line per mutant).
+fn read_done_gidx(path: String) -> List(Int) {
+  case simplifile.read(from: path) {
+    Error(_) -> []
+    Ok(contents) ->
+      string.split(contents, "\n")
+      |> list.fold([], fn(acc: List(Int), line) {
+        case string.split(line, "\t") {
+          [gidx, _verdict] ->
+            case int.parse(gidx) {
+              Ok(g) -> [g, ..acc]
+              Error(_) -> acc
+            }
+          _ -> acc
+        }
+      })
+  }
+}
+
+/// Every verdict from every worker's durable result file, deduplicated by
+/// gidx so a mutant judged in more than one run (e.g. after a resume with a
+/// different job count) is counted once. A malformed trailing line from a
+/// crash mid-append is skipped.
+fn read_worker_verdicts(key: String, workers: Int) -> List(String) {
+  let lines: List(#(Int, String)) =
+    indices(workers)
+    |> list.map(fn(i) { read_verdict_lines(result_file_path(key, i)) })
+    |> list.flatten
+  let deduped =
+    list.fold(lines, [], fn(acc: List(#(Int, String)), line: #(Int, String)) {
+      case
+        list.any(acc, fn(existing: #(Int, String)) { existing.0 == line.0 })
+      {
+        True -> acc
+        False -> [line, ..acc]
+      }
+    })
+  list.map(deduped, fn(line) { line.1 })
+}
+
+fn read_verdict_lines(path: String) -> List(#(Int, String)) {
+  case simplifile.read(from: path) {
+    Error(_) -> []
+    Ok(contents) ->
+      string.split(contents, "\n")
+      |> list.fold([], fn(acc: List(#(Int, String)), line) {
+        case string.split(line, "\t") {
+          [gidx, verdict] ->
+            case int.parse(gidx) {
+              Ok(g) -> [#(g, verdict), ..acc]
+              Error(_) -> acc
+            }
+          _ -> acc
+        }
+      })
+  }
+}
+
+/// The raw contents of every worker's durable record file (multi-line
+/// FALSE-NEG/FALSE-POS blocks), concatenated.
+fn read_worker_records(key: String, workers: Int) -> List(String) {
+  indices(workers)
+  |> list.map(fn(i) {
+    case simplifile.read(from: record_file_path(key, i)) {
+      Error(_) -> ""
+      Ok(contents) -> contents
+    }
+  })
+  |> list.filter(fn(s) { s != "" })
 }
 
 /// Give each `jobs` worker a roughly equal slice of the mutant list, preserving
@@ -384,20 +554,6 @@ fn ceiling_division(a: Int, b: Int) -> Int {
   }
 }
 
-fn combine_results(
-  collected: List(#(Int, List(#(String, Int, Int, String)))),
-  total: Int,
-) -> #(List(String), List(String)) {
-  // order is irrelevant for a report; concatenate all worker results.
-  let _ = total
-  let verdicts =
-    list.flatten(list.map(collected, fn(p) { list.map(p.1, fn(r) { r.0 }) }))
-  let records =
-    list.flatten(list.map(collected, fn(p) { list.map(p.1, fn(r) { r.3 }) }))
-    |> list.filter(fn(record) { record != "" })
-  #(verdicts, records)
-}
-
 fn worker_dir(root: String, src: String, token: String, i: Int) -> String {
   root
   <> "."
@@ -422,11 +578,15 @@ fn worker_token() -> String {
 /// the real and glimpse checks in *that* copy, and restore the worker's source.
 /// Returns `#(verdict, real_ms, glimpse_ms, record)` where `record` is the
 /// FALSE-NEG or FALSE-POS detail (mutant source) to write, or `""` when the
-/// mutant was judged fine. Records are returned rather than appended to a
-/// shared file so the single main process can write them serially: concurrent
-/// worker appends interleave and corrupt the record file.
+/// mutant was judged fine. Each verdict is appended to the worker's durable
+/// result file (`gidx\tverdict`) and each record to its record file as it is
+/// judged, so an interrupted run never loses judged work; the tally is later
+/// aggregated from those files.
 fn check_one_worker(
   _worker_i: Int,
+  gidx: Int,
+  results_path: String,
+  records_path: String,
   worker_root: String,
   src: String,
   original: String,
@@ -474,6 +634,18 @@ fn check_one_worker(
     }
   }
   write(path, original)
+  let _ =
+    simplifile.append(
+      to: results_path,
+      contents: int.to_string(gidx) <> "\t" <> result.0 <> "\n",
+    )
+  let _ = case result.3 {
+    "" -> Nil
+    record -> {
+      let _ = simplifile.append(to: records_path, contents: record)
+      Nil
+    }
+  }
   result
 }
 
