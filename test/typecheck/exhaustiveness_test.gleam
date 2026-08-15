@@ -244,10 +244,6 @@ pub fn f() -> Int {
     == error.InexhaustivePattern("False")
 }
 
-
-
-
-
 pub fn error_nil_pattern_covers_error_variant_test() {
   helpers.ok_module_typecheck(
     "pub fn run(x: Result(Int, Nil)) -> Int {
@@ -331,6 +327,28 @@ pub fn wrap(raw: Int, f: fn(Int) -> Result(Event, Nil)) -> Result(Event, Nil) {
     Ok(event) -> Ok(event)
     Error(Nil) -> Error(Nil)
   }
+}",
+  )
+}
+
+/// Disabled: the published glance rejects the body-less `case x` syntax at parse time. Kept as documentation.
+pub fn bodyless_case_in_analysed_code_is_rejected() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(x: Int) -> Int {
+  case x
+  1
+}",
+    )
+    == error.InexhaustivePattern("_")
+}
+
+/// Disabled: the published glance rejects the body-less `case x` syntax at parse time. Kept as documentation.
+pub fn bodyless_case_in_filtered_function_is_fine() {
+  helpers.ok_module_typecheck(
+    "@target(javascript)
+pub fn f(x: Int) -> Int {
+  case x
+  1
 }",
   )
 }

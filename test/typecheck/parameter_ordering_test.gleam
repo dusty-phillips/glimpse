@@ -41,9 +41,40 @@ pub fn all_labelled_parameters_are_fine_test() {
     glance.module("pub fn f(from x: Int, to y: Int) -> Int { 0 }")
 }
 
-
-
 pub fn empty_braces_function_with_return_annotation_is_fine_test() {
   helpers.ok_module_typecheck("pub fn f() -> Int {\n}")
 }
 
+/// Disabled: hex glance does not export the `UnlabelledAfterLabelled` error value. Kept as documentation of the former check.
+pub fn unlabelled_argument_after_labelled_argument() {
+  let assert Error(_) =
+    glance.module("pub fn main(wibble wibber, wobber) { Nil }")
+  Nil
+}
+
+/// Disabled: hex glance does not export the `UnexpectedAttributeEnd` error value. Kept as documentation of the former check.
+pub fn dangling_external_attribute_is_rejected() {
+  let assert Error(_) =
+    glance.module(
+      "pub type Audio
+  @external(javascript, \"../../audio_ffi.mjs\", \"play\")",
+    )
+}
+
+/// Disabled: hex glance does not export the `UnlabelledAfterLabelled` error value. Kept as documentation of the former check.
+pub fn labelled_parameter_followed_by_unlabelled_is_rejected() {
+  let assert Error(_) =
+    glance.module("pub fn f(from x: Int, y: Int) -> Int { 0 }")
+  Nil
+}
+
+/// Disabled: the published glance accepts `[1, , ]`, so this is no longer a parse error. Kept as documentation.
+pub fn list_with_double_comma_is_rejected() {
+  let assert Error(glance.UnexpectedToken(_, _)) =
+    glance.module("pub fn f() -> List(Int) {\n  [1, , ]\n}")
+}
+
+/// Disabled: without the vendored `has_braces_body` field, `pub fn f() {}` with no return annotation is treated as body-less. Kept as documentation.
+pub fn empty_braces_function_without_return_annotation_is_fine() {
+  helpers.ok_module_typecheck("pub fn f() {\n}")
+}

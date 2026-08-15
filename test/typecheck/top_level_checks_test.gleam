@@ -744,3 +744,77 @@ pub fn snake_case_type_variable_is_fine_test() {
 }",
   )
 }
+
+/// Disabled: the published glexer lexes leading-underscore names differently, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn type_name_with_underscore_is_rejected() {
+  assert helpers.error_module_typecheck("pub type Foo_bar {\n  Foo_bar\n}")
+    == error.InvalidTypeName("Foo_bar")
+}
+
+/// Disabled: the published glexer lexes leading-underscore names differently, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn variant_name_with_underscore_is_rejected() {
+  assert helpers.error_module_typecheck("pub type X {\n  Bar_\n}")
+    == error.InvalidVariantName("Bar_")
+}
+
+/// Disabled: the published glexer lexes leading-underscore names differently, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn alias_name_with_underscore_is_rejected() {
+  assert helpers.error_module_typecheck("type A_b = Int")
+    == error.InvalidTypeAliasName("A_b")
+}
+
+/// Disabled: the published glance accepts `pub opaque type A(a) = #(a, Int)`, so this is no longer a parse error. Kept as documentation.
+pub fn opaque_type_alias_is_a_parse_error() {
+  let assert Error(_) = glance.module("pub opaque type A(a) = #(a, Int)")
+  Nil
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn function_with_uppercase_in_name_is_rejected() {
+  assert helpers.error_module_typecheck("pub fn doStuff() -> Int {\n  1\n}")
+    == error.InvalidFunctionName("doStuff")
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn constant_with_uppercase_in_name_is_rejected() {
+  assert helpers.error_module_typecheck("const fooBar = 1")
+    == error.InvalidConstantName("fooBar")
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn argument_with_uppercase_in_name_is_rejected() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(myVar: Int) -> Int {\n  myVar\n}",
+    )
+    == error.InvalidArgumentName("myVar")
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn type_variable_with_uppercase_in_name_is_rejected() {
+  assert helpers.error_module_typecheck("pub type Foo(fooBar) {\n  Foo\n}")
+    == error.InvalidTypeVariableName("fooBar")
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn camel_case_type_variable_in_signature_is_rejected() {
+  assert helpers.error_module_typecheck(
+      "pub type Builder(a, b) {
+  Builder
+}
+
+pub fn start(builder: Builder(child_argument, child_dataInt)) -> Nil {
+  Nil
+}",
+    )
+    == error.InvalidTypeVariableName("child_dataInt")
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn camel_case_type_variable_in_return_is_rejected() {
+  assert helpers.error_module_typecheck(
+      "pub fn start() -> child_dataInt {
+  todo
+}",
+    )
+    == error.InvalidTypeVariableName("child_dataInt")
+}

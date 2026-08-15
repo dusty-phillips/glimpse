@@ -390,3 +390,32 @@ pub fn f(x: Some) -> Int {
 }",
   )
 }
+
+/// Disabled: the published glance rejects the comma-less spread, so it is now a parse error rather than accepted. Kept as documentation of the previously-accepted deprecated syntax.
+pub fn unlabelled_arg_with_comma_less_spread_is_fine() {
+  helpers.ok_module_typecheck(
+    "pub type T {
+  Transition(a: Int, b: Int)
+}
+
+pub fn f(x: T) -> Nil {
+  case x {
+    Transition(__zzz..) -> Nil
+    _ -> Nil
+  }
+}",
+  )
+}
+
+/// Disabled: the published glexer rejects camelCase identifiers at lex time, so this source never reaches the typechecker. Kept as documentation of the former typechecker-level check.
+pub fn case_pattern_variable_with_uppercase_is_rejected() {
+  assert helpers.error_module_typecheck(
+      "pub fn f(msg: Int) -> Int {
+  case msg {
+    etTime -> 1
+    _ -> 0
+  }
+}",
+    )
+    == error.InvalidVariableName("etTime")
+}

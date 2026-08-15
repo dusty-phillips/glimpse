@@ -109,7 +109,7 @@ pub fn let_bound_capture_used_at_two_types_is_rejected_test() {
   // let-bound capture at two different types, even though each direct capture
   // expression (`wrap(_)(1)`, `wrap(_)(True)`) is polymorphic.
   assert helpers.error_module_typecheck(
-    "pub type Box(a) { Box(a) }
+      "pub type Box(a) { Box(a) }
   pub fn wrap(x: a) -> Box(a) { Box(x) }
   pub fn f() -> #(Box(Int), Box(Bool)) {
     let g = wrap(_)
