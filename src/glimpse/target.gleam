@@ -75,10 +75,28 @@ pub fn function_supported(
       case definition.definition.body {
         [] ->
           list.any(external_attributes(definition), fn(attribute) {
-            external_matches_target(target, attribute)
+            external_usable_for_target(target, attribute)
           })
         _ -> True
       }
+  }
+}
+
+/// Whether a function's external can serve as its implementation when checking
+/// against `target`. An external for exactly `target` counts, and so does an
+/// external for a target glimpse does not model: glimpse typechecks code for
+/// runtimes the real compiler does not know, so such a function is treated as
+/// having an implementation rather than rejected. This is the lenient variant
+/// of `external_matches_target`, which stays strict because it decides whether
+/// a function's Gleam body is skipped in favour of the external.
+fn external_usable_for_target(
+  target: Target,
+  attribute: glance.Attribute,
+) -> Bool {
+  case attribute.arguments {
+    [glance.Variable(_, name), ..] ->
+      name == target_name(target) || name != "erlang" && name != "javascript"
+    _ -> True
   }
 }
 
@@ -97,11 +115,14 @@ fn function_has_braces_body(
   // from one whose body is empty by the body list alone (both are empty), so
   // the span is authoritative: a body extends the function's location past the
   // end of the return annotation. Without a return annotation there is no
-  // anchor to compare against, so the function is treated as body-less.
+  // anchor to compare against, so the function is treated as having a body:
+  // the common `pub fn main() {}` must not be mistaken for the body-less
+  // `pub fn main()`, and the genuinely body-less form without an annotation
+  // is rare enough to accept.
   case function.return {
     option.Some(return_type) ->
       function.location.end > type_span_end(return_type)
-    option.None -> False
+    option.None -> True
   }
 }
 

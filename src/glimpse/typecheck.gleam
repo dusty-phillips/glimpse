@@ -358,10 +358,14 @@ pub fn module(
           False -> Ok(Nil)
           True ->
             case external_count {
+              // A function with no body and no external has no implementation
+              // at all: the real compiler rejects this with "Function without
+              // an implementation", regardless of build target.
               0 ->
                 case target.function_supported(target, definition) {
                   True -> Ok(Nil)
-                  False -> Error(error.UnsupportedTarget(glance_function.name))
+                  False ->
+                    Error(error.MissingImplementation(glance_function.name))
                 }
               _ ->
                 case
@@ -522,40 +526,39 @@ pub fn module(
                             glance.String(_, module_path),
                             glance.String(_, function_name),
                           ] ->
-                            case name == "erlang" || name == "javascript" {
-                              False -> Error(error.UnknownExternalTarget(name))
+                            // The real compiler validates the module path
+                            // and function name of JavaScript externals at
+                            // parse time, and passes Erlang externals
+                            // through unvalidated. Type-level externals
+                            // (a custom type's JS class binding) are not
+                            // validated at all. glimpse typechecks code for
+                            // arbitrary runtimes, so any other target name
+                            // is also passed through unvalidated.
+                            case name == "javascript" && scope == "function" {
+                              False -> Ok(Nil)
                               True ->
-                                // The real compiler validates the module path
-                                // and function name of JavaScript externals at
-                                // parse time, and passes Erlang externals
-                                // through unvalidated. Type-level externals
-                                // (a custom type's JS class binding) are not
-                                // validated at all.
-                                case
-                                  name == "javascript" && scope == "function"
-                                {
-                                  False -> Ok(Nil)
+                                case valid_js_module(module_path) {
+                                  False ->
+                                    Error(error.InvalidExternalModule(
+                                      module_path,
+                                    ))
                                   True ->
-                                    case valid_js_module(module_path) {
+                                    case valid_js_function(function_name) {
                                       False ->
-                                        Error(error.InvalidExternalModule(
-                                          module_path,
+                                        Error(error.InvalidExternalFunction(
+                                          function_name,
                                         ))
-                                      True ->
-                                        case valid_js_function(function_name) {
-                                          False ->
-                                            Error(error.InvalidExternalFunction(
-                                              function_name,
-                                            ))
-                                          True -> Ok(Nil)
-                                        }
+                                      True -> Ok(Nil)
                                     }
                                 }
                             }
                           [glance.Variable(_, name), ..] ->
                             case name == "erlang" || name == "javascript" {
                               True -> Error(error.InvalidExternalAttribute)
-                              False -> Error(error.UnknownExternalTarget(name))
+                              // Any other target name is valid: glimpse
+                              // typechecks code for runtimes the real
+                              // compiler does not know about.
+                              False -> Ok(Nil)
                             }
                           _ -> Error(error.InvalidExternalAttribute)
                         }

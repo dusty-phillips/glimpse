@@ -72,13 +72,13 @@ pub fn imported_type_in_public_signature_is_fine_test() {
   })
 }
 
-pub fn private_type_nested_in_public_signature_test() {
+pub fn public_bodyless_function_without_external_with_private_signature_is_rejected_test() {
   assert helpers.error_module_typecheck(
       "@external(erlang, \"a\", \"b\")
     type PrivateType
     pub fn parse() -> Result(PrivateType, Nil)",
     )
-    == error.UnsupportedTarget("parse")
+    == error.MissingImplementation("parse")
 }
 
 pub fn todo_in_a_constant_test() {
@@ -164,12 +164,11 @@ pub fn external_attribute_on_custom_type_wrong_arity_test() {
     == error.InvalidExternalAttribute
 }
 
-pub fn external_attribute_on_custom_type_unknown_target_test() {
-  assert helpers.error_module_typecheck(
-      "@external(python, \"a\", \"b\")
-    pub type T",
-    )
-    == error.UnknownExternalTarget("python")
+pub fn external_attribute_on_custom_type_for_arbitrary_target_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(python, \"a\", \"b\")
+pub type T",
+  )
 }
 
 pub fn external_attribute_on_custom_type_is_fine_test() {
@@ -554,12 +553,12 @@ pub fn private_unsupported_target_external_is_fine_test() {
 
 pub fn bodyless_function_without_external_is_rejected_test() {
   assert helpers.error_module_typecheck("pub fn f() -> Int")
-    == error.UnsupportedTarget("f")
+    == error.MissingImplementation("f")
 }
 
 pub fn private_bodyless_function_without_external_is_rejected_test() {
   assert helpers.error_module_typecheck("fn f() -> Int")
-    == error.UnsupportedTarget("f")
+    == error.MissingImplementation("f")
 }
 
 pub fn empty_brace_body_is_an_implementation_test() {
@@ -817,4 +816,35 @@ pub fn camel_case_type_variable_in_return_is_rejected() {
 }",
     )
     == error.InvalidTypeVariableName("child_dataInt")
+}
+
+pub fn empty_braces_body_without_return_annotation_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "pub fn main() {}
+pub fn g() -> Int {
+  1
+}",
+  )
+}
+
+pub fn external_for_unmodelled_target_is_supported_test() {
+  helpers.ok_module_typecheck(
+    "@external(python, \"os\", \"getenv\")
+pub fn get_env(name: String) -> String
+
+pub fn read_env() -> String {
+  get_env(\"HOME\")
+}
+
+pub fn main() -> Nil {
+  Nil
+}",
+  )
+}
+
+pub fn private_external_for_unmodelled_target_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(rust, \"sys\", \"ffi\")
+fn ffi_call() -> Int",
+  )
 }

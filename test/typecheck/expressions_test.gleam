@@ -713,14 +713,13 @@ pub fn record_update_nested_type_parameter_field_test() {
   )
 }
 
-pub fn unknown_external_target_test() {
-  assert helpers.error_module_typecheck(
-      "@external(rust, \"gleam@erlang@process\", \"send\")
+pub fn external_for_arbitrary_target_is_fine_test() {
+  helpers.ok_module_typecheck(
+    "@external(rust, \"gleam@erlang@process\", \"send\")
   fn send(pid: BitArray) -> Nil {
     todo
   }",
-    )
-    == error.UnknownExternalTarget("rust")
+  )
 }
 
 pub fn valid_external_target_test() {

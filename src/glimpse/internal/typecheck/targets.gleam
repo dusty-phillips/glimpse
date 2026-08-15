@@ -27,6 +27,13 @@ pub fn external_support(
               types.TargetSupport(erlang: True, javascript: support.javascript)
             [glance.Variable(_, "javascript"), ..] ->
               types.TargetSupport(erlang: support.erlang, javascript: True)
+            // An external for any other target names a runtime glimpse does
+            // not model. glimpse typechecks code destined for such runtimes,
+            // so a function implemented there is treated as supported on the
+            // modelled targets rather than rejected by the target-support
+            // checks.
+            [glance.Variable(_, _), ..] ->
+              types.TargetSupport(erlang: True, javascript: True)
             _ -> support
           }
       }

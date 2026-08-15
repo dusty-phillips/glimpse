@@ -155,10 +155,6 @@ pub type TypeCheckError {
   /// Raised when a string literal contains an invalid escape sequence, e.g.
   /// `"\1"`, which the Gleam compiler rejects at parse time.
   InvalidEscape(value: String)
-  /// Raised when an `@external` attribute names a build target that does not
-  /// exist, e.g. `@external(rust, ...)`. The Gleam compiler rejects this at
-  /// parse time.
-  UnknownExternalTarget(name: String)
   /// Raised when a `@target` attribute names a build target that does not
   /// exist, e.g. `@target(python)`. The Gleam compiler rejects this at parse
   /// time; only `erlang` and `javascript` are recognised.
@@ -221,6 +217,12 @@ pub type TypeCheckError {
   DuplicateAttribute(name: String)
   /// Raised when a value is only implemented for another build target.
   UnsupportedTarget(name: String)
+  /// Raised when a function is declared without a body and without an
+  /// `@external` implementation, e.g. `pub fn f() -> Int`. The real compiler
+  /// reports this as "Function without an implementation". (A function with
+  /// no return annotation cannot be told apart from one with an empty `{}`
+  /// body, so only annotated functions are caught here.)
+  MissingImplementation(name: String)
   /// Raised when two imports resolve to the same local module name.
   DuplicateImport(name: String)
 }
