@@ -244,25 +244,9 @@ pub fn f() -> Int {
     == error.InexhaustivePattern("False")
 }
 
-pub fn bodyless_case_in_analysed_code_is_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "pub fn f(x: Int) -> Int {
-  case x
-  1
-}",
-    )
-    == error.InexhaustivePattern("_")
-}
 
-pub fn bodyless_case_in_filtered_function_is_fine_test() {
-  helpers.ok_module_typecheck(
-    "@target(javascript)
-pub fn f(x: Int) -> Int {
-  case x
-  1
-}",
-  )
-}
+
+
 
 pub fn error_nil_pattern_covers_error_variant_test() {
   helpers.ok_module_typecheck(

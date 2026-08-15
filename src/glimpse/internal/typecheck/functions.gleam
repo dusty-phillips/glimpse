@@ -533,7 +533,7 @@ pub fn fold_variant_constructor_into_env(
 /// A sentinel function used as the `original_function` for variant constructor
 /// callables. The field is never read, so a placeholder is sufficient.
 pub fn dummy_function() -> glance.Function {
-  glance.Function(glance.Span(-1, -1), "", glance.Private, [], option.None, [], False)
+  glance.Function(glance.Span(-1, -1), "", glance.Private, [], option.None, [])
 }
 
 fn fold_variant_field_into_callable(

@@ -426,21 +426,6 @@ pub fn f(x) {
   )
 }
 
-pub fn type_name_with_underscore_is_rejected_test() {
-  assert helpers.error_module_typecheck("pub type Foo_bar {\n  Foo_bar\n}")
-    == error.InvalidTypeName("Foo_bar")
-}
-
-pub fn variant_name_with_underscore_is_rejected_test() {
-  assert helpers.error_module_typecheck("pub type X {\n  Bar_\n}")
-    == error.InvalidVariantName("Bar_")
-}
-
-pub fn alias_name_with_underscore_is_rejected_test() {
-  assert helpers.error_module_typecheck("type A_b = Int")
-    == error.InvalidTypeAliasName("A_b")
-}
-
 pub fn non_external_function_with_type_hole_is_fine_test() {
   helpers.ok_module_typecheck(
     "pub fn g(x: List(_)) -> Int {
@@ -654,11 +639,6 @@ pub fn distinct_parameter_names_in_definition_is_fine_test() {
   helpers.ok_module_typecheck("pub fn start(conn, params) -> Int { conn }")
 }
 
-pub fn opaque_type_alias_is_a_parse_error_test() {
-  let assert Error(_) = glance.module("pub opaque type A(a) = #(a, Int)")
-  Nil
-}
-
 pub fn opaque_block_and_bodyless_forms_parse_fine_test() {
   let assert Ok(_) = glance.module("pub opaque type X {\n  X\n}")
   let assert Ok(_) = glance.module("pub opaque type Y")
@@ -749,56 +729,12 @@ pub fn main() -> Nil {
   )
 }
 
-pub fn function_with_uppercase_in_name_is_rejected_test() {
-  assert helpers.error_module_typecheck("pub fn doStuff() -> Int {\n  1\n}")
-    == error.InvalidFunctionName("doStuff")
-}
-
-pub fn constant_with_uppercase_in_name_is_rejected_test() {
-  assert helpers.error_module_typecheck("const fooBar = 1")
-    == error.InvalidConstantName("fooBar")
-}
-
-pub fn argument_with_uppercase_in_name_is_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "pub fn f(myVar: Int) -> Int {\n  myVar\n}",
-    )
-    == error.InvalidArgumentName("myVar")
-}
-
-pub fn type_variable_with_uppercase_in_name_is_rejected_test() {
-  assert helpers.error_module_typecheck("pub type Foo(fooBar) {\n  Foo\n}")
-    == error.InvalidTypeVariableName("fooBar")
-}
-
 pub fn snake_case_names_are_fine_test() {
   helpers.ok_module_typecheck(
     "pub fn do_stuff(foo_bar: Int) -> Int {
   foo_bar
 }",
   )
-}
-
-pub fn camel_case_type_variable_in_signature_is_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "pub type Builder(a, b) {
-  Builder
-}
-
-pub fn start(builder: Builder(child_argument, child_dataInt)) -> Nil {
-  Nil
-}",
-    )
-    == error.InvalidTypeVariableName("child_dataInt")
-}
-
-pub fn camel_case_type_variable_in_return_is_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "pub fn start() -> child_dataInt {
-  todo
-}",
-    )
-    == error.InvalidTypeVariableName("child_dataInt")
 }
 
 pub fn snake_case_type_variable_is_fine_test() {

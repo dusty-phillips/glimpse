@@ -40,7 +40,6 @@ pub fn parametric_custom_type_def_test() {
         [],
         option.None,
         [],
-        False,
       ),
     ))
 }

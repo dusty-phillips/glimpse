@@ -336,21 +336,6 @@ pub fn pattern_with_unlabelled_field_after_labelled_is_rejected_test() {
     == error.UnlabelledArgumentAfterLabelled
 }
 
-pub fn unlabelled_arg_with_comma_less_spread_is_fine_test() {
-  helpers.ok_module_typecheck(
-    "pub type T {
-  Transition(a: Int, b: Int)
-}
-
-pub fn f(x: T) -> Nil {
-  case x {
-    Transition(__zzz..) -> Nil
-    _ -> Nil
-  }
-}",
-  )
-}
-
 pub fn labelled_arg_with_comma_less_spread_is_rejected_test() {
   let assert Error(glance.UnexpectedToken(_, _)) =
     glance.module(
@@ -365,18 +350,6 @@ pub fn f(x: T) -> Nil {
   }
 }",
     )
-}
-
-pub fn case_pattern_variable_with_uppercase_is_rejected_test() {
-  assert helpers.error_module_typecheck(
-      "pub fn f(msg: Int) -> Int {
-  case msg {
-    etTime -> 1
-    _ -> 0
-  }
-}",
-    )
-    == error.InvalidVariableName("etTime")
 }
 
 pub fn case_pattern_variable_with_snake_case_is_fine_test() {

@@ -6,7 +6,7 @@ fn external_function(
   target_name: String,
 ) -> glance.Definition(glance.Function) {
   let function =
-    glance.Function(glance.Span(0, 0), "f", glance.Public, [], option.None, [], False)
+    glance.Function(glance.Span(0, 0), "f", glance.Public, [], option.None, [])
   glance.Definition(
     attributes: [
       glance.Attribute("external", [
@@ -44,7 +44,6 @@ pub fn no_external_attributes_returns_false_test() {
         [],
         option.None,
         [],
-        False,
       ),
     )
   assert target.has_external_for_target(target.Erlang, definition) == False

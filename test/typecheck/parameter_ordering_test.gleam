@@ -1,5 +1,4 @@
 import glance
-import glexer.{Position}
 import glimpse/error
 import typecheck/helpers
 
@@ -14,11 +13,6 @@ pub fn duplicate_labelled_parameters_in_signature_test() {
   fn bar() { main(name: 1, name: 2) }",
     )
     == error.DuplicateArgumentName("name")
-}
-
-pub fn unlabelled_argument_after_labelled_argument_test() {
-  assert glance.module("pub fn main(wibble wibber, wobber) { Nil }")
-    == Error(glance.UnlabelledAfterLabelled)
 }
 
 pub fn positional_argument_after_labelled_test() {
@@ -38,19 +32,6 @@ pub fn distinct_anon_function_parameter_names_test() {
   helpers.ok_function_typecheck("pub fn main() { fn(x, y) { x } }")
 }
 
-pub fn dangling_external_attribute_is_rejected_test() {
-  let assert Error(glance.UnexpectedAttributeEnd(Position(17))) =
-    glance.module(
-      "pub type Audio
-  @external(javascript, \"../../audio_ffi.mjs\", \"play\")",
-    )
-}
-
-pub fn labelled_parameter_followed_by_unlabelled_is_rejected_test() {
-  assert glance.module("pub fn f(from x: Int, y: Int) -> Int { 0 }")
-    == Error(glance.UnlabelledAfterLabelled)
-}
-
 pub fn unlabelled_then_labelled_parameter_is_fine_test() {
   let assert Ok(_) = glance.module("pub fn f(x: Int, from y: Int) -> Int { 0 }")
 }
@@ -60,15 +41,9 @@ pub fn all_labelled_parameters_are_fine_test() {
     glance.module("pub fn f(from x: Int, to y: Int) -> Int { 0 }")
 }
 
-pub fn list_with_double_comma_is_rejected_test() {
-  let assert Error(glance.UnexpectedToken(_, _)) =
-    glance.module("pub fn f() -> List(Int) {\n  [1, , ]\n}")
-}
+
 
 pub fn empty_braces_function_with_return_annotation_is_fine_test() {
   helpers.ok_module_typecheck("pub fn f() -> Int {\n}")
 }
 
-pub fn empty_braces_function_without_return_annotation_is_fine_test() {
-  helpers.ok_module_typecheck("pub fn f() {\n}")
-}

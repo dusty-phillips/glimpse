@@ -161,7 +161,6 @@ pub fn generic_function_parameter_test() {
           glance.NamedType(glance.Span(20, 23), "Nil", option.None, []),
         ),
         [glance.Expression(glance.Variable(glance.Span(26, 29), "Nil"))],
-        True,
       ),
     ))
 }

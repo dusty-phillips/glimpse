@@ -108,13 +108,7 @@ pub fn build_baseline(
   })
 
   let dep_entries = case extra_project {
-    // The vendored path dependencies (third_party/glance, third_party/glexer)
-    // are not copied into build/packages, so scan them alongside the hex deps.
-    option.None ->
-      list.append(
-        scan_build_packages("build/packages/"),
-        scan_build_packages("third_party/"),
-      )
+    option.None -> scan_build_packages("build/packages/")
     option.Some(root) ->
       scan_build_packages(with_trailing_slash(root) <> "build/packages/")
   }
