@@ -596,9 +596,11 @@ pub fn module(
   )
 
   // The `@target` attribute is validated the same way: only the erlang and
-  // javascript targets are recognised (`@target(python)` is a parse error in
-  // the real compiler). The shape check above guarantees a single variable
-  // argument, so a mismatched name is the only case to reject here.
+  // javascript targets are recognised, plus the experimental runtime the
+  // package is being checked for (`@target(python)` is a parse error in the
+  // real compiler, but a `target.Named("python")` check activates it). The
+  // shape check above guarantees a single variable argument, so a mismatched
+  // name is the only case to reject here.
   use _ <- result.try(
     list.fold(all_module_attributes(raw_module), Ok(Nil), fn(result, attribute) {
       case result, attribute.name == "target" {
@@ -607,7 +609,7 @@ pub fn module(
         Ok(_), True ->
           case attribute.arguments {
             [glance.Variable(_, name)] ->
-              case name == "erlang" || name == "javascript" {
+              case target_is_known(target, name) {
                 True -> Ok(Nil)
                 False -> Error(error.UnknownTarget(name))
               }
@@ -1429,6 +1431,17 @@ fn name_has_uppercase(name: String) -> Bool {
 
 fn is_known_attribute(name: String) -> Bool {
   list.contains(["external", "internal", "deprecated", "target"], name)
+}
+
+/// Whether `@target` may name this build target: the erlang and javascript
+/// backends the real compiler knows, plus the experimental runtime the package
+/// is being checked for (`target.Named("python")` accepts `@target(python)`).
+fn target_is_known(target: target.Target, name: String) -> Bool {
+  case target {
+    target.Named(active_name) ->
+      name == "erlang" || name == "javascript" || name == active_name
+    _ -> name == "erlang" || name == "javascript"
+  }
 }
 
 /// Whether an attribute's arguments match the shape the Gleam compiler
