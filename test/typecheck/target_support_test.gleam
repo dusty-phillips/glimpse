@@ -337,6 +337,24 @@ pub fn python_external_is_fine_for_named_python_target_test() {
     )
 }
 
+/// A `@target(python)` definition is recognised when checking for a
+/// `target.Named("python")` runtime, and filtered out of the module before
+/// typechecking when it is not active for the target.
+pub fn target_attribute_for_named_python_target_is_fine_test() {
+  let assert Ok(module) =
+    glance.module(
+      "@target(python)
+      pub fn main() {}",
+    )
+  let assert Ok(#(_, _)) =
+    typecheck.module(
+      glimpse.Module("main_module", module, []),
+      dict.new(),
+      target.Named("python"),
+      True,
+    )
+}
+
 /// A call to a python external from python-target code is allowed: the external
 /// is the function's implementation for that runtime, so the use-site check
 /// must not reject it.
