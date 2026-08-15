@@ -74,7 +74,6 @@ pub fn list_with_double_comma_is_rejected() {
     glance.module("pub fn f() -> List(Int) {\n  [1, , ]\n}")
 }
 
-/// Disabled: without the vendored `has_braces_body` field, `pub fn f() {}` with no return annotation is treated as body-less. Kept as documentation.
-pub fn empty_braces_function_without_return_annotation_is_fine() {
+pub fn empty_braces_function_without_return_annotation_is_fine_test() {
   helpers.ok_module_typecheck("pub fn f() {\n}")
 }

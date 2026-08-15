@@ -4,7 +4,7 @@ A library for parsing, loading, and typechecking a complete Gleam project. It
 wraps the AST produced by [glance](https://hex.pm/packages/glance) with:
 
 - a representation of a whole program — multiple interdependent modules — rather
-  than a single module, and
+  than a single module.
 - typechecking both within and between modules.
 
 Glimpse is not filesystem-aware: modules are loaded externally through a loader

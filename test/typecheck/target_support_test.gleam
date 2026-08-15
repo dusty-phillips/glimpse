@@ -315,6 +315,50 @@ pub fn calling_same_module_unsupported_function_is_rejected_test() {
   assert err == error.UnsupportedTarget("wrapped")
 }
 
+/// The README promises that `@external(...)` annotations follow the same
+/// target matching as `@target` definitions: for an experimental runtime, an
+/// `@external(python, ...)` binding is a valid implementation. The empty `{}`
+/// body of `main` (no return annotation) must also be treated as an
+/// implementation, not a body-less declaration.
+pub fn python_external_is_fine_for_named_python_target_test() {
+  let assert Ok(module) =
+    glance.module(
+      "@external(python, \"baz\", \"baz\")
+      fn baz() -> Nil
+
+      pub fn main() {}",
+    )
+  let assert Ok(#(_, _)) =
+    typecheck.module(
+      glimpse.Module("main_module", module, []),
+      dict.new(),
+      target.Named("python"),
+      True,
+    )
+}
+
+/// A call to a python external from python-target code is allowed: the external
+/// is the function's implementation for that runtime, so the use-site check
+/// must not reject it.
+pub fn calling_python_external_from_named_python_target_is_fine_test() {
+  let assert Ok(module) =
+    glance.module(
+      "@external(python, \"baz\", \"baz\")
+      fn baz() -> Nil
+
+      pub fn main() {
+        baz()
+      }",
+    )
+  let assert Ok(#(_, _)) =
+    typecheck.module(
+      glimpse.Module("main_module", module, []),
+      dict.new(),
+      target.Named("python"),
+      True,
+    )
+}
+
 /// A lambda parameter that shadows a same-named module function is a local
 /// value, so calling it does not make the enclosing function unsupported.
 pub fn lambda_param_shadowing_unsupported_function_is_fine_test() {
