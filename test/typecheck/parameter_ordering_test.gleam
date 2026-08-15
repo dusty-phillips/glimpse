@@ -1,5 +1,5 @@
 import glance
-import glexer.{type Position, Position}
+import glexer.{Position}
 import glimpse/error
 import typecheck/helpers
 
