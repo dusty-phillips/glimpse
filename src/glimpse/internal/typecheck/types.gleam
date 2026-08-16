@@ -230,58 +230,81 @@ fn var_has_source(store: TypeStore, type_: Type, source: String) -> Bool {
 /// variable is unbound (or unknown) it is returned as-is. Recurses into
 /// compound types so linked variables nested inside them are resolved too.
 pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
+  let #(store, type_, _) = resolve_inner(store, type_)
+  #(store, type_)
+}
+
+/// The inner `resolve`, which also reports whether the returned type differs
+/// from the input. When no sub-part changed, the ORIGINAL type is returned
+/// unchanged so callers can avoid rebuilding composite records.
+fn resolve_inner(store: TypeStore, type_: Type) -> #(TypeStore, Type, Bool) {
   case type_ {
     Var(id) -> {
       case dict.get(store.vars, id) {
-        Ok(Link(type_)) -> resolve(store, type_)
-        Ok(Unbound) | Error(_) -> #(store, Var(id))
+        Ok(Link(linked)) -> {
+          let #(store, resolved, _) = resolve_inner(store, linked)
+          #(store, resolved, True)
+        }
+        Ok(Unbound) | Error(_) -> #(store, type_, False)
       }
     }
     CallableType(parameters, labels, return) -> {
-      let #(store, parameters) =
-        list.fold(parameters, #(store, []), fn(state, parameter) {
-          let #(store, acc) = state
-          let #(store, parameter) = resolve(store, parameter)
-          #(store, [parameter, ..acc])
-        })
-      let #(store, return) = resolve(store, return)
-      #(store, CallableType(list.reverse(parameters), labels, return))
+      let #(store, parameters, parameters_changed) =
+        resolve_list(store, parameters)
+      let #(store, return, return_changed) = resolve_inner(store, return)
+      case parameters_changed || return_changed {
+        True -> #(store, CallableType(parameters, labels, return), True)
+        False -> #(store, type_, False)
+      }
     }
     GenericCallableType(parameters, labels, return, original) -> {
-      let #(store, parameters) =
-        list.fold(parameters, #(store, []), fn(state, parameter) {
-          let #(store, acc) = state
-          let #(store, parameter) = resolve(store, parameter)
-          #(store, [parameter, ..acc])
-        })
-      let #(store, return) = resolve(store, return)
-      #(
-        store,
-        GenericCallableType(list.reverse(parameters), labels, return, original),
-      )
+      let #(store, parameters, parameters_changed) =
+        resolve_list(store, parameters)
+      let #(store, return, return_changed) = resolve_inner(store, return)
+      case parameters_changed || return_changed {
+        True -> #(
+          store,
+          GenericCallableType(parameters, labels, return, original),
+          True,
+        )
+        False -> #(store, type_, False)
+      }
     }
     TupleType(elements) -> {
-      let #(store, elements) =
-        list.fold(elements, #(store, []), fn(state, element) {
-          let #(store, acc) = state
-          let #(store, element) = resolve(store, element)
-          #(store, [element, ..acc])
-        })
-      #(store, TupleType(list.reverse(elements)))
+      let #(store, elements, changed) = resolve_list(store, elements)
+      case changed {
+        True -> #(store, TupleType(elements), True)
+        False -> #(store, type_, False)
+      }
     }
     CustomType(module, name, parameters, inferred_variant) -> {
-      let #(store, parameters) =
-        list.fold(parameters, #(store, []), fn(state, parameter) {
-          let #(store, acc) = state
-          let #(store, parameter) = resolve(store, parameter)
-          #(store, [parameter, ..acc])
-        })
-      #(
-        store,
-        CustomType(module, name, list.reverse(parameters), inferred_variant),
-      )
+      let #(store, parameters, changed) = resolve_list(store, parameters)
+      case changed {
+        True -> #(
+          store,
+          CustomType(module, name, parameters, inferred_variant),
+          True,
+        )
+        False -> #(store, type_, False)
+      }
     }
-    _ -> #(store, type_)
+    _ -> #(store, type_, False)
+  }
+}
+
+fn resolve_list(
+  store: TypeStore,
+  types: List(Type),
+) -> #(TypeStore, List(Type), Bool) {
+  let #(store, reversed, changed) =
+    list.fold(types, #(store, [], False), fn(state, type_) {
+      let #(store, acc, changed) = state
+      let #(store, resolved, resolved_changed) = resolve_inner(store, type_)
+      #(store, [resolved, ..acc], changed || resolved_changed)
+    })
+  case changed {
+    True -> #(store, list.reverse(reversed), True)
+    False -> #(store, types, False)
   }
 }
 
@@ -292,72 +315,102 @@ pub fn resolve(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
 /// weaken the rigid check. Unification and binding paths use this variant so
 /// the rigid var's identity survives.
 pub fn resolve_keep_rigid(store: TypeStore, type_: Type) -> #(TypeStore, Type) {
+  let #(store, type_, _) = resolve_keep_rigid_inner(store, type_)
+  #(store, type_)
+}
+
+/// The inner `resolve_keep_rigid`, which also reports whether the returned type
+/// differs from the input. When no sub-part changed, the ORIGINAL type is
+/// returned unchanged so callers can avoid rebuilding composite records.
+fn resolve_keep_rigid_inner(
+  store: TypeStore,
+  type_: Type,
+) -> #(TypeStore, Type, Bool) {
   case type_ {
     Var(id) -> {
       case dict.get(store.var_sources, id) {
         Ok(source) ->
           case string.starts_with(source, "rigid:") {
-            True -> #(store, Var(id))
-            False -> follow_rigid(store, id)
+            True -> #(store, type_, False)
+            False -> follow_rigid_inner(store, id)
           }
-        Error(_) -> follow_rigid(store, id)
+        Error(_) -> follow_rigid_inner(store, id)
       }
     }
     CallableType(parameters, labels, return) -> {
-      let #(store, parameters) =
-        list.fold(parameters, #(store, []), fn(state, parameter) {
-          let #(store, acc) = state
-          let #(store, parameter) = resolve_keep_rigid(store, parameter)
-          #(store, [parameter, ..acc])
-        })
-      let #(store, return) = resolve_keep_rigid(store, return)
-      #(store, CallableType(list.reverse(parameters), labels, return))
+      let #(store, parameters, parameters_changed) =
+        resolve_keep_rigid_list(store, parameters)
+      let #(store, return, return_changed) =
+        resolve_keep_rigid_inner(store, return)
+      case parameters_changed || return_changed {
+        True -> #(store, CallableType(parameters, labels, return), True)
+        False -> #(store, type_, False)
+      }
     }
     GenericCallableType(parameters, labels, return, original) -> {
-      let #(store, parameters) =
-        list.fold(parameters, #(store, []), fn(state, parameter) {
-          let #(store, acc) = state
-          let #(store, parameter) = resolve_keep_rigid(store, parameter)
-          #(store, [parameter, ..acc])
-        })
-      let #(store, return) = resolve_keep_rigid(store, return)
-      #(
-        store,
-        GenericCallableType(list.reverse(parameters), labels, return, original),
-      )
+      let #(store, parameters, parameters_changed) =
+        resolve_keep_rigid_list(store, parameters)
+      let #(store, return, return_changed) =
+        resolve_keep_rigid_inner(store, return)
+      case parameters_changed || return_changed {
+        True -> #(
+          store,
+          GenericCallableType(parameters, labels, return, original),
+          True,
+        )
+        False -> #(store, type_, False)
+      }
     }
     TupleType(elements) -> {
-      let #(store, elements) =
-        list.fold(elements, #(store, []), fn(state, element) {
-          let #(store, acc) = state
-          let #(store, element) = resolve_keep_rigid(store, element)
-          #(store, [element, ..acc])
-        })
-      #(store, TupleType(list.reverse(elements)))
+      let #(store, elements, changed) = resolve_keep_rigid_list(store, elements)
+      case changed {
+        True -> #(store, TupleType(elements), True)
+        False -> #(store, type_, False)
+      }
     }
     CustomType(module, name, parameters, inferred_variant) -> {
-      let #(store, parameters) =
-        list.fold(parameters, #(store, []), fn(state, parameter) {
-          let #(store, acc) = state
-          let #(store, parameter) = resolve_keep_rigid(store, parameter)
-          #(store, [parameter, ..acc])
-        })
-      #(
-        store,
-        CustomType(module, name, list.reverse(parameters), inferred_variant),
-      )
+      let #(store, parameters, changed) =
+        resolve_keep_rigid_list(store, parameters)
+      case changed {
+        True -> #(
+          store,
+          CustomType(module, name, parameters, inferred_variant),
+          True,
+        )
+        False -> #(store, type_, False)
+      }
     }
-    _ -> #(store, type_)
+    _ -> #(store, type_, False)
+  }
+}
+
+fn resolve_keep_rigid_list(
+  store: TypeStore,
+  types: List(Type),
+) -> #(TypeStore, List(Type), Bool) {
+  let #(store, reversed, changed) =
+    list.fold(types, #(store, [], False), fn(state, type_) {
+      let #(store, acc, changed) = state
+      let #(store, resolved, resolved_changed) =
+        resolve_keep_rigid_inner(store, type_)
+      #(store, [resolved, ..acc], changed || resolved_changed)
+    })
+  case changed {
+    True -> #(store, list.reverse(reversed), True)
+    False -> #(store, types, False)
   }
 }
 
 /// Follow a var's link, stopping at any rigid var reached along the way. A
 /// non-rigid var linked to a rigid var resolves to the rigid var itself, not to
 /// the named generic it is pinned to.
-fn follow_rigid(store: TypeStore, id: Int) -> #(TypeStore, Type) {
+fn follow_rigid_inner(store: TypeStore, id: Int) -> #(TypeStore, Type, Bool) {
   case dict.get(store.vars, id) {
-    Ok(Link(linked)) -> resolve_keep_rigid(store, linked)
-    Ok(Unbound) | Error(_) -> #(store, Var(id))
+    Ok(Link(linked)) -> {
+      let #(store, resolved, _) = resolve_keep_rigid_inner(store, linked)
+      #(store, resolved, True)
+    }
+    Ok(Unbound) | Error(_) -> #(store, Var(id), False)
   }
 }
 
