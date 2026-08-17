@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.0.0-rc.2
+
+Changes since 1.0.0-rc.1:
+
+### Typechecking
+- Accept `@external` attributes for build targets glimpse does not model
+  (e.g. `python`, `rust`): glimpse typechecks code destined for arbitrary
+  runtimes, so such functions are passed through and treated as having an
+  implementation. The `UnknownExternalTarget` error is removed; the strict
+  `erlang`/`javascript` shape checks and the `javascript` module/function
+  validation remain.
+- Accept `@target` declarations for the active named runtime, e.g.
+  `@target(python)` definitions are included when checking against
+  `target.Named("python")`.
+- Split the conflated `UnsupportedTarget` error into `MissingImplementation` (a
+  function declared without a body and without an `@external`, matching the
+  compiler's "Function without an implementation") and `UnsupportedTarget`
+  (value only implemented for another target). A function with no return
+  annotation is now treated as having a body, so the common `pub fn main() {}`
+  is no longer mistaken for the body-less `pub fn main()`.
+- Short-circuit type resolution when nothing changed, skipping rebuilds of
+  composite types to avoid unnecessary work.
+
+### Testing
+- Restored 20 parser-migration tests as documented disabled functions (each
+  explains the lexer/parser behavior it previously asserted and why it no
+  longer applies after the glance/glexer migration) instead of deleting them.
+- Added coverage for named-python-target externals and `@target` declarations
+  for a named runtime, and re-enabled the empty-body-function test.
+
 ## 1.0.0-rc.1
 
 The typechecker is now feature-complete for the language and validated against
