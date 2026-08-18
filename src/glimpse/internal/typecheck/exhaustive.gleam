@@ -134,7 +134,7 @@ pub fn check(
   alternatives: List(List(glance.Pattern)),
 ) -> option.Option(List(String)) {
   let #(_cache, modes) =
-    list.fold(subject_types, #(dict.new(), []), fn(state, type_) {
+    list.fold(subject_types, #(ModeCache(dict.new(), dict.new()), []), fn(state, type_) {
       let #(cache, modes) = state
       let #(cache, mode) = mode_of(environment, cache, type_)
       #(cache, [mode, ..modes])
@@ -169,8 +169,26 @@ pub fn check(
 /// share one result. Without it a recursive type like
 /// `type Type { FunctionType(Type, List(Type)) }` re-expands the same sub-modes
 /// exponentially.
-pub type ModeCache =
-  dict.Dict(#(Int, types.Type), Mode)
+type ModeCache {
+  ModeCache(
+    modes: dict.Dict(#(Int, types.Type), Mode),
+    constructors: dict.Dict(#(String, String), List(ConstructorInfo)),
+  )
+}
+
+/// The raw constructor definitions of a custom type, extracted from the scope
+/// dictionary once. Independent of the subject's actual type arguments and the
+/// expansion depth, so the scope scan is done once per type rather than once
+/// per instantiation.
+type ConstructorInfo {
+  ConstructorInfo(
+    name: String,
+    variant: Int,
+    parameters: List(types.Type),
+    label_positions: dict.Dict(String, Int),
+    return_: types.Type,
+  )
+}
 
 /// Compute the mode of a program type: how it branches when split. `depth`
 /// tracks how many expansions have been performed on the current path so that
@@ -189,11 +207,17 @@ fn mode_of_guarded(
   depth: Int,
   type_: types.Type,
 ) -> #(ModeCache, Mode) {
-  case dict.get(cache, #(depth, type_)) {
+  case dict.get(cache.modes, #(depth, type_)) {
     Ok(mode) -> #(cache, mode)
     Error(_) -> {
       let #(cache, mode) = mode_of_uncached(environment, cache, depth, type_)
-      #(dict.insert(cache, #(depth, type_), mode), mode)
+      #(
+        ModeCache(
+          ..cache,
+          modes: dict.insert(cache.modes, #(depth, type_), mode),
+        ),
+        mode,
+      )
     }
   }
 }
@@ -339,83 +363,75 @@ fn constructors_(
   // custom type; make this distinction by the presence of a variant index. A
   // plain function that merely returns the type (e.g. `map(x: T) -> T`) is not
   // a constructor, otherwise its parameters would pull the type into itself.
-  let variant_index_of = fn(type_) {
-    case type_ {
-      types.CustomType(module, type_name, _, option.Some(index)) ->
-        case
-          type_name == name && { module == module_name || module == source }
-        {
-          True -> option.Some(index)
-          False -> option.None
-        }
-      _ -> option.None
+  let #(cache, candidates) = case dict.get(cache.constructors, #(source, name)) {
+    Ok(candidates) -> #(cache, candidates)
+    Error(_) -> {
+      let candidates =
+        constructor_candidates(definitions, module_name, name, source)
+      #(
+        ModeCache(
+          ..cache,
+          constructors: dict.insert(
+            cache.constructors,
+            #(source, name),
+            candidates,
+          ),
+        ),
+        candidates,
+      )
     }
   }
-  let #(cache, by_index) =
-    dict.fold(definitions, #(cache, dict.new()), fn(state, def_name, def_type) {
+  let #(cache, fields) =
+    list.fold(candidates, #(cache, dict.new()), fn(state, candidate) {
       let #(cache, fields) = state
-      let #(index, parameters, return_, labels) = case def_type {
-        types.CallableType(parameters, labels, return_) -> #(
-          variant_index_of(return_),
-          parameters,
-          return_,
-          labels,
-        )
-        types.GenericCallableType(parameters, labels, return_, _) -> #(
-          variant_index_of(return_),
-          parameters,
-          return_,
-          labels,
-        )
-        _ -> #(variant_index_of(def_type), [], def_type, dict.new())
+      let ConstructorInfo(
+        variant_name,
+        variant,
+        parameters,
+        label_positions,
+        return_,
+      ) = candidate
+      // The definition's field types mention the type's formal parameters;
+      // substitute the subject's actual type arguments so e.g. an
+      // `Option(CaCert)` subject splits `Some` with the payload mode of
+      // `CaCert` rather than of the generic `a`.
+      let substitutions = case return_ {
+        types.CustomType(_, _, formal_params, _) ->
+          list.zip(formal_params, subject_parameters)
+          |> list.fold([], fn(acc, pair) {
+            let #(formal, actual) = pair
+            case formal {
+              types.GenericTypeVariable(parameter_name, _) -> [
+                #(parameter_name, actual),
+                ..acc
+              ]
+              _ -> acc
+            }
+          })
+          |> dict.from_list
+        _ -> dict.new()
       }
-      case index {
-        option.Some(variant) -> {
-          // The definition's field types mention the type's formal parameters;
-          // substitute the subject's actual type arguments so e.g. an
-          // `Option(CaCert)` subject splits `Some` with the payload mode of
-          // `CaCert` rather than of the generic `a`.
-          let substitutions = case return_ {
-            types.CustomType(_, _, formal_params, _) ->
-              list.zip(formal_params, subject_parameters)
-              |> list.fold([], fn(acc, pair) {
-                let #(formal, actual) = pair
-                case formal {
-                  types.GenericTypeVariable(parameter_name, _) -> [
-                    #(parameter_name, actual),
-                    ..acc
-                  ]
-                  _ -> acc
-                }
-              })
-              |> dict.from_list
-            _ -> dict.new()
-          }
-          let #(cache, param_modes) =
-            list.fold(parameters, #(cache, []), fn(state, param) {
-              let #(cache, modes) = state
-              let param = types.substitute_type_variables(param, substitutions)
-              let #(cache, mode) =
-                mode_of_guarded(environment, cache, depth + 1, param)
-              #(cache, [mode, ..modes])
-            })
-          #(
-            cache,
-            dict.insert(
-              fields,
-              variant,
-              Field(
-                def_name,
-                list.reverse(param_modes),
-                labels_by_position(labels, parameters),
-              ),
-            ),
-          )
-        }
-        option.None -> #(cache, fields)
-      }
+      let #(cache, param_modes) =
+        list.fold(parameters, #(cache, []), fn(state, param) {
+          let #(cache, modes) = state
+          let param = types.substitute_type_variables(param, substitutions)
+          let #(cache, mode) =
+            mode_of_guarded(environment, cache, depth + 1, param)
+          #(cache, [mode, ..modes])
+        })
+      #(
+        cache,
+        dict.insert(
+          fields,
+          variant,
+          Field(
+            variant_name,
+            list.reverse(param_modes),
+            labels_by_position(label_positions, parameters),
+          ),
+        ),
+      )
     })
-  let fields = by_index
   let count = case
     list.fold(dict.to_list(fields), -1, fn(max, pair) {
       let #(index, _field) = pair
@@ -440,6 +456,51 @@ fn constructors_(
       ),
     )
   }
+}
+
+/// Extract the variant constructors of a custom type from a scope's
+/// definitions. A definition is a constructor when its own return type is the
+/// custom type, signalled by the presence of a variant index.
+fn constructor_candidates(
+  definitions: dict.Dict(String, types.Type),
+  module_name: String,
+  name: String,
+  source: String,
+) -> List(ConstructorInfo) {
+  let variant_index_of = fn(type_) {
+    case type_ {
+      types.CustomType(module, type_name, _, option.Some(index)) ->
+        case type_name == name && { module == module_name || module == source } {
+          True -> option.Some(index)
+          False -> option.None
+        }
+      _ -> option.None
+    }
+  }
+  dict.fold(definitions, [], fn(candidates, def_name, def_type) {
+    let #(index, parameters, return_, labels) = case def_type {
+      types.CallableType(parameters, labels, return_) -> #(
+        variant_index_of(return_),
+        parameters,
+        return_,
+        labels,
+      )
+      types.GenericCallableType(parameters, labels, return_, _) -> #(
+        variant_index_of(return_),
+        parameters,
+        return_,
+        labels,
+      )
+      _ -> #(variant_index_of(def_type), [], def_type, dict.new())
+    }
+    case index {
+      option.Some(variant) -> [
+        ConstructorInfo(def_name, variant, parameters, labels, return_),
+        ..candidates
+      ]
+      option.None -> candidates
+    }
+  })
 }
 
 /// Reduce a glance pattern against the mode of its subject into the fragments
