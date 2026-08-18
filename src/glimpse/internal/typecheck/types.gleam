@@ -667,28 +667,27 @@ fn do_instantiate(
     }
     NamespaceType(definitions, custom_types) -> {
       let #(store, substitutions, definitions) =
-        dict.fold(
-          definitions,
-          #(store, substitutions, dict.new()),
-          fn(state, key, value) {
-            let #(store, substitutions, acc) = state
-            let #(store, substitutions, value) =
-              do_instantiate(store, substitutions, value)
-            #(store, substitutions, dict.insert(acc, key, value))
-          },
-        )
+        dict.fold(definitions, #(store, substitutions, []), fn(state, key, value) {
+          let #(store, substitutions, acc) = state
+          let #(store, substitutions, value) =
+            do_instantiate(store, substitutions, value)
+          #(store, substitutions, [#(key, value), ..acc])
+        })
       let #(store, substitutions, custom_types) =
-        dict.fold(
-          custom_types,
-          #(store, substitutions, dict.new()),
-          fn(state, key, value) {
-            let #(store, substitutions, acc) = state
-            let #(store, substitutions, value) =
-              do_instantiate(store, substitutions, value)
-            #(store, substitutions, dict.insert(acc, key, value))
-          },
-        )
-      #(store, substitutions, NamespaceType(definitions, custom_types))
+        dict.fold(custom_types, #(store, substitutions, []), fn(state, key, value) {
+          let #(store, substitutions, acc) = state
+          let #(store, substitutions, value) =
+            do_instantiate(store, substitutions, value)
+          #(store, substitutions, [#(key, value), ..acc])
+        })
+      #(
+        store,
+        substitutions,
+        NamespaceType(
+          definitions |> list.reverse |> dict.from_list,
+          custom_types |> list.reverse |> dict.from_list,
+        ),
+      )
     }
     TupleType(elements) -> {
       let #(store, substitutions, elements) =
