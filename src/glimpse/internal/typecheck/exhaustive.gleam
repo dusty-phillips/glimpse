@@ -134,11 +134,15 @@ pub fn check(
   alternatives: List(List(glance.Pattern)),
 ) -> option.Option(List(String)) {
   let #(_cache, modes) =
-    list.fold(subject_types, #(ModeCache(dict.new(), dict.new()), []), fn(state, type_) {
-      let #(cache, modes) = state
-      let #(cache, mode) = mode_of(environment, cache, type_)
-      #(cache, [mode, ..modes])
-    })
+    list.fold(
+      subject_types,
+      #(ModeCache(dict.new(), dict.new()), []),
+      fn(state, type_) {
+        let #(cache, modes) = state
+        let #(cache, mode) = mode_of(environment, cache, type_)
+        #(cache, [mode, ..modes])
+      },
+    )
   let modes = list.reverse(modes)
   let ids = range(0, list.length(subject_types))
   let rows =
@@ -363,7 +367,9 @@ fn constructors_(
   // custom type; make this distinction by the presence of a variant index. A
   // plain function that merely returns the type (e.g. `map(x: T) -> T`) is not
   // a constructor, otherwise its parameters would pull the type into itself.
-  let #(cache, candidates) = case dict.get(cache.constructors, #(source, name)) {
+  let #(cache, candidates) = case
+    dict.get(cache.constructors, #(source, name))
+  {
     Ok(candidates) -> #(cache, candidates)
     Error(_) -> {
       let candidates =
@@ -470,7 +476,9 @@ fn constructor_candidates(
   let variant_index_of = fn(type_) {
     case type_ {
       types.CustomType(module, type_name, _, option.Some(index)) ->
-        case type_name == name && { module == module_name || module == source } {
+        case
+          type_name == name && { module == module_name || module == source }
+        {
           True -> option.Some(index)
           False -> option.None
         }

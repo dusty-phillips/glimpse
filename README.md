@@ -12,7 +12,7 @@ function. It mirrors the official Gleam compiler's behavior closely; it has been
 validated with differential mutation testing against the real compiler across a
 wide range of popular Gleam projects.
 
-Glimpse 1.0.0-rc.1 is available on [hex.pm](https://hex.pm/packages/glimpse).
+Glimpse 1.0.0-rc.3 is available on [hex.pm](https://hex.pm/packages/glimpse).
 
 Docs: https://hexdocs.pm/glimpse/
 Repo: https://github.com/dusty-phillips/glimpse
@@ -86,6 +86,11 @@ Glimpse is a full Hindley-Milner type checker with exhaustiveness checking,
 across module boundaries. `typecheck.package` sorts the modules by their
 dependencies and checks each in turn, returning the package with inferred types
 filled in:
+
+Typechecking is optimized for whole-package workloads: constructor candidates
+are memoized per `(module, type)` pair during exhaustiveness checking, and
+instantiated namespace type dicts are built in O(n) rather than one insert at a
+time.
 
 ```gleam
 pub fn package(
