@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0-rc.3
+
+Changes since 1.0.0-rc.2:
+
+### Performance
+- Memoize constructor lookup in exhaustive checking: constructor candidates for
+  each `(module, type)` pair are computed once and reused across depths and
+  instantiations, instead of rescanning the scope definitions dict on every
+  lookup.
+- Build instantiated namespace type dicts in O(n) by collecting key/value pairs
+  and constructing with a single `dict.from_list`, instead of incrementally
+  inserting one key at a time and copying the whole dict per insert.
+
 ## 1.0.0-rc.2
 
 Changes since 1.0.0-rc.1:
