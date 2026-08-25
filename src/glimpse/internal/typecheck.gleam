@@ -151,6 +151,27 @@ pub fn statement(
             type_,
             pat,
           ))
+          // Like a case clause, `let assert Variant(..) = subject` proves the
+          // subject's variant when the asserted expression is a plain
+          // variable: pin the variable's inferred variant so a later record
+          // update on it is safe.
+          let env = case value_expression, pat {
+            glance.Variable(_, name), glance.PatternVariant(
+              _,
+              module,
+              constructor,
+              _,
+              _,
+            ) ->
+              pattern.constructor_variant_index(environment, module, constructor)
+              |> option.map(fn(index) {
+                let #(_store, refined_env) =
+                  apply_variant_refinement(store, env, name, index)
+                refined_env
+              })
+              |> option.unwrap(env)
+            _, _ -> env
+          }
           // A block ending in `let assert pat = expr` has the type of `expr`,
           // so a case branch like `Error(_) -> { let assert Ok(_) = delete(p) }`
           // unifies with a sibling branch returning `Ok(Nil)`.

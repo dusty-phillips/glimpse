@@ -1,0 +1,18 @@
+name = "glimpse"
+version = "1.0.0-rc.3"
+
+# macabre config: mirrors gleam.toml but points at the macabre_* python-target
+# forks. The gleam_erlang dev dependency is dropped entirely: it is an
+# Erlang-host support package with no python implementation, and the only
+# module using it (dev/mutate_check) is skipped by macabre with a warning.
+
+[dependencies]
+gleam_stdlib = { git = "git@github.com:dusty-phillips/macabre_stdlib.git", ref = "main" }
+glance = { git = "git@github.com:dusty-phillips/macabre_glance.git", ref = "main" }
+glexer = { git = "git@github.com:dusty-phillips/macabre_glexer.git", ref = "main" }
+
+[dev-dependencies]
+argv = { git = "git@github.com:dusty-phillips/macabre_argv.git", ref = "main" }
+gleeunit = { git = "git@github.com:dusty-phillips/macabre_gleeunit.git", ref = "main" }
+shellout = { git = "git@github.com:dusty-phillips/macabre_shellout.git", ref = "main" }
+simplifile = { git = "git@github.com:dusty-phillips/macabre_simplifile.git", ref = "main" }
