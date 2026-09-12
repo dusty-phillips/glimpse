@@ -156,14 +156,14 @@ pub fn statement(
           // variable: pin the variable's inferred variant so a later record
           // update on it is safe.
           let env = case value_expression, pat {
-            glance.Variable(_, name), glance.PatternVariant(
-              _,
-              module,
-              constructor,
-              _,
-              _,
-            ) ->
-              pattern.constructor_variant_index(environment, module, constructor)
+            glance.Variable(_, name),
+              glance.PatternVariant(_, module, constructor, _, _)
+            ->
+              pattern.constructor_variant_index(
+                environment,
+                module,
+                constructor,
+              )
               |> option.map(fn(index) {
                 let #(_store, refined_env) =
                   apply_variant_refinement(store, env, name, index)

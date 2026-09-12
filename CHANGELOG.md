@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0
+
+Changes since 1.0.0-rc.3:
+
+### Typechecking
+- Narrow the asserted variable's variant through `let assert`: `let assert
+  V(..) = parent` pins the parent variable's inferred variant, matching
+  upstream Gleam's flow narrowing, so a subsequent record update on it no
+  longer reports `UnsafeRecordUpdate`.
+
 ## 1.0.0-rc.3
 
 Changes since 1.0.0-rc.2:

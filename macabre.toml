@@ -1,5 +1,5 @@
 name = "glimpse"
-version = "1.0.0-rc.3"
+version = "1.0.0"
 
 # macabre config: mirrors gleam.toml but points at the macabre_* python-target
 # forks. The gleam_erlang dev dependency is dropped entirely: it is an

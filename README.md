@@ -12,7 +12,7 @@ function. It mirrors the official Gleam compiler's behavior closely; it has been
 validated with differential mutation testing against the real compiler across a
 wide range of popular Gleam projects.
 
-Glimpse 1.0.0-rc.3 is available on [hex.pm](https://hex.pm/packages/glimpse).
+Glimpse 1.0.0 is available on [hex.pm](https://hex.pm/packages/glimpse).
 
 Docs: https://hexdocs.pm/glimpse/
 Repo: https://github.com/dusty-phillips/glimpse
