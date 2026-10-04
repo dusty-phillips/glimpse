@@ -77,7 +77,7 @@ pub fn calling_erlang_only_external_from_javascript_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("new")
+  assert err.error == error.UnsupportedTarget("new")
 }
 
 /// The same call from erlang-target code is fine.
@@ -104,7 +104,7 @@ pub fn calling_function_whose_body_uses_erlang_only_external_is_rejected_test() 
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("wrapped")
+  assert err.error == error.UnsupportedTarget("wrapped")
 }
 
 /// The use-site check fires on the call target, so piping into a mismatched
@@ -118,7 +118,7 @@ pub fn piping_into_erlang_only_external_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("id")
+  assert err.error == error.UnsupportedTarget("id")
 }
 
 /// A `use` statement's function is called, so it is subject to the same check.
@@ -132,7 +132,7 @@ pub fn use_of_erlang_only_function_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("with_callback")
+  assert err.error == error.UnsupportedTarget("with_callback")
 }
 
 /// A dependency function that merely references a mismatched function (without
@@ -148,7 +148,7 @@ pub fn calling_dependency_function_that_references_erlang_only_is_rejected_test(
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("referenced")
+  assert err.error == error.UnsupportedTarget("referenced")
 }
 
 /// A dependency function that returns a restricted value is narrowed, so
@@ -162,7 +162,7 @@ pub fn calling_dependency_function_returning_restricted_value_is_rejected_test()
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("get")
+  assert err.error == error.UnsupportedTarget("get")
 }
 
 /// A restricted value passed through a pure dependency function keeps its
@@ -177,7 +177,7 @@ pub fn restricted_value_flowing_through_dependency_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("get")
+  assert err.error == error.UnsupportedTarget("get")
 }
 
 /// Calling a pure dependency function with a pure argument is fine.
@@ -203,7 +203,7 @@ pub fn capturing_erlang_only_external_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("id")
+  assert err.error == error.UnsupportedTarget("id")
 }
 
 /// A dependency module whose own body calls an erlang-only external is not
@@ -244,7 +244,7 @@ pub fn referencing_erlang_only_external_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("id")
+  assert err.error == error.UnsupportedTarget("id")
 }
 
 /// The same reference from erlang-target code is fine.
@@ -273,7 +273,7 @@ pub fn referencing_same_module_erlang_only_function_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("new")
+  assert err.error == error.UnsupportedTarget("new")
 }
 
 /// A function that declares an external for the active target uses that
@@ -312,7 +312,7 @@ pub fn calling_same_module_unsupported_function_is_rejected_test() {
       }",
       target.Javascript,
     )
-  assert err == error.UnsupportedTarget("wrapped")
+  assert err.error == error.UnsupportedTarget("wrapped")
 }
 
 /// The README promises that `@external(...)` annotations follow the same

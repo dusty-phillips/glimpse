@@ -257,7 +257,7 @@ pub fn main() -> Nil {
       target.Erlang,
       True,
     )
-  assert err == error.InvalidName("Transient")
+  assert err.error == error.InvalidName("Transient")
 }
 
 pub fn fn_body_referencing_private_cross_module_fn_with_constant_is_rejected_test() {
@@ -286,7 +286,7 @@ pub fn main() -> Int {
       target.Erlang,
       True,
     )
-  assert err == error.InvalidName("f")
+  assert err.error == error.InvalidName("f")
 }
 
 pub fn fn_body_referencing_public_cross_module_fn_with_constant_is_fine_test() {

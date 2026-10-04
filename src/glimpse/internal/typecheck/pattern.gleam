@@ -39,7 +39,11 @@ pub fn typecheck_pattern(
   case pattern {
     glance.PatternVariable(_, name) ->
       case name {
-        "true" | "false" -> Error(error.LowercaseBoolPattern(name))
+        "true" | "false" ->
+          Error(error.located(
+            pattern.location,
+            error.LowercaseBoolPattern(name),
+          ))
         _ -> bind_variable(environment, store, name, expected_type)
       }
 
@@ -49,25 +53,32 @@ pub fn typecheck_pattern(
       types.unify(store, environment, expected_type, types.IntType)
       |> result.map(fn(store) { #(store, environment) })
       |> result.map_error(fn(_) {
-        error.PatternMismatch(
-          "int pattern",
-          "Int",
-          types.to_string(environment, expected_type),
+        error.located(
+          pattern.location,
+          error.PatternMismatch(
+            "int pattern",
+            "Int",
+            types.to_string(environment, expected_type),
+          ),
         )
       })
     }
 
     glance.PatternFloat(_, value) -> {
       case float_is_in_range(value) {
-        False -> Error(error.FloatOutOfRange(value))
+        False ->
+          Error(error.located(pattern.location, error.FloatOutOfRange(value)))
         True ->
           types.unify(store, environment, expected_type, types.FloatType)
           |> result.map(fn(store) { #(store, environment) })
           |> result.map_error(fn(_) {
-            error.PatternMismatch(
-              "float pattern",
-              "Float",
-              types.to_string(environment, expected_type),
+            error.located(
+              pattern.location,
+              error.PatternMismatch(
+                "float pattern",
+                "Float",
+                types.to_string(environment, expected_type),
+              ),
             )
           })
       }
@@ -75,15 +86,19 @@ pub fn typecheck_pattern(
 
     glance.PatternString(_, value) ->
       case glexer.unescape_string(value) {
-        Error(_) -> Error(error.InvalidEscape(value))
+        Error(_) ->
+          Error(error.located(pattern.location, error.InvalidEscape(value)))
         Ok(_) -> {
           types.unify(store, environment, expected_type, types.StringType)
           |> result.map(fn(store) { #(store, environment) })
           |> result.map_error(fn(_) {
-            error.PatternMismatch(
-              "string pattern",
-              "String",
-              types.to_string(environment, expected_type),
+            error.located(
+              pattern.location,
+              error.PatternMismatch(
+                "string pattern",
+                "String",
+                types.to_string(environment, expected_type),
+              ),
             )
           })
         }
@@ -103,7 +118,10 @@ pub fn typecheck_pattern(
           )
           |> result.map(fn(store) { #(store, expected_elements) })
           |> result.map_error(fn(_) {
-            tuple_mismatch(environment, expected_type)
+            error.located(
+              pattern.location,
+              tuple_mismatch(environment, expected_type),
+            )
           })
         }
       })
@@ -122,7 +140,11 @@ pub fn typecheck_pattern(
               })
             },
           )
-        False -> Error(tuple_mismatch(environment, expected_type))
+        False ->
+          Error(error.located(
+            pattern.location,
+            tuple_mismatch(environment, expected_type),
+          ))
       }
     }
 
@@ -140,10 +162,13 @@ pub fn typecheck_pattern(
             )
             |> result.map(fn(store) { #(store, element_type) })
             |> result.map_error(fn(_) {
-              error.PatternMismatch(
-                "list pattern",
-                "List",
-                types.to_string(environment, expected_type),
+              error.located(
+                pattern.location,
+                error.PatternMismatch(
+                  "list pattern",
+                  "List",
+                  types.to_string(environment, expected_type),
+                ),
               )
             })
           }
@@ -173,7 +198,11 @@ pub fn typecheck_pattern(
 
     glance.PatternVariant(_, module, constructor, arguments, with_spread) -> {
       use _ <- result.try(case fields_unlabelled_after_labelled(arguments) {
-        True -> Error(error.UnlabelledArgumentAfterLabelled)
+        True ->
+          Error(error.located(
+            pattern.location,
+            error.UnlabelledArgumentAfterLabelled,
+          ))
         False -> Ok(Nil)
       })
       use callable <- result.try(lookup_constructor(
@@ -202,9 +231,12 @@ pub fn typecheck_pattern(
             && list.length(arguments) != list.length(parameters)
           {
             True ->
-              Error(error.InvalidPatternArity(
-                list.length(parameters),
-                list.length(arguments),
+              Error(error.located(
+                pattern.location,
+                error.InvalidPatternArity(
+                  list.length(parameters),
+                  list.length(arguments),
+                ),
               ))
             False ->
               case
@@ -212,7 +244,8 @@ pub fn typecheck_pattern(
                 && list.length(arguments) == list.length(parameters)
                 && dict.size(position_labels) > 0
               {
-                True -> Error(error.UnnecessarySpread)
+                True ->
+                  Error(error.located(pattern.location, error.UnnecessarySpread))
                 False -> {
                   // Resolve the constructor parameters but do not generalise them:
                   // any still-unbound inference variable must remain free so the
@@ -245,15 +278,21 @@ pub fn typecheck_pattern(
               types.unify(store, environment, expected_type, callable)
               |> result.map(fn(store) { #(store, environment) })
               |> result.map_error(fn(_) {
-                error.PatternMismatch(
-                  constructor,
-                  types.to_string(environment, callable),
-                  types.to_string(environment, expected_type),
+                error.located(
+                  pattern.location,
+                  error.PatternMismatch(
+                    constructor,
+                    types.to_string(environment, callable),
+                    types.to_string(environment, expected_type),
+                  ),
                 )
               })
             }
             _ ->
-              Error(error.NotCallable(types.to_string(environment, callable)))
+              Error(error.located(
+                pattern.location,
+                error.NotCallable(types.to_string(environment, callable)),
+              ))
           }
       }
     }
@@ -327,17 +366,23 @@ pub fn typecheck_pattern(
             }
           })
           |> result.map_error(fn(_) {
+            error.located(
+              pattern.location,
+              error.PatternMismatch(
+                "string concatenation pattern",
+                "String",
+                types.to_string(environment, expected_type),
+              ),
+            )
+          })
+        _ ->
+          Error(error.located(
+            pattern.location,
             error.PatternMismatch(
               "string concatenation pattern",
               "String",
               types.to_string(environment, expected_type),
-            )
-          })
-        _ ->
-          Error(error.PatternMismatch(
-            "string concatenation pattern",
-            "String",
-            types.to_string(environment, expected_type),
+            ),
           ))
       }
     }
@@ -351,18 +396,24 @@ pub fn typecheck_pattern(
             check_segments(environment, store, segments)
           })
           |> result.map_error(fn(_) {
-            error.PatternMismatch(
-              "bit array pattern",
-              "BitArray",
-              types.to_string(environment, expected_type),
+            error.located(
+              pattern.location,
+              error.PatternMismatch(
+                "bit array pattern",
+                "BitArray",
+                types.to_string(environment, expected_type),
+              ),
             )
           })
           |> result.flatten
         _ ->
-          Error(error.PatternMismatch(
-            "bit array pattern",
-            "BitArray",
-            types.to_string(environment, expected_type),
+          Error(error.located(
+            pattern.location,
+            error.PatternMismatch(
+              "bit array pattern",
+              "BitArray",
+              types.to_string(environment, expected_type),
+            ),
           ))
       }
     }
@@ -470,12 +521,20 @@ fn check_pattern_segment_options(
         False ->
           case options == [] {
             True -> Ok(Nil)
-            False -> Error(error.InvalidBitStringSegment("utf8"))
+            False ->
+              Error(error.located(
+                pattern.location,
+                error.InvalidBitStringSegment("utf8"),
+              ))
           }
       }
     _ ->
       case !is_last && has_bits_or_bytes && !has_size {
-        True -> Error(error.InvalidBitStringSegment("bits"))
+        True ->
+          Error(error.located(
+            pattern.location,
+            error.InvalidBitStringSegment("bits"),
+          ))
         False ->
           // A UTF segment cannot take an explicit size: a variable-width
           // segment matched with a fixed size is contradictory, so the real
@@ -484,13 +543,21 @@ fn check_pattern_segment_options(
           // A `utf` option on a *named variable* pattern is rejected even
           // without a size, since the variable-width segment cannot be bound.
           case has_utf && is_variable || has_utf && has_size {
-            True -> Error(error.InvalidBitStringSegment("utf8"))
+            True ->
+              Error(error.located(
+                pattern.location,
+                error.InvalidBitStringSegment("utf8"),
+              ))
             False ->
               case has_unit && !has_size {
                 // A `unit` without an explicit size cannot determine the
                 // segment width, so the real compiler rejects it in both
                 // expressions and patterns ("This needs an explicit size").
-                True -> Error(error.InvalidBitStringSegment("unit"))
+                True ->
+                  Error(error.located(
+                    pattern.location,
+                    error.InvalidBitStringSegment("unit"),
+                  ))
                 False -> Ok(Nil)
               }
           }
@@ -563,8 +630,14 @@ fn lookup_constructor(
       {
         option.Some(module_definitions) ->
           dict.get(module_definitions, constructor)
-          |> result.replace_error(error.InvalidName(constructor))
-        option.None -> Error(error.InvalidName(constructor))
+          |> result.map_error(fn(_) {
+            error.located(glance.Span(-1, -1), error.InvalidName(constructor))
+          })
+        option.None ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.InvalidName(constructor),
+          ))
       }
     }
   }
@@ -761,10 +834,15 @@ fn parameter_at(
   parameters
   |> list.drop(up_to: position)
   |> list.first
-  |> result.replace_error(error.InvalidArguments(
-    "(" <> types.list_to_string(parameters, environment) <> ")",
-    "too many arguments",
-  ))
+  |> result.map_error(fn(_) {
+    error.located(
+      glance.Span(-1, -1),
+      error.InvalidArguments(
+        "(" <> types.list_to_string(parameters, environment) <> ")",
+        "too many arguments",
+      ),
+    )
+  })
 }
 
 fn unknown_label_error(
@@ -772,7 +850,10 @@ fn unknown_label_error(
   label: String,
 ) -> error.TypeCheckResult(types.Type) {
   let labels = dict.keys(position_labels) |> string.join(", ")
-  Error(error.InvalidArgumentLabel("(" <> labels <> ")", label))
+  Error(error.located(
+    glance.Span(-1, -1),
+    error.InvalidArgumentLabel("(" <> labels <> ")", label),
+  ))
 }
 
 fn bind_assignment_name(
@@ -798,7 +879,7 @@ fn check_segment_assignment(
 ) -> error.TypeCheckResult(types.TypeStore) {
   case pattern {
     glance.PatternAssignment(_, _inner, _name) ->
-      Error(error.DoubleVariableAssignment)
+      Error(error.located(pattern.location, error.DoubleVariableAssignment))
     _ -> Ok(store)
   }
 }
@@ -816,7 +897,10 @@ fn check_pattern_size_options(
           check_bit_array_size_variables(environment, store, size)
         })
       glance.UnitOption(unit) if unit <= 0 ->
-        Error(error.InvalidBitStringSegment("unit"))
+        Error(error.located(
+          glance.Span(-1, -1),
+          error.InvalidBitStringSegment("unit"),
+        ))
       _ -> Ok(store)
     }
   })
@@ -839,13 +923,16 @@ fn check_bit_array_size_variables(
           case types.unify(store, environment, var_type, types.IntType) {
             Ok(store) -> Ok(store)
             Error(_) ->
-              Error(error.InvalidType(
-                types.to_string(environment, var_type),
-                "Int",
-                "size variables must be Int",
+              Error(error.located(
+                size.location,
+                error.InvalidType(
+                  types.to_string(environment, var_type),
+                  "Int",
+                  "size variables must be Int",
+                ),
               ))
           }
-        Error(_) -> Error(error.InvalidName(name))
+        Error(_) -> Error(error.located(size.location, error.InvalidName(name)))
       }
     glance.BitArraySizeBinaryOperator(_, _, left, right) ->
       check_bit_array_size_variables(environment, store, left)
@@ -865,7 +952,11 @@ fn check_bit_array_size_positive(
   case size {
     glance.BitArraySizeInt(_, value) ->
       case int.parse(value) {
-        Ok(n) if n <= 0 -> Error(error.InvalidBitStringSegment("size"))
+        Ok(n) if n <= 0 ->
+          Error(error.located(
+            size.location,
+            error.InvalidBitStringSegment("size"),
+          ))
         Ok(_) -> Ok(store)
         Error(_) -> Ok(store)
       }

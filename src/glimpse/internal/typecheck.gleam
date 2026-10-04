@@ -81,7 +81,11 @@ pub fn statement(
             Error(e) -> Error(e)
             Ok(_) ->
               case name_has_uppercase(name) {
-                True -> Error(error.InvalidVariableName(name))
+                True ->
+                  Error(error.located(
+                    pat.location,
+                    error.InvalidVariableName(name),
+                  ))
                 False -> Ok(Nil)
               }
           }
@@ -110,10 +114,13 @@ pub fn statement(
           types.unify(store, environment, value_type, annotated)
           |> result.map(fn(store) { #(store, annotated) })
           |> result.map_error(fn(_) {
-            error.InvalidAnnotation(
-              types.to_string(environment, value_type),
-              types.to_string(environment, annotated),
-              type_name(pat),
+            error.located(
+              value_expression.location,
+              error.InvalidAnnotation(
+                types.to_string(environment, value_type),
+                types.to_string(environment, annotated),
+                type_name(pat),
+              ),
             )
           })
         }
@@ -189,10 +196,13 @@ pub fn statement(
       case types.unify(store, environment, type_, types.BoolType) {
         Ok(store) -> Ok(#(store, environment, types.NilType))
         Error(_) ->
-          Error(error.InvalidType(
-            types.to_string(environment, type_),
-            "Bool",
-            "the assert statement requires a Bool",
+          Error(error.located(
+            expression_.location,
+            error.InvalidType(
+              types.to_string(environment, type_),
+              "Bool",
+              "the assert statement requires a Bool",
+            ),
           ))
       }
     }
@@ -397,7 +407,11 @@ fn use_call(
       // the callback's declared return type.
       check_continuation(env, store, callback_return, return, continuation)
     }
-    _ -> Error(error.NotCallable(types.to_string(environment, glimpse_target)))
+    _ ->
+      Error(error.located(
+        target.location,
+        error.NotCallable(types.to_string(environment, glimpse_target)),
+      ))
   }
 }
 
@@ -492,7 +506,11 @@ fn use_statement_with_type(
     types.CallableType(parameters, _, return)
     | types.GenericCallableType(parameters, _, return, _) -> {
       case list.length(parameters) == 1 {
-        False -> Error(error.InvalidUse(list.length(patterns)))
+        False ->
+          Error(error.located(
+            function_expr.location,
+            error.InvalidUse(list.length(patterns)),
+          ))
         True -> {
           let callback_parameter =
             list.last(parameters) |> result.unwrap(types.IntType)
@@ -506,7 +524,11 @@ fn use_statement_with_type(
         }
       }
     }
-    _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
+    _ ->
+      Error(error.located(
+        function_expr.location,
+        error.NotCallable(types.to_string(environment, target_type)),
+      ))
   }
 }
 
@@ -525,12 +547,19 @@ fn fold_use_patterns(
     types.GenericCallableType(callback_params, _, callback_return, _) ->
       Ok(#(callback_params, callback_return))
     _ ->
-      Error(error.NotCallable(types.to_string(environment, callback_parameter)))
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.NotCallable(types.to_string(environment, callback_parameter)),
+      ))
   }
   use #(callback_params, callback_return) <- result.try(callback_types)
 
   case list.length(callback_params) == list.length(patterns) {
-    False -> Error(error.InvalidUse(list.length(patterns)))
+    False ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidUse(list.length(patterns)),
+      ))
     True ->
       list.try_fold(
         list.zip(patterns, callback_params),
@@ -621,7 +650,10 @@ fn check_pattern_is_irrefutable(
 ) -> error.TypeCheckResult(#(types.TypeStore, types.Environment)) {
   case exhaustive.check(environment, [type_], [[pattern]]) {
     option.Some(missing) ->
-      Error(error.InexhaustivePattern(string.join(missing, "\n")))
+      Error(error.located(
+        pattern.location,
+        error.InexhaustivePattern(string.join(missing, "\n")),
+      ))
     option.None -> Ok(#(store, environment))
   }
 }
@@ -694,17 +726,19 @@ fn typecheck_with_expected(
     glance.Float(_, value) ->
       case pattern.float_is_in_range(value) {
         True -> Ok(#(store, types.FloatType))
-        False -> Error(error.FloatOutOfRange(value))
+        False ->
+          Error(error.located(expr.location, error.FloatOutOfRange(value)))
       }
     glance.String(_, value) ->
       case glexer.unescape_string(value) {
         Ok(_) -> Ok(#(store, types.StringType))
-        Error(_) -> Error(error.InvalidEscape(value))
+        Error(_) ->
+          Error(error.located(expr.location, error.InvalidEscape(value)))
       }
     glance.Variable(_, "Nil") -> Ok(#(store, types.NilType))
     glance.Variable(_, "True") | glance.Variable(_, "False") ->
       Ok(#(store, types.BoolType))
-    glance.Variable(_, name) -> {
+    glance.Variable(location, name) -> {
       // The real compiler rejects any reference (not just a call) to a value
       // that has no implementation for the active target.
       use _ <- result.try(targets.check_callee(
@@ -712,6 +746,9 @@ fn typecheck_with_expected(
         glance.Variable(glance.Span(0, 0), name),
       ))
       types.lookup_variable_type(environment, name)
+      |> result.map_error(fn(_) {
+        error.located(location, error.InvalidName(name))
+      })
       |> result.map(fn(type_) {
         // Instantiate so generic values (constructors, polymorphic bindings)
         // get fresh variables at each use site.
@@ -725,10 +762,13 @@ fn typecheck_with_expected(
       case types.unify(store, environment, got, types.IntType) {
         Ok(store) -> Ok(#(store, types.IntType))
         Error(_) ->
-          Error(error.InvalidType(
-            types.to_string(environment, got),
-            "Int",
-            "- can only negate Int",
+          Error(error.located(
+            int_expr.location,
+            error.InvalidType(
+              types.to_string(environment, got),
+              "Int",
+              "- can only negate Int",
+            ),
           ))
       }
     }
@@ -738,10 +778,13 @@ fn typecheck_with_expected(
       case types.unify(store, environment, got, types.BoolType) {
         Ok(store) -> Ok(#(store, types.BoolType))
         Error(_) ->
-          Error(error.InvalidType(
-            types.to_string(environment, got),
-            "Bool",
-            "! can only negate Bool",
+          Error(error.located(
+            bool_expr.location,
+            error.InvalidType(
+              types.to_string(environment, got),
+              "Bool",
+              "! can only negate Bool",
+            ),
           ))
       }
     }
@@ -780,10 +823,15 @@ fn typecheck_with_expected(
         types.TupleType(elements) ->
           list.drop(elements, up_to: index)
           |> list.first
-          |> result.replace_error(error.UnexpectedType(
-            types.to_string(environment, tuple_type),
-            "a tuple with an element at index " <> int.to_string(index),
-          ))
+          |> result.map_error(fn(_) {
+            error.located(
+              expr.location,
+              error.UnexpectedType(
+                types.to_string(environment, tuple_type),
+                "a tuple with an element at index " <> int.to_string(index),
+              ),
+            )
+          })
           |> result.map(fn(element) { #(store, element) })
         _ -> {
           case types.extend_tuple(store, tuple_type, index) {
@@ -793,9 +841,12 @@ fn typecheck_with_expected(
             // synthesising an arbitrary tuple arity, since the element at
             // `index` cannot be given a type without that knowledge.
             Error(_) ->
-              Error(error.UnexpectedType(
-                types.to_string(environment, tuple_type),
-                "a tuple with an element at index " <> int.to_string(index),
+              Error(error.located(
+                expr.location,
+                error.UnexpectedType(
+                  types.to_string(environment, tuple_type),
+                  "a tuple with an element at index " <> int.to_string(index),
+                ),
               ))
           }
         }
@@ -901,8 +952,8 @@ fn typecheck_with_expected(
     glance.Call(_, target, arguments) ->
       call(environment, store, target, arguments)
 
-    glance.BinaryOperator(_, operator, left, right) ->
-      binop(environment, store, operator, left, right)
+    glance.BinaryOperator(location, operator, left, right) ->
+      binop(environment, store, location, operator, left, right)
 
     glance.BitString(_, segments) -> {
       use #(store, _) <- result.try(
@@ -980,9 +1031,12 @@ fn typecheck_with_expected(
             option.Some(label) ->
               dict.get(labels, label)
               |> result.map_error(fn(_) {
-                error.InvalidArgumentLabel(
-                  "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-                  label,
+                error.located(
+                  expr.location,
+                  error.InvalidArgumentLabel(
+                    "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+                    label,
+                  ),
                 )
               })
             option.None ->
@@ -1023,7 +1077,11 @@ fn typecheck_with_expected(
             typed_after,
           )
         }
-        _ -> Error(error.NotCallable(types.to_string(environment, target_type)))
+        _ ->
+          Error(error.located(
+            function.location,
+            error.NotCallable(types.to_string(environment, target_type)),
+          ))
       }
     }
   }
@@ -1057,7 +1115,10 @@ fn list_expression(
           Ok(#(store, element))
         }
         option.Some(_) ->
-          Error(error.InvalidType("unknown", "List", "empty list with rest"))
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.InvalidType("unknown", "List", "empty list with rest"),
+          ))
       }
     }
     [_, ..] ->
@@ -1067,7 +1128,11 @@ fn list_expression(
             types.unify(store, environment, first, element_type)
           })
           |> result.map(fn(store) { #(store, first) })
-        [] -> Error(error.InvalidType("unknown", "List", "empty element types"))
+        [] ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.InvalidType("unknown", "List", "empty element types"),
+          ))
       }
   }
 
@@ -1092,10 +1157,13 @@ fn list_expression(
         }
       }
       let mismatch = fn(_) {
-        error.InvalidType(
-          types.to_string(environment, rest_type),
-          "List(" <> types.to_string(environment, element_type) <> ")",
-          "list rest must be a list",
+        error.located(
+          rest_expr.location,
+          error.InvalidType(
+            types.to_string(environment, rest_type),
+            "List(" <> types.to_string(environment, element_type) <> ")",
+            "list rest must be a list",
+          ),
         )
       }
       types.unify(store, environment, rest_type, types.list_type(rest_element))
@@ -1114,7 +1182,7 @@ fn list_expression(
 /// same name.
 fn check_duplicate_fn_parameter_names(
   arguments: List(glance.FnParameter),
-) -> Result(Nil, error.TypeCheckError) {
+) -> Result(Nil, error.LocatedError) {
   let counts =
     list.fold(arguments, dict.new(), fn(acc, param) {
       case param {
@@ -1130,7 +1198,11 @@ fn check_duplicate_fn_parameter_names(
     |> dict.keys
     |> list.first
   {
-    Ok(name) -> Error(error.DuplicateArgumentName(name))
+    Ok(name) ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.DuplicateArgumentName(name),
+      ))
     Error(_) -> Ok(Nil)
   }
 }
@@ -1267,10 +1339,13 @@ fn fn_literal(
           Ok(#(store, resolved))
         }
         Error(_) ->
-          Error(error.InvalidReturnType(
-            "anonymous function",
-            types.to_string(environment, inferred_return),
-            types.to_string(environment, annotated),
+          Error(error.located(
+            annotation.location,
+            error.InvalidReturnType(
+              "anonymous function",
+              types.to_string(environment, inferred_return),
+              types.to_string(environment, annotated),
+            ),
           ))
       }
     }
@@ -1377,9 +1452,13 @@ fn module_field_type(
                 False -> Error(invalid)
               }
           }
-        _ -> Error(error.InvalidName(name))
+        _ -> Error(error.located(container.location, error.InvalidName(name)))
       }
-    _ -> Error(error.InvalidFieldAccess("", label))
+    _ ->
+      Error(error.located(
+        container.location,
+        error.InvalidFieldAccess("", label),
+      ))
   }
 }
 
@@ -1390,7 +1469,9 @@ fn module_value(
 ) -> error.TypeCheckResult(#(TypeStore, types.Type)) {
   nested_defs
   |> dict.get(label)
-  |> result.replace_error(error.InvalidName(label))
+  |> result.map_error(fn(_) {
+    error.located(glance.Span(-1, -1), error.InvalidName(label))
+  })
   |> result.map(fn(type_) {
     let #(store, type_) = types.instantiate(store, type_)
     #(store, type_)
@@ -1418,7 +1499,11 @@ fn module_definitions(
             }),
           )
       }
-    Error(_) -> Error(error.InvalidFieldAccess("", module))
+    Error(_) ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidFieldAccess("", module),
+      ))
   }
 }
 
@@ -1493,9 +1578,12 @@ fn field_access_type(
 
       case constructors {
         [] ->
-          Error(error.InvalidFieldAccess(
-            types.to_string(environment, container_type),
-            label,
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.InvalidFieldAccess(
+              types.to_string(environment, container_type),
+              label,
+            ),
           ))
         _ ->
           // The label must be present on every variant and at the same
@@ -1508,11 +1596,14 @@ fn field_access_type(
             })
           {
             False ->
-              Error(error.MissingField(
-                types.to_string(environment, container_type)
-                <> " does not have field "
-                <> label
-                <> " on every variant",
+              Error(error.located(
+                glance.Span(-1, -1),
+                error.MissingField(
+                  types.to_string(environment, container_type)
+                  <> " does not have field "
+                  <> label
+                  <> " on every variant",
+                ),
               ))
             True -> {
               let positions =
@@ -1527,11 +1618,14 @@ fn field_access_type(
                 })
               {
                 False ->
-                  Error(error.MissingField(
-                    types.to_string(environment, container_type)
-                    <> " has field "
-                    <> label
-                    <> " at different positions on its variants",
+                  Error(error.located(
+                    glance.Span(-1, -1),
+                    error.MissingField(
+                      types.to_string(environment, container_type)
+                      <> " has field "
+                      <> label
+                      <> " at different positions on its variants",
+                    ),
                   ))
                 True ->
                   case list.first(constructors) {
@@ -1546,9 +1640,12 @@ fn field_access_type(
                         label,
                       )
                     Error(_) ->
-                      Error(error.InvalidFieldAccess(
-                        types.to_string(environment, container_type),
-                        label,
+                      Error(error.located(
+                        glance.Span(-1, -1),
+                        error.InvalidFieldAccess(
+                          types.to_string(environment, container_type),
+                          label,
+                        ),
                       ))
                   }
               }
@@ -1557,9 +1654,12 @@ fn field_access_type(
       }
     }
     _ ->
-      Error(error.InvalidFieldAccess(
-        types.to_string(environment, container_type),
-        label,
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidFieldAccess(
+          types.to_string(environment, container_type),
+          label,
+        ),
       ))
   }
 }
@@ -1591,9 +1691,12 @@ fn variant_field_type(
     #(store, expected_type)
   })
   |> result.map_error(fn(_) {
-    error.InvalidFieldAccess(
-      types.to_string(environment, container_type),
-      label,
+    error.located(
+      glance.Span(-1, -1),
+      error.InvalidFieldAccess(
+        types.to_string(environment, container_type),
+        label,
+      ),
     )
   })
 }
@@ -1613,13 +1716,18 @@ fn record_update(
   let constructor_lookup = case module {
     option.None ->
       dict.get(environment.scope.definitions, constructor)
-      |> result.replace_error(error.InvalidName(constructor))
+      |> result.map_error(fn(_) {
+        error.located(record.location, error.InvalidName(constructor))
+      })
     option.Some(module_name) -> {
       case dict.get(environment.imports.module_imports, module_name) {
         Ok(types.NamespaceType(nested_defs, _)) ->
           dict.get(nested_defs, constructor)
-          |> result.replace_error(error.InvalidName(constructor))
-        _ -> Error(error.InvalidName(constructor))
+          |> result.map_error(fn(_) {
+            error.located(record.location, error.InvalidName(constructor))
+          })
+        _ ->
+          Error(error.located(record.location, error.InvalidName(constructor)))
       }
     }
   }
@@ -1655,7 +1763,11 @@ fn record_update(
       // labelled field: `M(..base)` on `type M { M(Int) }` is rejected by the
       // real compiler ("This constructor has no labelled fields").
       case dict.is_empty(labels) {
-        True -> Error(error.RecordUpdateOnUnlabelledConstructor(constructor))
+        True ->
+          Error(error.located(
+            record.location,
+            error.RecordUpdateOnUnlabelledConstructor(constructor),
+          ))
         False -> {
           // The base record and the update result must be the same variant with the
           // same type parameters, so the base's type parameters (e.g. the rigid
@@ -1691,9 +1803,12 @@ fn record_update(
             let #(store, env) = state
             dict.get(labels, field.label)
             |> result.map_error(fn(_) {
-              error.InvalidFieldAccess(
-                types.to_string(env, record_type),
-                field.label,
+              error.located(
+                record.location,
+                error.InvalidFieldAccess(
+                  types.to_string(env, record_type),
+                  field.label,
+                ),
               )
             })
             |> result.try(fn(position) {
@@ -1705,7 +1820,12 @@ fn record_update(
                   // Shorthand (`index:`) references a variable in scope; its type
                   // must match the field type, and the variable must exist.
                   types.lookup_variable_type(env, field.label)
-                  |> result.replace_error(error.InvalidName(field.label))
+                  |> result.map_error(fn(_) {
+                    error.located(
+                      record.location,
+                      error.InvalidName(field.label),
+                    )
+                  })
                   |> result.try(fn(var_type) {
                     // A generalised binding (e.g. `let handlers = do_remove_event(..)`)
                     // is polymorphic; instantiating at the use site lets its named
@@ -1715,10 +1835,13 @@ fn record_update(
                     types.unify(store, env, var_type, expected_type)
                     |> result.map(fn(store) { #(store, env) })
                     |> result.map_error(fn(_) {
-                      error.InvalidType(
-                        types.to_string(env, var_type),
-                        types.to_string(env, expected_type),
-                        "in record update of field " <> field.label,
+                      error.located(
+                        record.location,
+                        error.InvalidType(
+                          types.to_string(env, var_type),
+                          types.to_string(env, expected_type),
+                          "in record update of field " <> field.label,
+                        ),
                       )
                     })
                   })
@@ -1732,10 +1855,13 @@ fn record_update(
                   types.unify(store, env, value_type, expected_type)
                   |> result.map(fn(store) { #(store, env) })
                   |> result.map_error(fn(_) {
-                    error.InvalidType(
-                      types.to_string(env, value_type),
-                      types.to_string(env, expected_type),
-                      "in record update of field " <> field.label,
+                    error.located(
+                      value_expr.location,
+                      error.InvalidType(
+                        types.to_string(env, value_type),
+                        types.to_string(env, expected_type),
+                        "in record update of field " <> field.label,
+                      ),
                     )
                   })
                 }
@@ -1750,7 +1876,10 @@ fn record_update(
       }
     }
     _ ->
-      Error(error.NotCallable(types.to_string(environment, constructor_type)))
+      Error(error.located(
+        record.location,
+        error.NotCallable(types.to_string(environment, constructor_type)),
+      ))
   }
 }
 
@@ -1896,7 +2025,11 @@ fn check_update_linked_field(
     })
 
   case unsafe {
-    True -> Error(error.UnsafeRecordUpdate(constructor))
+    True ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.UnsafeRecordUpdate(constructor),
+      ))
     False -> Ok(environment)
   }
 }
@@ -1936,10 +2069,11 @@ pub fn find_first_not_in(
 /// Duplicate field labels within a single record update are an error.
 fn check_update_no_duplicate_fields(
   fields: List(glance.RecordUpdateField(glance.Expression)),
-) -> Result(Nil, error.TypeCheckError) {
+) -> Result(Nil, error.LocatedError) {
   let labels = fields |> list.map(fn(field) { field.label })
   case find_duplicate(labels) {
-    option.Some(label) -> Error(error.DuplicateArgument(label))
+    option.Some(label) ->
+      Error(error.located(glance.Span(-1, -1), error.DuplicateArgument(label)))
     option.None -> Ok(Nil)
   }
 }
@@ -1979,11 +2113,19 @@ fn check_update_variant_safety(
         _ -> {
           case inferred_variant {
             // Variant not pinned: we don't know which one we have.
-            option.None -> Error(error.UnsafeRecordUpdate(constructor))
+            option.None ->
+              Error(error.located(
+                glance.Span(-1, -1),
+                error.UnsafeRecordUpdate(constructor),
+              ))
             option.Some(index) ->
               case constructor_variant == option.Some(index) {
                 True -> Ok(store)
-                False -> Error(error.UnsafeRecordUpdate(constructor))
+                False ->
+                  Error(error.located(
+                    glance.Span(-1, -1),
+                    error.UnsafeRecordUpdate(constructor),
+                  ))
               }
           }
         }
@@ -2091,10 +2233,13 @@ fn bit_string_segment_value(
   types.unify(store, environment, value_type, expected_family)
   |> result.map(fn(store) { #(store, value_type) })
   |> result.map_error(fn(_) {
-    error.InvalidType(
-      types.to_string(environment, value_type),
-      types.to_string(environment, expected_family),
-      "in bit string segment",
+    error.located(
+      value_expr.location,
+      error.InvalidType(
+        types.to_string(environment, value_type),
+        types.to_string(environment, expected_family),
+        "in bit string segment",
+      ),
     )
   })
 }
@@ -2143,7 +2288,11 @@ fn check_expression_options(
       }
     })
   case has_pattern_only || has_unit && !has_size {
-    True -> Error(error.InvalidBitStringSegment("signed"))
+    True ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidBitStringSegment("signed"),
+      ))
     False -> Ok(store)
   }
 }
@@ -2173,7 +2322,11 @@ fn check_option_conflicts(
   let conflict = size_count > 1 || unit_count > 1
 
   case conflict {
-    True -> Error(error.InvalidBitStringSegment("size"))
+    True ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidBitStringSegment("size"),
+      ))
     False -> Ok(store)
   }
 }
@@ -2188,9 +2341,15 @@ fn check_literal_sizes(
   list.try_fold(options, store, fn(store, option) {
     case option {
       glance.SizeOption(size) if size <= 0 ->
-        Error(error.InvalidBitStringSegment("size"))
+        Error(error.located(
+          glance.Span(-1, -1),
+          error.InvalidBitStringSegment("size"),
+        ))
       glance.UnitOption(unit) if unit <= 0 ->
-        Error(error.InvalidBitStringSegment("unit"))
+        Error(error.located(
+          glance.Span(-1, -1),
+          error.InvalidBitStringSegment("unit"),
+        ))
       glance.SizeValueOption(size_expr) ->
         check_size_expression(environment, store, size_expr)
       _ -> Ok(store)
@@ -2211,7 +2370,9 @@ fn check_size_expression(
   ))
   types.unify(store, environment, size_type, types.IntType)
   |> result.map(fn(store) { store })
-  |> result.map_error(fn(_) { error.InvalidBitStringSegment("size") })
+  |> result.map_error(fn(_) {
+    error.located(size_expr.location, error.InvalidBitStringSegment("size"))
+  })
 }
 
 /// Typecheck a case expression. Each clause's patterns must match the subject
@@ -2261,12 +2422,23 @@ fn case_expression(
     [] -> {
       let resolved_subjects = resolve_subjects(store, subject_types)
       case any_subject_unresolved(resolved_subjects) {
-        True -> Error(error.CaseClauseMismatch("no clauses", "any"))
+        True ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.CaseClauseMismatch("no clauses", "any"),
+          ))
         False ->
           case exhaustive.check(environment, resolved_subjects, []) {
             option.Some(missing) ->
-              Error(error.InexhaustivePattern(string.join(missing, "\n")))
-            option.None -> Error(error.CaseClauseMismatch("no clauses", "any"))
+              Error(error.located(
+                glance.Span(-1, -1),
+                error.InexhaustivePattern(string.join(missing, "\n")),
+              ))
+            option.None ->
+              Error(error.located(
+                glance.Span(-1, -1),
+                error.CaseClauseMismatch("no clauses", "any"),
+              ))
           }
       }
     }
@@ -2295,7 +2467,11 @@ fn case_expression(
         let clause_types = list.reverse(clause_types)
 
         case clause_types {
-          [] -> Error(error.CaseClauseMismatch("no clauses", "any"))
+          [] ->
+            Error(error.located(
+              glance.Span(-1, -1),
+              error.CaseClauseMismatch("no clauses", "any"),
+            ))
           [first_body_type, ..remaining_types] ->
             list.try_fold(remaining_types, store, fn(store, clause_type) {
               types.unify(store, environment, first_body_type, clause_type)
@@ -2350,7 +2526,10 @@ fn case_expression(
                 )
               {
                 option.Some(missing) ->
-                  Error(error.InexhaustivePattern(string.join(missing, "\n")))
+                  Error(error.located(
+                    glance.Span(-1, -1),
+                    error.InexhaustivePattern(string.join(missing, "\n")),
+                  ))
                 option.None -> Ok(case_state)
               }
           }
@@ -2430,7 +2609,7 @@ fn pattern_bound_variables(
 fn validate_clause_patterns(
   clause: glance.Clause,
   subject_count: Int,
-) -> Result(Nil, error.TypeCheckError) {
+) -> Result(Nil, error.LocatedError) {
   case clause.patterns {
     [] -> Ok(Nil)
     [first, ..rest] -> {
@@ -2452,10 +2631,13 @@ fn validate_clause_patterns(
 fn validate_alternative_patterns(
   patterns: List(glance.Pattern),
   subject_count: Int,
-) -> Result(List(#(String, List(Int))), error.TypeCheckError) {
+) -> Result(List(#(String, List(Int))), error.LocatedError) {
   case list.length(patterns) == subject_count {
     False ->
-      Error(error.IncorrectPatternCount(list.length(patterns), subject_count))
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.IncorrectPatternCount(list.length(patterns), subject_count),
+      ))
     True -> {
       // Case-pattern variable names follow the same camelCase rule as let
       // bindings: lowercase names may not contain uppercase letters.
@@ -2471,7 +2653,11 @@ fn validate_alternative_patterns(
                   Error(e) -> Error(e)
                   Ok(_) ->
                     case name_has_uppercase(name) {
-                      True -> Error(error.InvalidVariableName(name))
+                      True ->
+                        Error(error.located(
+                          pattern.location,
+                          error.InvalidVariableName(name),
+                        ))
                       False -> Ok(Nil)
                     }
                 }
@@ -2493,7 +2679,11 @@ fn validate_alternative_patterns(
             name == seen_name && path != seen_path
           })
         {
-          True -> Error(error.DuplicatePatternVariable(name))
+          True ->
+            Error(error.located(
+              glance.Span(-1, -1),
+              error.DuplicatePatternVariable(name),
+            ))
           False -> Ok([variable, ..acc])
         }
       })
@@ -2508,12 +2698,16 @@ fn validate_alternative_patterns(
 fn validate_alternative_consistency(
   first: List(#(String, List(Int))),
   other: List(#(String, List(Int))),
-) -> Result(Nil, error.TypeCheckError) {
+) -> Result(Nil, error.LocatedError) {
   case first {
     [] ->
       case other {
         [] -> Ok(Nil)
-        [#(name, _), ..] -> Error(error.ExtraPatternVariable(name))
+        [#(name, _), ..] ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.ExtraPatternVariable(name),
+          ))
       }
     [#(name, _), ..rest] -> {
       case
@@ -2522,7 +2716,11 @@ fn validate_alternative_consistency(
           seen_name == name
         })
       {
-        Error(_) -> Error(error.MissingPatternVariable(name))
+        Error(_) ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.MissingPatternVariable(name),
+          ))
         Ok(_) ->
           validate_alternative_consistency(
             rest,
@@ -2539,7 +2737,7 @@ fn validate_alternative_consistency(
 /// A `let` (or `let assert`) pattern may not bind the same variable twice.
 fn validate_let_pattern_variables(
   pattern: glance.Pattern,
-) -> Result(Nil, error.TypeCheckError) {
+) -> Result(Nil, error.LocatedError) {
   let variables = pattern_bound_variables([0], pattern)
   case
     list.any(variables, fn(variable) {
@@ -2552,7 +2750,11 @@ fn validate_let_pattern_variables(
   {
     True ->
       case variables {
-        [#(name, _), ..] -> Error(error.DuplicatePatternVariable(name))
+        [#(name, _), ..] ->
+          Error(error.located(
+            pattern.location,
+            error.DuplicatePatternVariable(name),
+          ))
         [] -> Ok(Nil)
       }
     False -> Ok(Nil)
@@ -2702,7 +2904,13 @@ fn clause_body_type(
   case types.unify(store, pattern_env, guard_type, types.BoolType) {
     Ok(store) -> expression(pattern_env, store, clause.body)
     Error(_) ->
-      Error(error.InvalidGuard(types.to_string(pattern_env, guard_type)))
+      Error(error.located(
+        case clause.guard {
+          option.Some(guard_expr) -> guard_expr.location
+          option.None -> glance.Span(-1, -1)
+        },
+        error.InvalidGuard(types.to_string(pattern_env, guard_type)),
+      ))
   }
 }
 
@@ -2733,12 +2941,13 @@ fn check_guard_grammar(expr: glance.Expression) -> error.TypeCheckResult(Nil) {
     glance.NegateInt(_, value) ->
       case value {
         glance.Int(_, _) | glance.Float(_, _) -> Ok(Nil)
-        _ -> Error(error.InvalidGuardExpression)
+        _ -> Error(error.located(expr.location, error.InvalidGuardExpression))
       }
     glance.Block(_, statements) -> check_guard_block(statements)
     glance.BinaryOperator(_, operator, left, right) ->
       case operator {
-        glance.Pipe -> Error(error.InvalidGuardExpression)
+        glance.Pipe ->
+          Error(error.located(expr.location, error.InvalidGuardExpression))
         _ ->
           check_guard_grammar(left)
           |> result.try(fn(_) { check_guard_grammar(right) })
@@ -2746,13 +2955,15 @@ fn check_guard_grammar(expr: glance.Expression) -> error.TypeCheckResult(Nil) {
     glance.Call(_, function, arguments) -> {
       case is_record_construction(function) {
         True -> check_guard_arguments(arguments)
-        False -> Error(error.InvalidGuardExpression)
+        False ->
+          Error(error.located(expr.location, error.InvalidGuardExpression))
       }
     }
     // Bit arrays are constant values, so they are permitted grammatically.
     glance.BitString(_, _segments) -> Ok(Nil)
-    glance.Todo(_, _) -> Error(error.TodoInConstant)
-    _ -> Error(error.InvalidGuardExpression)
+    glance.Todo(_, _) ->
+      Error(error.located(expr.location, error.TodoInConstant))
+    _ -> Error(error.located(expr.location, error.InvalidGuardExpression))
   }
 }
 
@@ -2780,7 +2991,15 @@ fn check_guard_block(
   list.try_fold(statements, Nil, fn(_nil, statement) {
     case statement {
       glance.Expression(expr) -> check_guard_grammar(expr)
-      _ -> Error(error.InvalidGuardExpression)
+      glance.Use(location, _, _) -> {
+        Error(error.located(location, error.InvalidGuardExpression))
+      }
+      glance.Assignment(location, _, _, _, _) -> {
+        Error(error.located(location, error.InvalidGuardExpression))
+      }
+      glance.Assert(location, _, _) -> {
+        Error(error.located(location, error.InvalidGuardExpression))
+      }
     }
   })
 }
@@ -2902,9 +3121,15 @@ pub fn call(
           use #(store, _) <- result.try(case argument {
             glance.UnlabelledField(expr) -> expression(environment, store, expr)
             glance.LabelledField(label, _, _) ->
-              Error(error.UnexpectedLabelledArgument(label))
+              Error(error.located(
+                target.location,
+                error.UnexpectedLabelledArgument(label),
+              ))
             glance.ShorthandField(label, _) ->
-              Error(error.UnexpectedLabelledArgument(label))
+              Error(error.located(
+                target.location,
+                error.UnexpectedLabelledArgument(label),
+              ))
           })
           Ok(#(store, Nil))
         }),
@@ -3061,9 +3286,14 @@ fn check_arguments(
           Ok(#(store, [type_, ..reversed]))
         }),
       )
-      Error(error.InvalidArguments(
-        "(" <> types.list_to_string(parameters, environment) <> ")",
-        "(" <> types.list_to_string(list.reverse(arg_types), environment) <> ")",
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidArguments(
+          "(" <> types.list_to_string(parameters, environment) <> ")",
+          "("
+            <> types.list_to_string(list.reverse(arg_types), environment)
+            <> ")",
+        ),
       ))
     }
 
@@ -3109,9 +3339,12 @@ fn check_arguments(
                   environment,
                 )
                 <> ")"
-              error.InvalidArguments(
-                "(" <> types.list_to_string(parameters, environment) <> ")",
-                actual,
+              error.located(
+                glance.Span(-1, -1),
+                error.InvalidArguments(
+                  "(" <> types.list_to_string(parameters, environment) <> ")",
+                  actual,
+                ),
               )
             })
           },
@@ -3153,6 +3386,7 @@ fn field_expression_type(
 pub fn binop(
   environment: Environment,
   store: TypeStore,
+  location: glance.Span,
   operator: glance.BinaryOperator,
   left: glance.Expression,
   right: glance.Expression,
@@ -3172,6 +3406,7 @@ pub fn binop(
           pipe.check_operands(
             environment,
             store,
+            location,
             pipe.operator_string(operator),
             left_type,
             right_type,
@@ -3185,11 +3420,14 @@ pub fn binop(
             Error(_) -> {
               let #(store, resolved_left) = types.resolve(store, left_type)
               let #(_store, resolved_right) = types.resolve(store, right_type)
-              Error(error.InvalidBinOp(
-                pipe.operator_string(operator),
-                types.to_string(environment, resolved_left),
-                types.to_string(environment, resolved_right),
-                "same type",
+              Error(error.located(
+                location,
+                error.InvalidBinOp(
+                  pipe.operator_string(operator),
+                  types.to_string(environment, resolved_left),
+                  types.to_string(environment, resolved_right),
+                  "same type",
+                ),
               ))
             }
           }
@@ -3199,6 +3437,7 @@ pub fn binop(
           pipe.check_comparison_operands(
             environment,
             store,
+            location,
             pipe.operator_string(operator),
             left_type,
             right_type,
@@ -3214,6 +3453,7 @@ pub fn binop(
           pipe.check_operands(
             environment,
             store,
+            location,
             pipe.operator_string(operator),
             left_type,
             right_type,
@@ -3225,6 +3465,7 @@ pub fn binop(
           pipe.check_comparison_operands(
             environment,
             store,
+            location,
             pipe.operator_string(operator),
             left_type,
             right_type,
@@ -3239,6 +3480,7 @@ pub fn binop(
           pipe.check_operands(
             environment,
             store,
+            location,
             pipe.operator_string(operator),
             left_type,
             right_type,
@@ -3250,6 +3492,7 @@ pub fn binop(
           pipe.check_operands(
             environment,
             store,
+            location,
             pipe.operator_string(operator),
             left_type,
             right_type,
@@ -3374,9 +3617,15 @@ fn pipe_value_into_callable(
           use #(store, _) <- result.try(case argument {
             glance.UnlabelledField(expr) -> expression(environment, store, expr)
             glance.LabelledField(label, _, _) ->
-              Error(error.UnexpectedLabelledArgument(label))
+              Error(error.located(
+                glance.Span(-1, -1),
+                error.UnexpectedLabelledArgument(label),
+              ))
             glance.ShorthandField(label, _) ->
-              Error(error.UnexpectedLabelledArgument(label))
+              Error(error.located(
+                glance.Span(-1, -1),
+                error.UnexpectedLabelledArgument(label),
+              ))
           })
           Ok(#(store, Nil))
         }),
@@ -3466,7 +3715,11 @@ fn pipe_value_into_callable_parts(
         list.drop(parameters, up_to: piped_position)
         |> list.first
       {
-        Error(_) -> Error(error.InvalidArguments("()", "a piped value"))
+        Error(_) ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.InvalidArguments("()", "a piped value"),
+          ))
         Ok(first_param) -> {
           use store <- result.try(types.unify(
             store,
@@ -3520,7 +3773,7 @@ fn typecheck_capture_arguments(
   state: capture.CaptureState,
 ) -> Result(
   #(TypeStore, List(glance.Field(Type)), capture.CaptureState),
-  error.TypeCheckError,
+  error.LocatedError,
 ) {
   let parameter_count = list.length(parameters)
 
@@ -3535,9 +3788,12 @@ fn typecheck_capture_arguments(
       option.Some(label) ->
         dict.get(labels, label)
         |> result.map_error(fn(_) {
-          error.InvalidArgumentLabel(
-            "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-            label,
+          error.located(
+            glance.Span(-1, -1),
+            error.InvalidArgumentLabel(
+              "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+              label,
+            ),
           )
         })
       option.None -> Ok(capture.next_free_slot(state.claimed, state.counter))
@@ -3547,10 +3803,13 @@ fn typecheck_capture_arguments(
 
     case position >= parameter_count || set.contains(state.claimed, position) {
       True ->
-        Error(capture.too_many_arguments(
-          environment,
-          parameters,
-          list.reverse(reversed) |> list.map(capture.field_type),
+        Error(error.located(
+          glance.Span(-1, -1),
+          capture.too_many_arguments(
+            environment,
+            parameters,
+            list.reverse(reversed) |> list.map(capture.field_type),
+          ),
         ))
       False -> {
         let assert Ok(expected) =

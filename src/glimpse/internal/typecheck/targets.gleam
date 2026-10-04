@@ -545,7 +545,7 @@ fn record_update_field_expression(
 pub fn check_callee(
   environment: Environment,
   target_expression: glance.Expression,
-) -> Result(Nil, error.TypeCheckError) {
+) -> Result(Nil, error.LocatedError) {
   case environment.check_target_support {
     False -> Ok(Nil)
     True ->
@@ -562,7 +562,11 @@ pub fn check_callee(
             option.Some(#(name, support)) ->
               case types.target_supports(environment.target, support) {
                 True -> Ok(Nil)
-                False -> Error(error.UnsupportedTarget(name))
+                False ->
+                  Error(error.located(
+                    target_expression.location,
+                    error.UnsupportedTarget(name),
+                  ))
               }
           }
       }

@@ -1,5 +1,6 @@
 import glance
 import gleam/dict
+import gleam/result
 import glimpse
 import glimpse/error
 import glimpse/internal/typecheck/types
@@ -10,7 +11,7 @@ import typecheck/helpers
 fn typecheck_with_deps(
   definition: String,
   deps: dict.Dict(String, #(String, types.Environment)),
-) -> Result(#(glimpse.Module, types.Environment), error.TypeCheckError) {
+) -> Result(#(glimpse.Module, types.Environment), error.LocatedError) {
   let assert Ok(module) = glance.module(definition)
   let module_envs =
     dict.fold(deps, dict.new(), fn(acc, name, pair) {
@@ -109,6 +110,7 @@ pub fn duplicate_import_alias_is_rejected_test() {
       pub fn main() { x.wobble() }",
       dict.from_list([dep]),
     )
+    |> result.map_error(fn(e) { e.error })
     == Error(error.DuplicateImport("x"))
 }
 
@@ -121,6 +123,7 @@ pub fn ambiguous_import_is_rejected_test() {
       pub fn main() { sub.wobble() }",
       dict.from_list([sub, sub2]),
     )
+    |> result.map_error(fn(e) { e.error })
     == Error(error.DuplicateImport("sub"))
 }
 
@@ -131,6 +134,7 @@ pub fn type_imported_as_value_is_rejected_test() {
       pub fn main() { X }",
       dict.from_list([dep]),
     )
+    |> result.map_error(fn(e) { e.error })
     == Error(error.InvalidName("X"))
 }
 
@@ -155,6 +159,7 @@ pub fn private_dep_value_is_not_importable_test() {
       pub fn main() { hidden() }",
       dict.from_list([dep]),
     )
+    |> result.map_error(fn(e) { e.error })
     == Error(error.InvalidName("hidden"))
 }
 

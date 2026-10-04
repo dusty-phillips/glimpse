@@ -43,7 +43,10 @@ pub fn fold_import_from_env(
       }
 
       case module_env {
-        option.None -> list.Stop(Error(error.InvalidName(module)))
+        option.None ->
+          list.Stop(
+            Error(error.located(import_.location, error.InvalidName(module))),
+          )
         option.Some(module_env) -> {
           let environment_result = {
             use _ <- result.try(
@@ -51,7 +54,11 @@ pub fn fold_import_from_env(
                 add_namespace
                 && dict.has_key(environment.imports.module_imports, namespace)
               {
-                True -> Error(error.DuplicateImport(namespace))
+                True ->
+                  Error(error.located(
+                    import_.location,
+                    error.DuplicateImport(namespace),
+                  ))
                 False -> Ok(Nil)
               },
             )
@@ -117,11 +124,13 @@ fn fold_values_into_env(
     fn(environment, unqualified_import) {
       let glance.UnqualifiedImport(name, import_alias) = unqualified_import
       case set.contains(module_env.scope.public_definitions, name) {
-        False -> Error(error.InvalidName(name))
+        False ->
+          Error(error.located(glance.Span(-1, -1), error.InvalidName(name)))
         True -> {
           let scope_name = option.unwrap(import_alias, name)
           case dict.get(module_env.scope.definitions, name) {
-            Error(_) -> Error(error.InvalidName(name))
+            Error(_) ->
+              Error(error.located(glance.Span(-1, -1), error.InvalidName(name)))
             Ok(type_) ->
               Ok(
                 environment
@@ -149,11 +158,13 @@ fn fold_types_into_env(
     fn(environment, unqualified_import) {
       let glance.UnqualifiedImport(name, import_alias) = unqualified_import
       case set.contains(module_env.public_custom_types, name) {
-        False -> Error(error.InvalidName(name))
+        False ->
+          Error(error.located(glance.Span(-1, -1), error.InvalidName(name)))
         True -> {
           let scope_name = option.unwrap(import_alias, name)
           case dict.get(module_env.custom_types, name) {
-            Error(_) -> Error(error.InvalidName(name))
+            Error(_) ->
+              Error(error.located(glance.Span(-1, -1), error.InvalidName(name)))
             Ok(type_) ->
               Ok(types.add_or_update_custom_type_in_env(
                 environment,

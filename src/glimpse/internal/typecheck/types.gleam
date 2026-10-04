@@ -456,13 +456,17 @@ fn unify_rigid(
   environment: Environment,
   left: Type,
   right: Type,
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   // One side is a rigid var; normalise so `left` is that side. The rigid var
   // may also be reached through a flexible var linked to it.
   case rigid_var_name(store, left) {
     "" ->
       case rigid_var_name(store, right) {
-        "" -> Error(mismatch_error(environment, left, right))
+        "" ->
+          Error(error.located(
+            unknown_span,
+            mismatch_error(environment, left, right),
+          ))
         _ -> unify_rigid(store, environment, right, left)
       }
     name ->
@@ -472,7 +476,11 @@ fn unify_rigid(
             True ->
               case rigid_var_name(store, Var(other_id)) == name {
                 True -> Ok(store)
-                False -> Error(mismatch_error(environment, left, right))
+                False ->
+                  Error(error.located(
+                    unknown_span,
+                    mismatch_error(environment, left, right),
+                  ))
               }
             False ->
               Ok(
@@ -488,10 +496,17 @@ fn unify_rigid(
           case other_name == name {
             True -> Ok(store)
             False -> {
-              Error(mismatch_error(environment, left, right))
+              Error(error.located(
+                unknown_span,
+                mismatch_error(environment, left, right),
+              ))
             }
           }
-        _ -> Error(mismatch_error(environment, left, right))
+        _ ->
+          Error(error.located(
+            unknown_span,
+            mismatch_error(environment, left, right),
+          ))
       }
   }
 }
@@ -755,7 +770,7 @@ pub fn unify(
   environment: Environment,
   left: Type,
   right: Type,
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   let #(store, left) = resolve_keep_rigid(store, left)
   let #(store, right) = resolve_keep_rigid(store, right)
 
@@ -767,10 +782,13 @@ pub fn unify(
         False ->
           case occurs_check(store, id, right) {
             True ->
-              Error(error.InvalidType(
-                to_string(environment, Var(id)),
-                to_string(environment, right),
-                "type variable would be infinitely recursive",
+              Error(error.located(
+                unknown_span,
+                error.InvalidType(
+                  to_string(environment, Var(id)),
+                  to_string(environment, right),
+                  "type variable would be infinitely recursive",
+                ),
               ))
             False ->
               Ok(
@@ -788,10 +806,13 @@ pub fn unify(
         False ->
           case occurs_check(store, id, left) {
             True ->
-              Error(error.InvalidType(
-                to_string(environment, left),
-                to_string(environment, Var(id)),
-                "type variable would be infinitely recursive",
+              Error(error.located(
+                unknown_span,
+                error.InvalidType(
+                  to_string(environment, left),
+                  to_string(environment, Var(id)),
+                  "type variable would be infinitely recursive",
+                ),
               ))
             False ->
               Ok(
@@ -818,7 +839,10 @@ pub fn unify(
       unify_list_of_types(store, environment, lp, rp)
     }
     CustomType(_, _, _, _), CustomType(_, _, _, _) -> {
-      Error(mismatch_error(environment, left, right))
+      Error(error.located(
+        unknown_span,
+        mismatch_error(environment, left, right),
+      ))
     }
     CallableType(..), CallableType(..) ->
       unify_callable_types(store, environment, left, right)
@@ -836,11 +860,18 @@ pub fn unify(
       case ln == rn {
         True -> Ok(store)
         False -> {
-          Error(mismatch_error(environment, left, right))
+          Error(error.located(
+            unknown_span,
+            mismatch_error(environment, left, right),
+          ))
         }
       }
     }
-    _, _ -> Error(mismatch_error(environment, left, right))
+    _, _ ->
+      Error(error.located(
+        unknown_span,
+        mismatch_error(environment, left, right),
+      ))
   }
 }
 
@@ -849,10 +880,13 @@ fn unify_list_of_types(
   environment: Environment,
   left: List(Type),
   right: List(Type),
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   case list.length(left) == list.length(right) {
     False ->
-      Error(mismatch_error(environment, TupleType(left), TupleType(right)))
+      Error(error.located(
+        unknown_span,
+        mismatch_error(environment, TupleType(left), TupleType(right)),
+      ))
     True ->
       list.zip(left, right)
       |> list.try_fold(store, fn(store, pair) {
@@ -878,7 +912,7 @@ pub fn unify_record_update_base(
   record_type: Type,
   constructor_return: Type,
   updated_positions: set.Set(Int),
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   // Resolve while keeping rigid vars rigid: following a rigid var's link to its
   // named generic (as `resolve` does) would let the update's fresh constructor
   // vars link to the *generic name* instead of the rigid var, so the result
@@ -891,7 +925,10 @@ pub fn unify_record_update_base(
     CustomType(_, _, record_params, _), CustomType(_, _, return_params, _) -> {
       case list.length(record_params) == list.length(return_params) {
         False ->
-          Error(mismatch_error(environment, record_type, constructor_return))
+          Error(error.located(
+            unknown_span,
+            mismatch_error(environment, record_type, constructor_return),
+          ))
         True ->
           list.index_map(return_params, fn(param, index) {
             case set.contains(updated_positions, index) {
@@ -922,7 +959,7 @@ fn unify_callable_types(
   environment: Environment,
   left: Type,
   right: Type,
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   // Callable types unify after instantiating both sides: a generalised callable
   // (e.g. a function capture whose type variables were named at
   // generalisation) must not be compared by generic-name equality, which would
@@ -948,7 +985,11 @@ fn unify_callable_types(
         rp,
         rr,
       )
-    _, _ -> Error(mismatch_error(environment, left, right))
+    _, _ ->
+      Error(error.located(
+        unknown_span,
+        mismatch_error(environment, left, right),
+      ))
   }
 }
 
@@ -961,13 +1002,17 @@ fn unify_callables(
   left_return: Type,
   right_parameters: List(Type),
   right_return: Type,
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   // Function types unify positionally. Argument labels are not part of the
   // type: a labelled constructor (e.g. `Todo(location:, message:)`) may be
   // passed where an unlabelled `fn(Span, Option(Expression)) -> Expression`
   // is expected, matching the real Gleam typechecker.
   case list.length(left_parameters) == list.length(right_parameters) {
-    False -> Error(mismatch_error(environment, left, right))
+    False ->
+      Error(error.located(
+        unknown_span,
+        mismatch_error(environment, left, right),
+      ))
     True ->
       list.zip(left_parameters, right_parameters)
       |> list.try_fold(store, fn(store, pair) {
@@ -1394,7 +1439,7 @@ pub fn record_generic_edge(
   store: TypeStore,
   from: String,
   embedded: List(String),
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   let existing =
     dict.get(store.generic_edges, from)
     |> result.unwrap([])
@@ -1403,7 +1448,7 @@ pub fn record_generic_edge(
     list.unique(list.append(existing, embedded))
     |> list.filter(fn(name) { name != from })
   case list.any(merged, fn(name) { reaches(store.generic_edges, name, from) }) {
-    True -> Error(error.RecursiveType)
+    True -> Error(error.located(unknown_span, error.RecursiveType))
     False ->
       Ok(
         TypeStore(
@@ -1700,15 +1745,20 @@ pub fn lookup_variable_type(
   name: String,
 ) -> TypeResult {
   dict.get(environment.scope.definitions, name)
-  |> result.replace_error(error.InvalidName(name))
+  |> result.map_error(fn(_) {
+    error.located(unknown_span, error.InvalidName(name))
+  })
 }
 
 pub fn lookup_custom_type(
   environment: Environment,
   name: String,
+  span: glance.Span,
 ) -> TypeResult {
   dict.get(environment.custom_types, name)
-  |> result.replace_error(error.UnknownCustomType(name))
+  |> result.map_error(fn(_) {
+    error.located(span, error.UnknownCustomType(name))
+  })
 }
 
 pub fn extract_env(state: EnvState(a)) -> Environment {
@@ -1770,7 +1820,7 @@ pub fn type_with_holes(
   environment: Environment,
   next_hole: Int,
   glance_type: glance.Type,
-) -> Result(#(Int, Type), error.TypeCheckError) {
+) -> Result(#(Int, Type), error.LocatedError) {
   use result <- result.try(do_type_(
     environment,
     new_type_store(),
@@ -1809,36 +1859,38 @@ fn do_type_(
   next_hole: Int,
   mode: HoleMode,
   glance_type: glance.Type,
-) -> Result(#(TypeStore, Int, Type), error.TypeCheckError) {
+) -> Result(#(TypeStore, Int, Type), error.LocatedError) {
   case glance_type {
     glance.NamedType(span, "Int", option.None, []) ->
       case type_used_as_constructor(span, option.None, "Int") {
-        True -> Error(error.TypeUsedAsConstructor("Int"))
+        True -> Error(error.located(span, error.TypeUsedAsConstructor("Int")))
         False -> Ok(#(store, next_hole, IntType))
       }
     glance.NamedType(span, "Float", option.None, []) ->
       case type_used_as_constructor(span, option.None, "Float") {
-        True -> Error(error.TypeUsedAsConstructor("Float"))
+        True -> Error(error.located(span, error.TypeUsedAsConstructor("Float")))
         False -> Ok(#(store, next_hole, FloatType))
       }
     glance.NamedType(span, "Nil", option.None, []) ->
       case type_used_as_constructor(span, option.None, "Nil") {
-        True -> Error(error.TypeUsedAsConstructor("Nil"))
+        True -> Error(error.located(span, error.TypeUsedAsConstructor("Nil")))
         False -> Ok(#(store, next_hole, NilType))
       }
     glance.NamedType(span, "String", option.None, []) ->
       case type_used_as_constructor(span, option.None, "String") {
-        True -> Error(error.TypeUsedAsConstructor("String"))
+        True ->
+          Error(error.located(span, error.TypeUsedAsConstructor("String")))
         False -> Ok(#(store, next_hole, StringType))
       }
     glance.NamedType(span, "Bool", option.None, []) ->
       case type_used_as_constructor(span, option.None, "Bool") {
-        True -> Error(error.TypeUsedAsConstructor("Bool"))
+        True -> Error(error.located(span, error.TypeUsedAsConstructor("Bool")))
         False -> Ok(#(store, next_hole, BoolType))
       }
     glance.NamedType(span, "BitArray", option.None, []) ->
       case type_used_as_constructor(span, option.None, "BitArray") {
-        True -> Error(error.TypeUsedAsConstructor("BitArray"))
+        True ->
+          Error(error.located(span, error.TypeUsedAsConstructor("BitArray")))
         False -> Ok(#(store, next_hole, BitArrayType))
       }
 
@@ -1868,18 +1920,26 @@ fn do_type_(
     }
 
     glance.NamedType(span, name, module, parameters) -> {
-      use declared <- result.try(lookup_named_type(environment, module, name))
+      use declared <- result.try(lookup_named_type(
+        environment,
+        module,
+        name,
+        span,
+      ))
       case declared {
         TypeAlias(alias_parameters, aliased) ->
           case list.length(alias_parameters) == list.length(parameters) {
             False ->
-              Error(error.InvalidType(
-                name,
-                to_string(environment, declared),
-                "wrong number of type parameters: expected "
-                  <> int.to_string(list.length(alias_parameters))
-                  <> ", got "
-                  <> int.to_string(list.length(parameters)),
+              Error(error.located(
+                span,
+                error.InvalidType(
+                  name,
+                  to_string(environment, declared),
+                  "wrong number of type parameters: expected "
+                    <> int.to_string(list.length(alias_parameters))
+                    <> ", got "
+                    <> int.to_string(list.length(parameters)),
+                ),
               ))
             True -> {
               use #(store, next_hole, parameter_types) <- result.try(
@@ -1903,13 +1963,16 @@ fn do_type_(
         CustomType(declared_module, declared_name, declared_parameters, _) ->
           case list.length(declared_parameters) == list.length(parameters) {
             False ->
-              Error(error.InvalidType(
-                name,
-                to_string(environment, declared),
-                "wrong number of type parameters: expected "
-                  <> int.to_string(list.length(declared_parameters))
-                  <> ", got "
-                  <> int.to_string(list.length(parameters)),
+              Error(error.located(
+                span,
+                error.InvalidType(
+                  name,
+                  to_string(environment, declared),
+                  "wrong number of type parameters: expected "
+                    <> int.to_string(list.length(declared_parameters))
+                    <> ", got "
+                    <> int.to_string(list.length(parameters)),
+                ),
               ))
             True -> {
               use #(store, next_hole, parameter_types) <- result.try(
@@ -1939,27 +2002,32 @@ fn do_type_(
               // `Int` and `Int()` parse to the same AST, distinguished only by
               // the span covering the empty argument list.
               case type_used_as_constructor(span, module, name) {
-                True -> Error(error.TypeUsedAsConstructor(name))
+                True ->
+                  Error(error.located(span, error.TypeUsedAsConstructor(name)))
                 False -> Ok(#(store, next_hole, declared))
               }
             _ ->
-              Error(error.InvalidType(
-                name,
-                to_string(environment, declared),
-                "type does not take parameters",
+              Error(error.located(
+                span,
+                error.InvalidType(
+                  name,
+                  to_string(environment, declared),
+                  "type does not take parameters",
+                ),
               ))
           }
       }
     }
 
-    glance.VariableType(_, name) -> {
+    glance.VariableType(span, name) -> {
       case is_type_variable(name) {
         True ->
           // An implicit type variable may not contain uppercase letters: the
           // real compiler rejects `child_dataInt` in a signature as an invalid
           // type variable name.
           case name_has_uppercase(name) {
-            True -> Error(error.InvalidTypeVariableName(name))
+            True ->
+              Error(error.located(span, error.InvalidTypeVariableName(name)))
             False -> Ok(#(store, next_hole, GenericTypeVariable(name, False)))
           }
         False ->
@@ -1968,13 +2036,12 @@ fn do_type_(
       }
     }
 
-    glance.HoleType(_, _) ->
+    glance.HoleType(span, _) ->
       case mode {
         RejectHoles ->
-          Error(error.InvalidType(
-            "hole",
-            "a known type",
-            "holes are not supported",
+          Error(error.located(
+            span,
+            error.InvalidType("hole", "a known type", "holes are not supported"),
           ))
         FreshVars -> {
           let #(store, var) = fresh_var(store)
@@ -1996,7 +2063,7 @@ fn fold_type_parameters(
   next_hole: Int,
   mode: HoleMode,
   parameters: List(glance.Type),
-) -> Result(#(TypeStore, Int, List(Type)), error.TypeCheckError) {
+) -> Result(#(TypeStore, Int, List(Type)), error.LocatedError) {
   list.try_fold(parameters, #(store, next_hole, []), fn(state, parameter) {
     let #(store, next_hole, acc) = state
     use #(store, next_hole, type_) <- result.try(do_type_(
@@ -2105,15 +2172,19 @@ fn lookup_named_type(
   environment: Environment,
   module: option.Option(String),
   name: String,
+  span: glance.Span,
 ) -> TypeResult {
   case module {
-    option.None -> lookup_custom_type(environment, name)
+    option.None -> lookup_custom_type(environment, name, span)
     option.Some(module_name) -> {
       case dict.get(environment.imports.module_imports, module_name) {
         Ok(NamespaceType(_, custom_types)) ->
           dict.get(custom_types, name)
-          |> result.replace_error(error.InvalidFieldAccess(module_name, name))
-        _ -> Error(error.InvalidFieldAccess(module_name, name))
+          |> result.map_error(fn(_) {
+            error.located(span, error.InvalidFieldAccess(module_name, name))
+          })
+        _ ->
+          Error(error.located(span, error.InvalidFieldAccess(module_name, name)))
       }
     }
   }

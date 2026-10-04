@@ -9,7 +9,7 @@ pub type GlimpseError(a) {
     module_content: String,
   )
   ImportError(GlimpseImportError)
-  TypeCheckError(TypeCheckError)
+  TypeCheckError(LocatedError)
 }
 
 pub type GlimpseImportError {
@@ -228,7 +228,30 @@ pub type TypeCheckError {
 }
 
 pub type TypeCheckResult(a) =
-  Result(a, TypeCheckError)
+  Result(a, LocatedError)
 
 pub type TypeCheckFold(a) =
   list.ContinueOrStop(TypeCheckResult(a))
+
+/// A type-checking error alongside the source span it points at, so
+/// compilers can render exact code frames instead of guessing locations.
+pub type LocatedError {
+  LocatedError(span: glance.Span, error: TypeCheckError)
+}
+
+pub fn located(span: glance.Span, error: TypeCheckError) -> LocatedError {
+  LocatedError(span: span, error: error)
+}
+
+/// Fill in the span of an error that was raised without one (e.g. from
+/// unification, which works on types rather than syntax). Errors that
+/// already carry a span are returned unchanged.
+pub fn with_span(span: glance.Span, located: LocatedError) -> LocatedError {
+  case located.span {
+    glance.Span(start, _) ->
+      case start < 0 {
+        True -> LocatedError(..located, span: span)
+        False -> located
+      }
+  }
+}

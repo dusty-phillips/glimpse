@@ -52,9 +52,12 @@ pub fn fn_capture(
     option.Some(label) ->
       dict.get(labels, label)
       |> result.map_error(fn(_) {
-        error.InvalidArgumentLabel(
-          "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-          label,
+        error.located(
+          glance.Span(-1, -1),
+          error.InvalidArgumentLabel(
+            "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+            label,
+          ),
         )
       })
     option.None ->
@@ -64,7 +67,7 @@ pub fn fn_capture(
   use hole_position <- result.try(hole_position)
 
   case hole_position >= parameter_count {
-    True -> Error(too_many)
+    True -> Error(error.located(glance.Span(-1, -1), too_many))
     False -> {
       let with_hole =
         CaptureState(
@@ -157,21 +160,24 @@ fn capture_field(
   too_many: error.TypeCheckError,
   state: CaptureState,
   field: glance.Field(Type),
-) -> Result(CaptureState, error.TypeCheckError) {
+) -> Result(CaptureState, error.LocatedError) {
   case field {
-    glance.LabelledField(label, _, type_) ->
+    glance.LabelledField(label, label_location, type_) ->
       dict.get(labels, label)
       |> result.map_error(fn(_) {
-        error.InvalidArgumentLabel(
-          "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
-          label,
+        error.located(
+          label_location,
+          error.InvalidArgumentLabel(
+            "(" <> labels |> dict.keys() |> string.join(", ") <> ")",
+            label,
+          ),
         )
       })
       |> result.try(fn(position) {
         case
           position >= parameter_count || set.contains(state.claimed, position)
         {
-          True -> Error(too_many)
+          True -> Error(error.located(label_location, too_many))
           False ->
             Ok(CaptureState(
               set.insert(state.claimed, position),
@@ -183,7 +189,7 @@ fn capture_field(
     glance.UnlabelledField(type_) -> {
       let position = next_free_slot(state.claimed, state.counter)
       case position >= parameter_count {
-        True -> Error(too_many)
+        True -> Error(error.located(glance.Span(-1, -1), too_many))
         False ->
           Ok(CaptureState(
             set.insert(state.claimed, position),
@@ -192,7 +198,8 @@ fn capture_field(
           ))
       }
     }
-    glance.ShorthandField(label, _) -> Error(error.InvalidName(label))
+    glance.ShorthandField(label, location) ->
+      Error(error.located(location, error.InvalidName(label)))
   }
 }
 

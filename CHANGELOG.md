@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+### Errors carry source spans
+- Added `LocatedError`, pairing each `TypeCheckError` with the `glance.Span`
+  of the offending syntax so compilers can render exact code frames.
+  `TypeCheckResult` and `GlimpseError.TypeCheckError` now carry
+  `LocatedError`; use `error.located(span, payload)` to construct one and
+  `error.with_span(span, located)` to fill in spans raised without one (e.g.
+  from unification).
+- Binary operator checking underlines the whole expression, and unknown
+  custom types point at the annotation that names them.
+
 ## 1.0.0
 
 Changes since 1.0.0-rc.3:

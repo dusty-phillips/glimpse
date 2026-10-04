@@ -50,6 +50,12 @@ pub fn ok_function_typecheck(definition: String) -> glance.Function {
 }
 
 pub fn error_function_typecheck(definition: String) -> error.TypeCheckError {
+  error_located_function_typecheck(definition).error
+}
+
+pub fn error_located_function_typecheck(
+  definition: String,
+) -> error.LocatedError {
   let function = glance_function(definition)
   let assert Error(error) =
     typecheck.function(types.new_env("main_module"), function)
@@ -71,6 +77,12 @@ pub fn ok_module_typecheck(
 }
 
 pub fn error_module_typecheck(definition: String) -> error.TypeCheckError {
+  error_located_module_typecheck(definition).error
+}
+
+pub fn error_located_module_typecheck(
+  definition: String,
+) -> error.LocatedError {
   let assert Ok(module) = glance.module(definition)
   let assert Error(error) =
     typecheck.module(

@@ -294,7 +294,7 @@ pub fn missing_module_import_returns_error_test() {
       target.Erlang,
       True,
     )
-  assert error == error.InvalidName("one/two")
+  assert error.error == error.InvalidName("one/two")
 }
 
 pub fn mutually_recursive_type_is_rejected_test() {

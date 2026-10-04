@@ -167,7 +167,13 @@ fn fold_parameter_into_callable_inner(
       case param {
         glance.FunctionParameter(type_: option.None, label: option.None, ..) ->
           case dict.size(labels) == 0 {
-            False -> list.Stop(Error(error.UnlabelledArgumentAfterLabelled))
+            False ->
+              list.Stop(
+                Error(error.located(
+                  glance.Span(-1, -1),
+                  error.UnlabelledArgumentAfterLabelled,
+                )),
+              )
             True ->
               list.Continue(
                 Ok(CallableState(
@@ -194,7 +200,13 @@ fn fold_parameter_into_callable_inner(
           ..,
         ) ->
           case dict.has_key(labels, label) {
-            True -> list.Stop(Error(error.DuplicateArgumentName(label)))
+            True ->
+              list.Stop(
+                Error(error.located(
+                  glance.Span(-1, -1),
+                  error.DuplicateArgumentName(label),
+                )),
+              )
             False ->
               list.Continue(
                 Ok(CallableState(
@@ -243,7 +255,13 @@ fn fold_parameter_into_callable_inner(
                   )
                 option.Some(label) ->
                   case dict.has_key(labels, label) {
-                    True -> list.Stop(Error(error.DuplicateArgumentName(label)))
+                    True ->
+                      list.Stop(
+                        Error(error.located(
+                          glance_type.location,
+                          error.DuplicateArgumentName(label),
+                        )),
+                      )
                     False ->
                       list.Continue(
                         Ok(CallableState(

@@ -35,7 +35,11 @@ pub fn callable_parts(
       types.unify(store, environment, target, callable)
       |> result.map(fn(store) { #(store, parameters, dict.new(), return) })
     }
-    _ -> Error(error.NotCallable(types.to_string(environment, target)))
+    _ ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.NotCallable(types.to_string(environment, target)),
+      ))
   }
 }
 
@@ -47,7 +51,7 @@ pub fn record_generic_constraints(
   store: TypeStore,
   callee: String,
   arguments: List(glance.Field(glance.Expression)),
-) -> Result(TypeStore, error.TypeCheckError) {
+) -> Result(TypeStore, error.LocatedError) {
   case dict.get(environment.scope.definitions, callee) {
     Ok(types.GenericCallableType(parameters, _, return_, _)) ->
       case is_placeholder_return(return_) {
@@ -168,7 +172,11 @@ pub fn align_argument_fields(
 ) -> error.TypeCheckResult(List(glance.Field(glance.Expression))) {
   // A positional argument may not follow a labelled one in source order.
   case positional_argument_after_labelled(fields) {
-    True -> Error(error.PositionalArgumentAfterLabelled)
+    True ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.PositionalArgumentAfterLabelled,
+      ))
     False -> align_argument_fields_(fields, position_labels, param_count)
   }
 }
@@ -203,15 +211,24 @@ pub fn align_argument_fields_(
       let #(label, field) = pair
       use position <- result.try(
         dict.get(position_labels, label)
-        |> result.replace_error(error.InvalidArgumentLabel(
-          "("
-            <> position_labels
-          |> dict.keys
-          |> list.sort(string.compare)
-          |> string.join(", ")
-            <> ")",
-          label,
-        )),
+        |> result.map_error(fn(_) {
+          error.located(
+            case field {
+              glance.LabelledField(_, location, _) -> location
+              glance.ShorthandField(_, location) -> location
+              glance.UnlabelledField(item) -> item.location
+            },
+            error.InvalidArgumentLabel(
+              "("
+                <> position_labels
+              |> dict.keys
+              |> list.sort(string.compare)
+              |> string.join(", ")
+                <> ")",
+              label,
+            ),
+          )
+        }),
       )
       Ok(dict.insert(by_position, position, field))
     }),

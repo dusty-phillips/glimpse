@@ -11,6 +11,7 @@ import glimpse/internal/typecheck/types.{
 pub fn check_comparison_operands(
   environment: Environment,
   store: TypeStore,
+  location: glance.Span,
   operator: String,
   left: Type,
   right: Type,
@@ -20,6 +21,7 @@ pub fn check_comparison_operands(
   check_operands(
     environment,
     store,
+    location,
     operator,
     left,
     right,
@@ -37,6 +39,7 @@ pub fn check_comparison_operands(
 pub fn check_operands(
   environment: Environment,
   store: TypeStore,
+  location: glance.Span,
   operator: String,
   left: Type,
   right: Type,
@@ -51,11 +54,14 @@ pub fn check_operands(
   |> result.map_error(fn(_) {
     let #(store, resolved_left) = types.resolve(store, left)
     let #(_store, resolved_right) = types.resolve(store, right)
-    error.InvalidBinOp(
-      operator,
-      types.to_string(environment, resolved_left),
-      types.to_string(environment, resolved_right),
-      expected,
+    error.located(
+      location,
+      error.InvalidBinOp(
+        operator,
+        types.to_string(environment, resolved_left),
+        types.to_string(environment, resolved_right),
+        expected,
+      ),
     )
   })
 }
@@ -98,10 +104,19 @@ pub fn pipe_value_into_result(
 ) -> error.TypeCheckResult(#(TypeStore, Type)) {
   use #(store, parameters, _labels, result_return) <- result.try(
     calls.callable_parts(environment, store, return, 1)
-    |> result.map_error(fn(_) { error.InvalidArguments("()", "a piped value") }),
+    |> result.map_error(fn(_) {
+      error.located(
+        glance.Span(-1, -1),
+        error.InvalidArguments("()", "a piped value"),
+      )
+    }),
   )
   case parameters {
-    [] -> Error(error.InvalidArguments("()", "a piped value"))
+    [] ->
+      Error(error.located(
+        glance.Span(-1, -1),
+        error.InvalidArguments("()", "a piped value"),
+      ))
     [first_param, ..] -> {
       use store <- result.try(types.unify(
         store,

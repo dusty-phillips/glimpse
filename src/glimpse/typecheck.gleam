@@ -140,7 +140,8 @@ pub fn module(
   use _ <- result.try(
     list.try_fold(raw_module.constants, Nil, fn(_, definition) {
       case constant_value_error(definition.definition.value) {
-        option.Some(e) -> Error(e)
+        option.Some(e) ->
+          Error(error.located(definition.definition.location, e))
         option.None -> Ok(Nil)
       }
     }),
@@ -154,7 +155,11 @@ pub fn module(
         Error(e) -> Error(e)
         Ok(_) ->
           case string.contains(definition.definition.name, "_") {
-            True -> Error(error.InvalidTypeName(definition.definition.name))
+            True ->
+              Error(error.located(
+                definition.definition.location,
+                error.InvalidTypeName(definition.definition.name),
+              ))
             False ->
               list.fold(
                 definition.definition.variants,
@@ -164,14 +169,22 @@ pub fn module(
                     Error(e) -> Error(e)
                     Ok(_) ->
                       case string.contains(variant.name, "_") {
-                        True -> Error(error.InvalidVariantName(variant.name))
+                        True ->
+                          Error(error.located(
+                            definition.definition.location,
+                            error.InvalidVariantName(variant.name),
+                          ))
                         False ->
                           case
                             variant_fields_unlabelled_after_labelled(
                               variant.fields,
                             )
                           {
-                            True -> Error(error.UnlabelledArgumentAfterLabelled)
+                            True ->
+                              Error(error.located(
+                                definition.definition.location,
+                                error.UnlabelledArgumentAfterLabelled,
+                              ))
                             False -> Ok(Nil)
                           }
                       }
@@ -188,7 +201,11 @@ pub fn module(
         Error(e) -> Error(e)
         Ok(_) ->
           case string.contains(alias.definition.name, "_") {
-            True -> Error(error.InvalidTypeAliasName(alias.definition.name))
+            True ->
+              Error(error.located(
+                alias.definition.location,
+                error.InvalidTypeAliasName(alias.definition.name),
+              ))
             False -> Ok(Nil)
           }
       }
@@ -205,17 +222,25 @@ pub fn module(
         Error(e) -> Error(e)
         Ok(_) ->
           case name_has_uppercase(definition.definition.name) {
-            True -> Error(error.InvalidFunctionName(definition.definition.name))
+            True ->
+              Error(error.located(
+                definition.definition.location,
+                error.InvalidFunctionName(definition.definition.name),
+              ))
             False ->
               list.fold(
                 definition.definition.parameters,
                 Ok(Nil),
-                fn(param_result, parameter) -> Result(Nil, error.TypeCheckError) {
+                fn(param_result, parameter) -> Result(Nil, error.LocatedError) {
                   case param_result, parameter.name {
                     Error(e), _ -> Error(e)
                     Ok(_), glance.Named(name) ->
                       case name_has_uppercase(name) {
-                        True -> Error(error.InvalidArgumentName(name))
+                        True ->
+                          Error(error.located(
+                            definition.definition.location,
+                            error.InvalidArgumentName(name),
+                          ))
                         False -> Ok(Nil)
                       }
                     Ok(_), glance.Discarded(_) -> Ok(Nil)
@@ -232,7 +257,11 @@ pub fn module(
         Error(e) -> Error(e)
         Ok(_) ->
           case name_has_uppercase(definition.definition.name) {
-            True -> Error(error.InvalidConstantName(definition.definition.name))
+            True ->
+              Error(error.located(
+                definition.definition.location,
+                error.InvalidConstantName(definition.definition.name),
+              ))
             False -> Ok(Nil)
           }
       }
@@ -246,10 +275,14 @@ pub fn module(
           list.fold(
             definition.definition.parameters,
             Ok(Nil),
-            fn(param_result, parameter) -> Result(Nil, error.TypeCheckError) {
+            fn(param_result, parameter) -> Result(Nil, error.LocatedError) {
               case param_result, name_has_uppercase(parameter) {
                 Error(e), _ -> Error(e)
-                Ok(_), True -> Error(error.InvalidTypeVariableName(parameter))
+                Ok(_), True ->
+                  Error(error.located(
+                    definition.definition.location,
+                    error.InvalidTypeVariableName(parameter),
+                  ))
                 Ok(_), False -> Ok(Nil)
               }
             },
@@ -265,10 +298,14 @@ pub fn module(
           list.fold(
             alias.definition.parameters,
             Ok(Nil),
-            fn(param_result, parameter) -> Result(Nil, error.TypeCheckError) {
+            fn(param_result, parameter) -> Result(Nil, error.LocatedError) {
               case param_result, name_has_uppercase(parameter) {
                 Error(e), _ -> Error(e)
-                Ok(_), True -> Error(error.InvalidTypeVariableName(parameter))
+                Ok(_), True ->
+                  Error(error.located(
+                    alias.definition.location,
+                    error.InvalidTypeVariableName(parameter),
+                  ))
                 Ok(_), False -> Ok(Nil)
               }
             },
@@ -293,14 +330,22 @@ pub fn module(
           case
             intern.find_duplicate(import_names(definition.unqualified_types))
           {
-            option.Some(name) -> Error(error.DuplicateDefinition(name))
+            option.Some(name) ->
+              Error(error.located(
+                import_.definition.location,
+                error.DuplicateDefinition(name),
+              ))
             option.None ->
               case
                 intern.find_duplicate(import_names(
                   definition.unqualified_values,
                 ))
               {
-                option.Some(name) -> Error(error.DuplicateImport(name))
+                option.Some(name) ->
+                  Error(error.located(
+                    import_.definition.location,
+                    error.DuplicateImport(name),
+                  ))
                 option.None -> Ok(Nil)
               }
           }
@@ -317,7 +362,8 @@ pub fn module(
       |> list.map(fn(definition) { definition.definition.name }),
     )
   use _ <- result.try(case intern.find_duplicate(definitions) {
-    option.Some(name) -> Error(error.DuplicateDefinition(name))
+    option.Some(name) ->
+      Error(error.located(glance.Span(-1, -1), error.DuplicateDefinition(name)))
     option.None -> Ok(Nil)
   })
 
@@ -332,7 +378,8 @@ pub fn module(
     })
     |> list.flatten
   use _ <- result.try(case intern.find_duplicate(constructor_names) {
-    option.Some(name) -> Error(error.DuplicateConstructor(name))
+    option.Some(name) ->
+      Error(error.located(glance.Span(-1, -1), error.DuplicateConstructor(name)))
     option.None -> Ok(Nil)
   })
 
@@ -365,14 +412,21 @@ pub fn module(
                 case target.function_supported(target, definition) {
                   True -> Ok(Nil)
                   False ->
-                    Error(error.MissingImplementation(glance_function.name))
+                    Error(error.located(
+                      glance_function.location,
+                      error.MissingImplementation(glance_function.name),
+                    ))
                 }
               _ ->
                 case
                   glance_function.publicity == glance.Public
                   && !target.function_supported(target, definition)
                 {
-                  True -> Error(error.UnsupportedTarget(glance_function.name))
+                  True ->
+                    Error(error.located(
+                      glance_function.location,
+                      error.UnsupportedTarget(glance_function.name),
+                    ))
                   False -> Ok(Nil)
                 }
             }
@@ -394,7 +448,11 @@ pub fn module(
           }
         })
       case intern.find_duplicate(parameter_names) {
-        option.Some(name) -> Error(error.DuplicateArgumentName(name))
+        option.Some(name) ->
+          Error(error.located(
+            definition.definition.location,
+            error.DuplicateArgumentName(name),
+          ))
         option.None -> Ok(Nil)
       }
     }),
@@ -411,7 +469,10 @@ pub fn module(
         && glance_custom_type.variants != []
       {
         True ->
-          Error(error.ExternalTypeWithConstructors(glance_custom_type.name))
+          Error(error.located(
+            glance_custom_type.location,
+            error.ExternalTypeWithConstructors(glance_custom_type.name),
+          ))
         False -> Ok(Nil)
       }
     }),
@@ -427,7 +488,11 @@ pub fn module(
       case result, is_known_attribute(attribute.name) {
         Error(e), _ -> Error(e)
         Ok(_), True -> Ok(Nil)
-        Ok(_), False -> Error(error.UnknownAttribute(attribute.name))
+        Ok(_), False ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.UnknownAttribute(attribute.name),
+          ))
       }
     }),
   )
@@ -440,7 +505,11 @@ pub fn module(
       case result, attribute_shape_is_valid(attribute) {
         Error(e), _ -> Error(e)
         Ok(_), True -> Ok(Nil)
-        Ok(_), False -> Error(error.InvalidAttributeShape(attribute.name))
+        Ok(_), False ->
+          Error(error.located(
+            glance.Span(-1, -1),
+            error.InvalidAttributeShape(attribute.name),
+          ))
       }
     }),
   )
@@ -455,7 +524,7 @@ pub fn module(
           True -> "external"
           False -> key
         }
-        Error(error.DuplicateAttribute(name))
+        Error(error.located(glance.Span(-1, -1), error.DuplicateAttribute(name)))
       }
       option.None -> Ok(Nil)
     },
@@ -518,13 +587,16 @@ pub fn module(
                   True ->
                     case scope {
                       "variant" | "type alias" | "import" | "constant" ->
-                        Error(error.ExternalAttributePlacement(scope))
+                        Error(error.located(
+                          glance.Span(-1, -1),
+                          error.ExternalAttributePlacement(scope),
+                        ))
                       _ ->
                         case attribute.arguments {
                           [
                             glance.Variable(_, name),
-                            glance.String(_, module_path),
-                            glance.String(_, function_name),
+                            glance.String(module_span, module_path),
+                            glance.String(function_span, function_name),
                           ] ->
                             // The real compiler validates the module path
                             // and function name of JavaScript externals at
@@ -539,28 +611,40 @@ pub fn module(
                               True ->
                                 case valid_js_module(module_path) {
                                   False ->
-                                    Error(error.InvalidExternalModule(
-                                      module_path,
+                                    Error(error.located(
+                                      module_span,
+                                      error.InvalidExternalModule(module_path),
                                     ))
                                   True ->
                                     case valid_js_function(function_name) {
                                       False ->
-                                        Error(error.InvalidExternalFunction(
-                                          function_name,
+                                        Error(error.located(
+                                          function_span,
+                                          error.InvalidExternalFunction(
+                                            function_name,
+                                          ),
                                         ))
                                       True -> Ok(Nil)
                                     }
                                 }
                             }
-                          [glance.Variable(_, name), ..] ->
+                          [glance.Variable(target_span, name), ..] ->
                             case name == "erlang" || name == "javascript" {
-                              True -> Error(error.InvalidExternalAttribute)
+                              True ->
+                                Error(error.located(
+                                  target_span,
+                                  error.InvalidExternalAttribute,
+                                ))
                               // Any other target name is valid: glimpse
                               // typechecks code for runtimes the real
                               // compiler does not know about.
                               False -> Ok(Nil)
                             }
-                          _ -> Error(error.InvalidExternalAttribute)
+                          _ ->
+                            Error(error.located(
+                              glance.Span(-1, -1),
+                              error.InvalidExternalAttribute,
+                            ))
                         }
                     }
                 }
@@ -581,13 +665,21 @@ pub fn module(
           Error(e), _ -> Error(e)
           Ok(_), "target" ->
             case scope == "variant" {
-              True -> Error(error.InvalidAttributePlacement("target", scope))
+              True ->
+                Error(error.located(
+                  glance.Span(-1, -1),
+                  error.InvalidAttributePlacement("target", scope),
+                ))
               False -> Ok(Nil)
             }
           Ok(_), "internal" ->
             case public {
               True -> Ok(Nil)
-              False -> Error(error.InvalidAttributePlacement("internal", scope))
+              False ->
+                Error(error.located(
+                  glance.Span(-1, -1),
+                  error.InvalidAttributePlacement("internal", scope),
+                ))
             }
           Ok(_), _ -> Ok(Nil)
         }
@@ -608,10 +700,11 @@ pub fn module(
         Ok(_), False -> Ok(Nil)
         Ok(_), True ->
           case attribute.arguments {
-            [glance.Variable(_, name)] ->
+            [glance.Variable(target_span, name)] ->
               case target_is_known(target, name) {
                 True -> Ok(Nil)
-                False -> Error(error.UnknownTarget(name))
+                False ->
+                  Error(error.located(target_span, error.UnknownTarget(name)))
               }
             _ -> Ok(Nil)
           }
@@ -640,10 +733,17 @@ pub fn module(
         Ok(_), True ->
           case definition.definition.return {
             option.None ->
-              Error(error.MissingReturnAnnotation(definition.definition.name))
+              Error(error.located(
+                definition.definition.location,
+                error.MissingReturnAnnotation(definition.definition.name),
+              ))
             option.Some(return_type) ->
               case type_hole(return_type) {
-                option.Some(name) -> Error(error.UnexpectedTypeHole(name))
+                option.Some(name) ->
+                  Error(error.located(
+                    return_type.location,
+                    error.UnexpectedTypeHole(name),
+                  ))
                 option.None ->
                   list.fold(
                     definition.definition.parameters,
@@ -654,11 +754,15 @@ pub fn module(
                         Ok(_), option.Some(annotation) ->
                           case type_hole(annotation) {
                             option.Some(name) ->
-                              Error(error.UnexpectedTypeHole(name))
+                              Error(error.located(
+                                annotation.location,
+                                error.UnexpectedTypeHole(name),
+                              ))
                             option.None -> Ok(Nil)
                           }
                         Ok(_), option.None ->
-                          Error(
+                          Error(error.located(
+                            definition.definition.location,
                             error.MissingParameterAnnotation(
                               case parameter.label {
                                 option.Some(label) -> label
@@ -669,7 +773,7 @@ pub fn module(
                                   }
                               },
                             ),
-                          )
+                          ))
                       }
                     },
                   )
@@ -749,7 +853,11 @@ pub fn module(
               }
             })
           {
-            Ok(leak) -> Error(error.PrivateTypeLeak(leak))
+            Ok(leak) ->
+              Error(error.located(
+                definition.definition.location,
+                error.PrivateTypeLeak(leak),
+              ))
             Error(_) -> Ok(environment)
           }
       }
@@ -888,7 +996,7 @@ fn variant_fields_unlabelled_after_labelled(
 fn check_public_signature_leaks(
   environment: Environment,
   function: glance.Function,
-) -> Result(Environment, error.TypeCheckError) {
+) -> Result(Environment, error.LocatedError) {
   case function.publicity == glance.Public {
     False -> Ok(environment)
     True ->
@@ -898,7 +1006,8 @@ fn check_public_signature_leaks(
           ..find_params_types(function.parameters)
         ])
       {
-        Ok(leak) -> Error(error.PrivateTypeLeak(leak))
+        Ok(leak) ->
+          Error(error.located(function.location, error.PrivateTypeLeak(leak)))
         Error(_) -> Ok(environment)
       }
   }
@@ -1073,6 +1182,11 @@ fn typecheck_function_bodies(
               ),
               definition.definition,
             )
+            // Unification works on types rather than syntax, so errors
+            // raised without a span fall back to the enclosing function.
+            |> result.map_error(fn(e) {
+              error.with_span(definition.definition.location, e)
+            })
         },
       )
       let updated_definition =
@@ -1119,7 +1233,11 @@ fn sort_alias_dependencies(
     [] ->
       case remaining {
         [] -> Ok([])
-        [#(alias, _), ..] -> Error(error.RecursiveTypeAlias(alias.name))
+        [#(alias, _), ..] ->
+          Error(error.located(
+            alias.location,
+            error.RecursiveTypeAlias(alias.name),
+          ))
       }
     _ -> {
       let ready_names =
@@ -1178,7 +1296,8 @@ pub fn type_alias(
   alias: glance.TypeAlias,
 ) -> EnvironmentResult {
   use _ <- result.try(case intern.find_duplicate(alias.parameters) {
-    option.Some(name) -> Error(error.DuplicateTypeParameter(name))
+    option.Some(name) ->
+      Error(error.located(alias.location, error.DuplicateTypeParameter(name)))
     option.None -> Ok(Nil)
   })
   // Every type variable used in the aliased type must be a declared parameter:
@@ -1189,7 +1308,11 @@ pub fn type_alias(
       type_variables_used(alias.aliased)
       |> intern.find_first_not_in(alias.parameters)
     {
-      option.Some(name) -> Error(error.UnknownCustomType(name))
+      option.Some(name) ->
+        Error(error.located(
+          alias.aliased.location,
+          error.UnknownCustomType(name),
+        ))
       option.None -> Ok(Nil)
     },
   )
@@ -1200,10 +1323,15 @@ pub fn type_alias(
       !type_uses_type_variable(alias.aliased, parameter)
     })
   {
-    Ok(unused) -> Error(error.UnusedTypeParameter(unused))
+    Ok(unused) ->
+      Error(error.located(alias.location, error.UnusedTypeParameter(unused)))
     Error(_) ->
       case clash_with_existing(environment, alias.name) {
-        True -> Error(error.DuplicateCustomType(alias.name))
+        True ->
+          Error(error.located(
+            alias.location,
+            error.DuplicateCustomType(alias.name),
+          ))
         False -> {
           use resolved <- result.try(types.type_(environment, alias.aliased))
           let alias_type = types.TypeAlias(alias.parameters, resolved)
@@ -1265,10 +1393,18 @@ pub fn custom_type_declaration(
   custom_type: glance.CustomType,
 ) -> EnvironmentResult {
   case clash_with_existing(environment, custom_type.name) {
-    True -> Error(error.DuplicateCustomType(custom_type.name))
+    True ->
+      Error(error.located(
+        custom_type.location,
+        error.DuplicateCustomType(custom_type.name),
+      ))
     False -> {
       use _ <- result.try(case intern.find_duplicate(custom_type.parameters) {
-        option.Some(name) -> Error(error.DuplicateTypeParameter(name))
+        option.Some(name) ->
+          Error(error.located(
+            custom_type.location,
+            error.DuplicateTypeParameter(name),
+          ))
         option.None -> Ok(Nil)
       })
       let environment =
@@ -1297,7 +1433,11 @@ pub fn custom_type_constructors(
   // Two variants may not share a constructor name.
   let names = custom_type.variants |> list.map(fn(variant) { variant.name })
   use _ <- result.try(case intern.find_duplicate(names) {
-    option.Some(name) -> Error(error.DuplicateConstructor(name))
+    option.Some(name) ->
+      Error(error.located(
+        custom_type.location,
+        error.DuplicateConstructor(name),
+      ))
     option.None -> Ok(Nil)
   })
   // A constructor may not declare the same label twice.
@@ -1313,7 +1453,8 @@ pub fn custom_type_constructors(
         })
         |> list.filter(fn(label) { label != "" })
       case intern.find_duplicate(labels) {
-        option.Some(label) -> Error(error.DuplicateLabel(label))
+        option.Some(label) ->
+          Error(error.located(custom_type.location, error.DuplicateLabel(label)))
         option.None -> Ok(Nil)
       }
     }),
@@ -1334,7 +1475,11 @@ pub fn custom_type_constructors(
           }
         })
       case intern.find_first_not_in(used, custom_type.parameters) {
-        option.Some(name) -> Error(error.UnknownCustomType(name))
+        option.Some(name) ->
+          Error(error.located(
+            custom_type.location,
+            error.UnknownCustomType(name),
+          ))
         option.None -> Ok(Nil)
       }
     }),
@@ -1581,8 +1726,10 @@ pub fn constant(
   // anonymous functions, operators, blocks, `case`, captures and field access
   // are all rejected.
   case constant_value_error(constant.value) {
-    option.Some(e) -> Error(e)
-    option.None -> constant_(environment, constant)
+    option.Some(e) -> Error(error.located(constant.location, e))
+    option.None ->
+      constant_(environment, constant)
+      |> result.map_error(fn(e) { error.with_span(constant.location, e) })
   }
 }
 
@@ -1736,10 +1883,13 @@ fn constant_(
           Ok(store) -> Ok(#(store, annotated))
           Error(_) -> {
             let #(_store, resolved) = types.resolve(store, value_type)
-            Error(error.InvalidAnnotation(
-              types.to_string(environment, resolved),
-              types.to_string(environment, annotated),
-              constant.name,
+            Error(error.located(
+              annotation.location,
+              error.InvalidAnnotation(
+                types.to_string(environment, resolved),
+                types.to_string(environment, annotated),
+                constant.name,
+              ),
             ))
           }
         }
@@ -1813,7 +1963,7 @@ pub fn function(
   // infinitely recursive (e.g. `f(xs) { case xs { [h, ..t] -> [f(t)] } }`);
   // a return that merely *is* a call to the function is fine.
   case types.nested_var_has_source(store, body_type, "r_" <> function.name) {
-    True -> Error(error.RecursiveType)
+    True -> Error(error.located(function.location, error.RecursiveType))
     False -> {
       let environment = types.flush_generic_edges(environment, store)
 
@@ -1971,10 +2121,13 @@ pub fn function(
             Error(_) -> {
               let #(store, resolved_body) = types.resolve(store, body_type)
               let #(_store, resolved_expected) = types.resolve(store, expected)
-              Error(error.InvalidReturnType(
-                function.name,
-                types.to_string(param_state.environment, resolved_body),
-                types.to_string(param_state.environment, resolved_expected),
+              Error(error.located(
+                expected_type.location,
+                error.InvalidReturnType(
+                  function.name,
+                  types.to_string(param_state.environment, resolved_body),
+                  types.to_string(param_state.environment, resolved_expected),
+                ),
               ))
             }
             Ok(store) -> {
