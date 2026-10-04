@@ -2662,22 +2662,33 @@ fn clause_body_type(
   // each binding must have the same type across alternatives, since the body
   // sees a single binding per name. A name bound to different types in
   // different alternatives (e.g. `#(x, _) | #(_, x)`) is a type error.
+  // Only names bound by the alternatives' own patterns can differ across
+  // alternatives (inherited names are identical objects in every
+  // alternative env — unifying them always succeeds with no store effects —
+  // so folding over the whole scope definitions repeats O(scope) unifies per
+  // clause; on the Rust target each clones the environment and types).
+  let binds_per_alternative =
+    list.map(clause.patterns, fn(alternative) {
+      list.flat_map(alternative, pattern_variable_names)
+    })
   use store <- result.try(
-    list.try_fold(alternatives, store, fn(store, alternative) {
-      let #(alternative_env, _refinements) = alternative
-      dict.fold(
-        alternative_env.scope.definitions,
-        Ok(store),
-        fn(result, name, alternative_type) {
-          use store <- result.try(result)
-          case dict.get(pattern_env.scope.definitions, name) {
-            Ok(body_type) ->
+    list.try_fold(
+      list.zip(alternatives, binds_per_alternative),
+      store,
+      fn(store, pair) {
+        let #(#(alternative_env, _refinements), binds) = pair
+        list.try_fold(binds, store, fn(store, name) {
+          case
+            dict.get(alternative_env.scope.definitions, name),
+            dict.get(pattern_env.scope.definitions, name)
+          {
+            Ok(alternative_type), Ok(body_type) ->
               types.unify(store, pattern_env, alternative_type, body_type)
-            Error(_) -> Ok(store)
+            _, _ -> Ok(store)
           }
-        },
-      )
-    }),
+        })
+      },
+    ),
   )
 
   use #(store, guard_type) <- result.try(case clause.guard {
