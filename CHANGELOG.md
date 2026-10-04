@@ -2,6 +2,8 @@
 
 ## 1.1.0
 
+Changes since 1.0.0:
+
 ### Errors carry source spans
 - Added `LocatedError`, pairing each `TypeCheckError` with the `glance.Span`
   of the offending syntax so compilers can render exact code frames.
@@ -11,6 +13,11 @@
   from unification).
 - Binary operator checking underlines the whole expression, and unknown
   custom types point at the annotation that names them.
+
+### Performance
+- Scope `case` or-alternative unification to names bound by the alternatives'
+  own patterns instead of folding over the whole scope, avoiding a repeated
+  O(scope) unify per clause.
 
 ## 1.0.0
 
